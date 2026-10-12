@@ -24,5 +24,5 @@ print("serving http://127.0.0.1:\(port)/\(token)/live.m3u8  LAN: \(LocalServer.l
 while true {
     try await Task.sleep(for: .seconds(30))
     let s = await session.status()
-    print("status: muted=\(s.muted) now=\(s.nowPlaying ?? "-") blocks=\(s.recentBlocks.count) notices=\(s.notices.suffix(2))")
+    print("status: muted=\(s.muted) now=\(s.nowPlaying.map { "\($0.artist) - \($0.title ?? "")" } ?? "-") blocks=\(s.recentBlocks.count) notices=\(s.notices.suffix(2))")
 }
