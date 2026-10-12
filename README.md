@@ -10,6 +10,8 @@ InterLude downloads the station's HLS segments, classifies the audio a short way
 
 Detection combines Apple's built-in sound classifier (speech and music scores), a learned news ident per station, bulletin-time slots (default minutes 0 and 30), and a track-metadata poll for display. The rule is deterministic and every decision is written to `events.jsonl`.
 
+Album artwork and track titles shown in the panel come from the BBC's metadata service and are fetched at runtime only; nothing is stored in this repository.
+
 ## Build and run
 
 Needs macOS 15 or later, Apple silicon, and Xcode.
@@ -18,6 +20,8 @@ Needs macOS 15 or later, Apple silicon, and Xcode.
 ./scripts/build-app.sh      # builds build/InterLude.app, signed with your Apple Development identity if you have one
 open build/InterLude.app
 ```
+
+For a quick look at the panel states without playing anything, launch with `--demo=playing`, `--demo=muted`, `--demo=error` or `--demo=settings`.
 
 Use `SANDBOX=0 ./scripts/build-app.sh` for a build without the App Sandbox. Builds go to `~/Library/Caches/InterLudeBuild`, because extended attributes in Documents or iCloud folders make `codesign` fail.
 

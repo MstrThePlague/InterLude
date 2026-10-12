@@ -10,6 +10,12 @@ enum Output: Hashable, Identifiable {
     case thisMac
     case cast(CastDevice)
     var id: String { switch self { case .thisMac: "mac"; case .cast(let d): "cast:" + d.id } }
+    var icon: String {
+        switch self {
+        case .thisMac: "laptopcomputer"
+        case .cast(let d): d.isGroup ? "hifispeaker.2" : "hifispeaker"
+        }
+    }
     var label: String {
         switch self {
         case .thisMac: "This Mac"
@@ -47,14 +53,21 @@ final class AppModel {
     var isStarting = false
     var status = SessionStatus()
     var errorText: String?
-    var statusLine: String {
-        if let e = errorText { return e }
-        if isStarting { return "Starting…" }
-        guard isPlaying else { return "Stopped." }
-        let p = profile(selectedStationID)
-        let mute = p.shadowMode ? "Shadow mode: logging only." : ((p.muteNews && selectedStation?.kind != .speech) ? "News muting on." : "News muting off.")
-        return "About \(Int((status.delaySeconds / 5).rounded()) * 5) seconds behind live. \(mute)"
+    var stationFailed = false
+    var learnedNote: String? {
+        let n = profile(selectedStationID).candidates.count
+        let learned = !profile(selectedStationID).idents.isEmpty
+        return learned ? "Ident learned" : (n > 0 ? "\(n) of 3 to learn the ident" : nil)
     }
+    var delayDescription: String { "About \(Int((status.delaySeconds / 5).rounded()) * 5) seconds" }
+    var muteSubtitle: String {
+        let p = profile(selectedStationID)
+        if selectedStation?.kind == .speech { return "Not available: speech is this station's programme." }
+        if p.shadowMode { return "Shadow mode: bulletins are logged but not muted." }
+        return p.muteNews ? "Bulletins are silenced about a minute after they start on the radio." : "Off: everything plays."
+    }
+    var footerText: String { "\(delayDescription) behind live" }
+
     var menuIcon: String { status.muted && isPlaying ? "speaker.slash.fill" : (isPlaying ? "dot.radiowaves.left.and.right" : "radio") }
 
     private var catalogue: Catalogue?
@@ -94,6 +107,26 @@ final class AppModel {
         startDiscovery()
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
         if CommandLine.arguments.contains("--autoplay") { start() }
+        if let d = CommandLine.arguments.first(where: { $0.hasPrefix("--demo=") }) { demo(String(d.dropFirst(7))) }
+    }
+
+    /// Fills the panel with sample state, for screenshots and design checks. Nothing is played.
+    private func demo(_ kind: String) {
+        selectedStationID = "bbc_6music"
+        status.delaySeconds = 64
+        let now = Date().timeIntervalSince1970
+        status.nowPlaying = NowPlaying(artist: "Nilüfer Yanya", title: "Stabilise",
+                                       imageURL: URL(string: "https://ichef.bbci.co.uk/images/ic/480x480/p0d71jpt.jpg"))
+        var b1 = NewsBlock(start: now - 3600, end: now - 3340, evidence: "demo")
+        b1.doubtful = false
+        var b2 = NewsBlock(start: now - 1900, end: now - 1880, evidence: "demo"); b2.falseStart = true; b2.doubtful = true
+        status.recentBlocks = [b2, b1]
+        switch kind {
+        case "muted": isPlaying = true; status.muted = true; status.muteElapsed = 83
+        case "error": errorText = "Radio 6 Music: HTTP 404. The pool ID (81827798) has probably changed."; stationFailed = true
+        case "starting": isStarting = true
+        default: isPlaying = true
+        }
     }
 
     // MARK: Catalogue and profiles
@@ -137,7 +170,7 @@ final class AppModel {
 
     func start() {
         guard let catalogue, let station = selectedStation, !isStarting else { return }
-        errorText = nil; isStarting = true; shownNotices = 0
+        errorText = nil; stationFailed = false; isStarting = true; shownNotices = 0
         let output = selectedOutput
         var settings = SessionSettings(station: station, profile: profile(station.serviceId))
         settings.bitrate = bitrate
@@ -155,7 +188,7 @@ final class AppModel {
                 updateActivity(); startTimer(); watchNetwork()
             } catch {
                 isStarting = false; isPlaying = false
-                errorText = friendly(error, station: station)
+                errorText = friendly(error, station: station); stationFailed = true
                 notify("Station stream failed", errorText ?? "")
                 await tearDown()
             }
