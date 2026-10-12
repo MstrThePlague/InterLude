@@ -52,7 +52,7 @@ struct SettingsView: View {
                         }
                     }
                 } header: { Text("News detection for \(st.name)") } footer: {
-                    FooterText("Bulletin minutes are when bulletins usually start, in minutes past the hour. Speech from a minute before to three minutes after counts as news. After a bulletin that wasn't muted, press “News got through”: after three, InterLude learns the station's news jingle.")
+                    FooterText("Bulletin minutes are when bulletins usually start, in minutes past the hour. Speech from a minute before to three minutes after counts as news. InterLude listens for a jingle that recurs at the start of bulletins, learning from each one it mutes and each “News got through”. Once three agree, it mutes as soon as the jingle plays.")
                 }
             }
 

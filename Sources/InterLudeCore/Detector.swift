@@ -133,7 +133,7 @@ public struct NewsDetector: Sendable {
 
     /// A known news ident was heard: start a block here without waiting for sustained speech.
     public mutating func identMatch(at t: Double, score: Float) {
-        guard openBlock == nil, !suppressUntilMusic else { return }
+        guard openBlock == nil, !suppressUntilMusic, inSlot(t) else { return }
         if let last = blocks.last, let e = last.end, t - e < 30 { return }     // same ident heard again
         blocks.append(NewsBlock(start: t, evidence: "news ident matched (\(String(format: "%.2f", score)))"))
         runStart = nil

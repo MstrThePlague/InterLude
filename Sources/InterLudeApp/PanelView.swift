@@ -334,7 +334,7 @@ private struct NewsCard: View {
                 HStack {
                     Button { model.thatWasNews() } label: { Label("News got through", systemImage: "exclamationmark.bubble") }
                         .buttonStyle(.borderless).controlSize(.small)
-                        .help("Press after a bulletin that wasn't muted. InterLude learns the station's news jingle from three of these.")
+                        .help("Press after a bulletin that wasn't muted. InterLude learns from it.")
                     Spacer()
                     if let learned = model.learnedNote { Text(learned).font(.caption2).foregroundStyle(.secondary) }
                 }

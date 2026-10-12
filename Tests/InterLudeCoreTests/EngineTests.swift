@@ -202,3 +202,25 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     let later = d.markNewsHeard(listenerTime: hour + 2000)     // prefers the long run over the short one
     #expect(later != nil && abs(later!.start - (hour + 1800)) < 0.01)
 }
+
+@Test func promotionFindsAShortSharedStretchAtDifferentOffsets() {
+    var rng = SystemRandomNumberGenerator()
+    func noise(_ n: Int) -> [Float] { (0..<n).map { _ in Float.random(in: -0.4...0.4, using: &rng) } }
+    func sweep(_ n: Int) -> [Float] { (0..<n).map { i in sin(Float(i) * (0.01 + 0.00003 * Float(i % 48000))) } }
+    let jingle = sweep(48000 * 3)
+    // Three windows with the jingle at different places, one without.
+    let windows = [noise(48000 * 5) + jingle + noise(48000 * 20), noise(48000 * 12) + jingle + noise(48000 * 13),
+                   noise(48000 * 20) + jingle + noise(48000 * 5), noise(48000 * 28)]
+    let cands = windows.map { IdentFeatures.extract($0) }
+    let ref = IdentMatcher.promote(candidates: cands)
+    #expect(ref != nil)
+    #expect(IdentMatcher.promote(candidates: [cands[3], cands[3].reversed(), Array(cands[0].prefix(100))]) == nil)
+}
+
+@Test func identMatchOutsideSlotIsIgnored() {
+    var d = NewsDetector()
+    d.identMatch(at: hour + 15 * 60, score: 0.95)
+    #expect(d.openBlock == nil)
+    d.identMatch(at: hour + 30 * 60 + 20, score: 0.95)
+    #expect(d.openBlock != nil)
+}

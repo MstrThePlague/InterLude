@@ -10,9 +10,28 @@ public struct StationProfile: Codable, Sendable, Equatable {
     public var detector = DetectorConfig()
     public var idents: [IdentReference] = []
     public var candidates: [[[Float]]] = []
+    /// The block each candidate came from, so "Wasn't news" can withdraw it.
+    public var candidateSources: [String] = []
     public var startMinuteHistogram: [Int: Int] = [:]
     public var bulletinSeconds: [Double] = []
     public init() {}
+
+    /// Tolerant decoding, so profiles written by older versions keep their settings.
+    public init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: Keys.self)
+        func get<T: Decodable>(_ k: Keys, _ v: inout T) { if let x = try? c.decodeIfPresent(T.self, forKey: k) { v = x } }
+        get(.delaySeconds, &delaySeconds); get(.muteNews, &muteNews); get(.favourite, &favourite); get(.shadowMode, &shadowMode)
+        get(.detector, &detector); get(.idents, &idents); get(.candidates, &candidates); get(.candidateSources, &candidateSources)
+        get(.startMinuteHistogram, &startMinuteHistogram); get(.bulletinSeconds, &bulletinSeconds)
+        // Candidates from before candidate windows changed are a different shape; drop them.
+        let expected = IdentFeatures.bands
+        if candidates.contains(where: { $0.first?.count != expected || $0.count < 400 }) { candidates = []; candidateSources = []; idents = [] }
+        if candidateSources.count != candidates.count { candidateSources = Array(repeating: "", count: candidates.count) }
+    }
+    enum Keys: String, CodingKey {
+        case delaySeconds, muteNews, favourite, shadowMode, detector, idents, candidates, candidateSources, startMinuteHistogram, bulletinSeconds
+    }
 
     public static func url(_ serviceId: String) throws -> URL {
         let dir = try AppPaths.supportDirectory().appendingPathComponent("profiles", isDirectory: true)
@@ -53,5 +72,5 @@ public struct StationProfile: Codable, Sendable, Equatable {
 /// A stored news ident: log-band features of the first seconds of a bulletin.
 public struct IdentReference: Codable, Sendable, Equatable {
     public var features: [[Float]]
-    public var threshold: Float = 0.8
+    public var threshold: Float = IdentMatcher.defaultThreshold
 }

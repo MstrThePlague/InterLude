@@ -255,6 +255,8 @@ public actor PlayerSession {
         for b in detector.blocks where loggedState[b.id] != b.isOpen {
             loggedState[b.id] = b.isOpen
             write(["event": b.isOpen ? "open" : "close", "block": blockJSON(b)])
+            // A bulletin that ran its normal course (music returned, sensible length) teaches the jingle too.
+            if !b.isOpen && !b.falseStart && !b.timedOut && !b.doubtful && !b.evidence.hasPrefix("marked") { learn(from: b) }
         }
     }
     private func blockJSON(_ b: NewsBlock) -> [String: Any] {
@@ -295,20 +297,39 @@ public actor PlayerSession {
         let listener = HLS.startTime(ofIndex: p.next - 1 - Playout.headStart).timeIntervalSince1970
         guard let b = detector.markNewsHeard(listenerTime: listener) else { notices.append("No speech to mark as news"); return }
         write(["event": "marked", "listenerTime": listener, "block": blockJSON(b)])
-        // Save the audio from just before the bulletin starts (to catch the ident) as a candidate; three that agree become the reference.
-        let slice = featureRing.filter { $0.time >= b.start - 4 && $0.time < b.start + 6 }.map(\.frame)
-        if slice.count > 100 {
+        learn(from: b)
+    }
+
+    /// Saves the audio around a bulletin's start as a jingle candidate, and the bulletin's time and length.
+    /// When a short stretch recurs in three candidates it becomes the station's jingle reference.
+    private func learn(from b: NewsBlock) {
+        let slice = featureRing.filter { $0.time >= b.start - 20 && $0.time < b.start + 10 }.map(\.frame)
+        if slice.count > 400 {
             settings.profile.candidates.append(slice)
-            if settings.profile.candidates.count > 8 { settings.profile.candidates.removeFirst() }
-            if let ref = IdentMatcher.promote(candidates: settings.profile.candidates, threshold: 0.8) {
-                settings.profile.idents = [ref]
-                notices.append("Learned a news ident for \(settings.station.name)")
-            }
+            settings.profile.candidateSources.append(b.id.uuidString)
+            while settings.profile.candidates.count > 8 { settings.profile.candidates.removeFirst(); settings.profile.candidateSources.removeFirst() }
+            promoteIdent()
         }
         if let e = b.end { settings.profile.learn(start: b.start, end: e) }
-        // Save only what was learned, on top of the file, so settings changed meanwhile in the app are kept.
+        saveLearning()
+        write(["event": "candidate", "block": b.id.uuidString, "candidates": settings.profile.candidates.count, "identLearned": !settings.profile.idents.isEmpty])
+    }
+
+    private func promoteIdent() {
+        let had = !settings.profile.idents.isEmpty
+        if let ref = IdentMatcher.promote(candidates: settings.profile.candidates) {
+            settings.profile.idents = [ref]
+            if !had { notices.append("Learned the news jingle for \(settings.station.name)") }
+        } else {
+            settings.profile.idents = []
+        }
+    }
+
+    /// Save only what was learned, on top of the file, so settings changed meanwhile in the app are kept.
+    private func saveLearning() {
         var disk = StationProfile.load(settings.station)
-        disk.candidates = settings.profile.candidates; disk.idents = settings.profile.idents
+        disk.candidates = settings.profile.candidates; disk.candidateSources = settings.profile.candidateSources
+        disk.idents = settings.profile.idents
         disk.startMinuteHistogram = settings.profile.startMinuteHistogram; disk.bulletinSeconds = settings.profile.bulletinSeconds
         disk.detector.minBulletinSeconds = settings.profile.detector.minBulletinSeconds
         disk.detector.maxBulletinSeconds = settings.profile.detector.maxBulletinSeconds
@@ -320,6 +341,11 @@ public actor PlayerSession {
     public func markWrong(id: UUID) {
         detector.markFalseStart(id: id)
         if let b = detector.blocks.first(where: { $0.id == id }) { write(["event": "wrong", "block": blockJSON(b)]) }
+        // Withdraw the jingle candidate this block gave, if any.
+        if let i = settings.profile.candidateSources.firstIndex(of: id.uuidString) {
+            settings.profile.candidates.remove(at: i); settings.profile.candidateSources.remove(at: i)
+            promoteIdent(); saveLearning()
+        }
     }
 
     public func status() -> SessionStatus {

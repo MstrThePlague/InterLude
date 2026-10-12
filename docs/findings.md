@@ -89,6 +89,12 @@ Read through the new token-protected `/diagnostics` endpoint (the Export diagnos
 
 A 6 Music bulletin that started about a minute late (16:31) was caught and muted, with the narrower slot window (one minute before to three minutes after) and the reworked "Not news". This is the first owner-confirmed correct mute.
 
+## Jingle learning (12 October)
+
+Learning now also uses every bulletin that closes normally (music returned, sensible length, not rejected). Each saves 20 s before to 10 s after its start. A reference is promoted only when a 3 s stretch recurs in at least three saved windows, at any position, with a score of at least 0.85. A jingle match only starts a block near a bulletin slot. "Wasn't news" withdraws that block's sample.
+
+Evidence so far (`ident-check` on the five likely bulletins in the recordings: 05:30, 06:00, 06:30, 08:00, 10:30 UTC): no stretch within 25 s of the starts recurs consistently. Best pairwise scores were 0.57 to 0.79 at unrelated offsets, with 6 s, 2.5 s and finer (64-band) features alike. So either 6 Music does not use one fixed jingle, or it falls outside that window, or these features cannot see it under the presenter. Learning is therefore safe (it will not promote noise) but may never trigger for 6 Music. The speech rule remains the main detector.
+
 ## Spec amendments made
 
 1. Wall-clock mapping of a segment uses `(index − 1) × 6.4` (the index is the end time). The stream clock runs about 29 s ahead of the system clock.
