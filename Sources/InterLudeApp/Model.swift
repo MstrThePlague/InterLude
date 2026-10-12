@@ -27,6 +27,7 @@ actor SessionHolder {
 
 @MainActor @Observable
 final class AppModel {
+    static let shared = AppModel()
     // Catalogue and choices
     var stations: [Station] = []
     var profiles: [String: StationProfile] = [:]
@@ -54,7 +55,7 @@ final class AppModel {
         let mute = p.shadowMode ? "Shadow mode: logging only." : ((p.muteNews && selectedStation?.kind != .speech) ? "News muting on." : "News muting off.")
         return "About \(Int((status.delaySeconds / 5).rounded()) * 5) seconds behind live. \(mute)"
     }
-    var menuIcon: String { status.muted && isPlaying ? "speaker.slash.fill" : (isPlaying ? "radio.fill" : "radio") }
+    var menuIcon: String { status.muted && isPlaying ? "speaker.slash.fill" : (isPlaying ? "dot.radiowaves.left.and.right" : "radio") }
 
     private var catalogue: Catalogue?
     private let holder = SessionHolder()
