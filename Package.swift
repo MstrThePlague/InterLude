@@ -13,6 +13,7 @@ let package = Package(
         .executableTarget(name: "evaluate", dependencies: ["InterLudeCore"], path: "Tools/Evaluate"),
         .executableTarget(name: "serve", dependencies: ["InterLudeCore"], path: "Tools/Serve"),
         .executableTarget(name: "cast-spike", dependencies: ["InterLudeCore"], path: "Tools/CastSpike"),
+        .executableTarget(name: "ident-check", dependencies: ["InterLudeCore"], path: "Tools/IdentCheck"),
         .executableTarget(name: "rms-poll", path: "Tools/RmsPoll"),
         .testTarget(name: "InterLudeCoreTests", dependencies: ["InterLudeCore"], path: "Tests/InterLudeCoreTests"),
     ]

@@ -71,12 +71,16 @@ final class AppModel {
     func jingleStatus(_ id: String) -> String {
         let p = profile(id)
         if !p.idents.isEmpty { return "Learned" }
-        return p.candidates.isEmpty ? "Not learned yet" : "Learning: \(p.candidates.count) of 3"
+        switch p.candidates.count {
+        case 0: return "Not learned yet"
+        case 1, 2: return "Learning: \(p.candidates.count) bulletin\(p.candidates.count == 1 ? "" : "s") heard"
+        default: return "No shared jingle yet (\(p.candidates.count) bulletins)"
+        }
     }
     var learnedNote: String? {
-        let n = profile(selectedStationID).candidates.count
-        let learned = !profile(selectedStationID).idents.isEmpty
-        return learned ? "News jingle learned" : (n > 0 ? "Learning jingle: \(n) of 3" : nil)
+        let p = profile(selectedStationID)
+        if !p.idents.isEmpty { return "News jingle learned" }
+        return p.candidates.isEmpty ? nil : "Learning the jingle"
     }
     var delayDescription: String { "About \(Int((status.delaySeconds / 5).rounded()) * 5) seconds" }
     var muteSubtitle: String {
@@ -404,6 +408,10 @@ final class AppModel {
             while !Task.isCancelled {
                 guard let self, let s = self.session else { return }
                 let st = await s.status()
+                if st.recentBlocks.count != self.status.recentBlocks.count || st.recentBlocks.first?.end != self.status.recentBlocks.first?.end,
+                   let station = self.selectedStation {
+                    self.profiles[station.serviceId] = StationProfile.load(station)
+                }
                 self.status = st
                 if st.notices.count > self.shownNotices {
                     for n in st.notices[self.shownNotices...] where n.contains("longest mute") || n.contains("failed") { self.notify("InterLude", n) }

@@ -9,10 +9,12 @@ public enum IdentFeatures {
     public static let hop = 2048
     public static let frameSeconds = Double(hop) / 48000
 
-    nonisolated(unsafe) private static let setup = vDSP_create_fftsetup(12, FFTRadix(kFFTRadix2))!
+    public static func extract(_ samples: [Float]) -> [[Float]] { extract(samples, bands: bands, log2n: 12, hop: hop) }
 
-    public static func extract(_ samples: [Float]) -> [[Float]] {
-        guard samples.count >= fftSize else { return [] }
+    public static func extract(_ samples: [Float], bands: Int, log2n: Int, hop: Int) -> [[Float]] {
+        let fftSize = 1 << log2n
+        guard samples.count >= fftSize, let setup = vDSP_create_fftsetup(vDSP_Length(log2n), FFTRadix(kFFTRadix2)) else { return [] }
+        defer { vDSP_destroy_fftsetup(setup) }
         let n = fftSize, half = n / 2
         var window = [Float](repeating: 0, count: n)
         vDSP_hann_window(&window, vDSP_Length(n), Int32(vDSP_HANN_NORM))
@@ -32,7 +34,7 @@ public enum IdentFeatures {
                 frame.withUnsafeBufferPointer { fp in
                     fp.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: half) { vDSP_ctoz($0, 2, &split, 1, vDSP_Length(half)) }
                 }
-                vDSP_fft_zrip(setup, &split, 1, 12, FFTDirection(FFT_FORWARD))
+                vDSP_fft_zrip(setup, &split, 1, vDSP_Length(log2n), FFTDirection(FFT_FORWARD))
                 var mag = [Float](repeating: 0, count: half)
                 vDSP_zvmags(&split, 1, &mag, 1, vDSP_Length(half))
                 var bandsOut = [Float](repeating: 0, count: bands)
@@ -87,16 +89,34 @@ public enum IdentMatcher {
         return (0..<n).map { i in (0..<w).map { j in sets.reduce(0) { $0 + $1[i][j] } / Float(sets.count) } }
     }
 
-    /// Promotes candidates to a reference when at least 3 agree above `threshold`.
-    public static func promote(candidates: [[[Float]]], threshold: Float) -> IdentReference? {
+    /// Length of a learned jingle reference.
+    public static let referenceSeconds = 3.0
+    /// Short references match unrelated audio more easily; 0.79 was the best chance score seen between
+    /// unrelated 6 Music bulletin starts, so a match must beat this.
+    public static let defaultThreshold: Float = 0.85
+
+    /// Looks for a short stretch that recurs in at least three candidate windows, wherever it falls in each.
+    /// Returns the average of the aligned stretches, or nil when no stretch is shared by three.
+    public static func promote(candidates: [[[Float]]], threshold: Float = defaultThreshold) -> IdentReference? {
         guard candidates.count >= 3 else { return nil }
-        for base in candidates {
-            let agreeing = candidates.filter { c in
-                let n = min(base.count, c.count)
-                return (bestMatch(reference: Array(base.prefix(n)), in: Array(c.prefix(n)))?.score ?? 0) > threshold
+        let w = Int(referenceSeconds / IdentFeatures.frameSeconds)
+        var best: (count: Int, score: Float, ref: [[Float]])?
+        for (bi, base) in candidates.enumerated() where base.count >= w {
+            var k = 0
+            while k + w <= base.count {
+                let piece = Array(base[k..<(k + w)])
+                var aligned = [piece], total: Float = 0
+                for (ci, c) in candidates.enumerated() where ci != bi {
+                    if let m = bestMatch(reference: piece, in: c), m.score >= threshold, m.offset + w <= c.count {
+                        aligned.append(Array(c[m.offset..<(m.offset + w)])); total += m.score
+                    }
+                }
+                if aligned.count >= 3, best == nil || aligned.count > best!.count || (aligned.count == best!.count && total > best!.score) {
+                    best = (aligned.count, total, average(aligned))
+                }
+                k += 4
             }
-            if agreeing.count >= 3 { return IdentReference(features: average(agreeing), threshold: threshold) }
         }
-        return nil
+        return best.map { IdentReference(features: $0.ref, threshold: threshold) }
     }
 }
