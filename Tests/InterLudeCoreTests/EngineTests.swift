@@ -52,14 +52,38 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     #expect(b.timedOut && b.end != nil)
 }
 
-@Test func notNewsClosesAndSuppressesUntilMusic() {
+@Test func notNewsClosesBlockAndRejudgesLaterAudio() {
     var d = NewsDetector()
-    for s in samples(from: hour + 1800, speech: true, seconds: 40) { d.ingest(s) }
-    d.rejectOpenBlock(at: hour + 1840)
-    #expect(d.openBlock == nil && d.blocks[0].falseStart)
-    for s in samples(from: hour + 1841, speech: true, seconds: 40) { d.ingest(s) }
-    #expect(d.openBlock == nil)                         // still suppressed
-    #expect(!d.isNews(segmentStart: hour + 1800))
+    // Presenter chat from :26:00 is flagged only because the slot window is wide here.
+    var cfg = DetectorConfig(); cfg.slotBeforeMinutes = 5
+    d = NewsDetector(config: cfg)
+    for s in samples(from: hour + 1800 - 120, speech: true, seconds: 100) { d.ingest(s) }   // already analysed, ahead of the listener
+    #expect(d.openBlock != nil)
+    d.rejectOpenBlock(at: hour + 1800 - 60)          // the listener has only reached -60 s
+    #expect(d.blocks[0].falseStart)
+    // The speech after -60 s carried on into the bulletin, so it counts again from that point.
+    #expect(d.openBlock != nil && d.openBlock!.start >= hour + 1800 - 60)
+    #expect(!d.isNews(segmentStart: hour + 1800 - 120))
+    #expect(d.isNews(segmentStart: hour + 1800 - 20))
+}
+
+@Test func notNewsStaysUnmutedWhenSpeechStops() {
+    var cfg = DetectorConfig(); cfg.slotBeforeMinutes = 5
+    var d = NewsDetector(config: cfg)
+    for s in samples(from: hour + 1800 - 120, speech: true, seconds: 30) { d.ingest(s) }
+    for s in samples(from: hour + 1800 - 90, speech: false, seconds: 60) { d.ingest(s) }
+    d.rejectOpenBlock(at: hour + 1800 - 100)
+    #expect(d.openBlock == nil)
+    for s in samples(from: hour + 1800 - 30, speech: true, seconds: 15) { d.ingest(s) }
+    #expect(d.openBlock == nil)
+}
+
+@Test func playoutRefreshPendingRemutes() {
+    var p = Playout(liveEdge: 100, delaySeconds: 60)
+    for _ in 0..<8 { _ = p.tick(muteNews: true) { _ in false } }
+    p.refreshPending(from: 94) { $0 >= 95 }
+    let m = Dictionary(uniqueKeysWithValues: p.window.map { ($0.index, $0.source) })
+    #expect(m[93] == .station && m[94] == .station && m[95] == .silence && m[96] == .silence)
 }
 
 @Test func playoutKeepsConstantDelayAndWindow() {

@@ -44,6 +44,11 @@ public struct Playout: Sendable {
         return seg
     }
 
+    /// Re-judges segments the player has not fetched yet, after the timeline changed ("Not news").
+    public mutating func refreshPending(from index: Int, isNews: (Int) -> Bool) {
+        for i in window.indices where window[i].index >= index { window[i].source = isNews(window[i].index) ? .silence : .station }
+    }
+
     public func clearingLog() -> Playout { var c = self; c.log = []; return c }
 
     public var isMuted: Bool { window.last?.source == .silence }

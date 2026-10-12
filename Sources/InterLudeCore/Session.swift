@@ -261,12 +261,15 @@ public actor PlayerSession {
 
     public func setMuteNews(_ on: Bool) { settings.muteNews = on }
 
-    /// "Not news": unmute from the next segment the player fetches.
+    /// "Not news": unmute from the next segment the player fetches, then judge what follows again.
     public func notNews() {
-        detector.rejectOpenBlock(at: Date().timeIntervalSince1970 - settings.delaySeconds + 10)
-        playout?.unmutePending(from: lastServed + 1)
-        silenceCache = silenceCache.filter { $0.key <= lastServed }
+        let first = lastServed + 1
+        detector.rejectOpenBlock(at: HLS.startTime(ofIndex: first).timeIntervalSince1970)
+        let det = detector
+        playout?.refreshPending(from: first) { det.isNews(segmentStart: HLS.startTime(ofIndex: $0).timeIntervalSince1970) }
+        silenceCache = silenceCache.filter { $0.key < first }
         if let b = detector.blocks.last(where: \.falseStart) { write(["event": "falseStart", "block": blockJSON(b)]) }
+        logBlocks()
     }
 
     /// "That was news": the most recent speech block is marked as news.
