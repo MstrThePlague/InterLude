@@ -152,3 +152,18 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     for s in samples(from: hour + 1960, speech: false, seconds: 30) { d.ingest(s) }
     #expect(d.openBlock == nil && d.blocks.count == 1)
 }
+
+@Test func slotWindowIsNarrowAndAsymmetric() {
+    let d = NewsDetector()
+    #expect(d.inSlot(hour + 1800 + 30))        // 30 s after
+    #expect(d.inSlot(hour + 1800 - 50))        // 50 s before
+    #expect(d.inSlot(hour + 3600 + 150))       // 2.5 min after the hour
+    #expect(!d.inSlot(hour + 1800 - 240))      // 4 min before: a presenter over a song
+    #expect(!d.inSlot(hour + 1800 + 240))
+}
+
+@Test func oldProfilesStillDecode() throws {
+    let old = #"{"speechThreshold":0.7,"slotWindowMinutes":4,"slotMinutes":[0,30]}"#
+    let c = try JSONDecoder().decode(DetectorConfig.self, from: Data(old.utf8))
+    #expect(c.speechThreshold == 0.7 && c.slotAfterMinutes == 3 && c.maxMuteSeconds == 480)
+}

@@ -9,7 +9,10 @@ public struct DetectorConfig: Codable, Sendable, Equatable {
     public var speechCeilingForMusic = 0.5
     public var sustainedMusicSeconds = 5.0
     public var slotMinutes: [Int] = [0, 30]
-    public var slotWindowMinutes = 4.0
+    /// A bulletin's speech starts from `slotBeforeMinutes` before to `slotAfterMinutes` after a slot minute.
+    /// Measured 6 Music starts were 26 to 46 s after the slot; a window of +-4 minutes muted a presenter talking over a song.
+    public var slotBeforeMinutes = 1.0
+    public var slotAfterMinutes = 3.0
     public var requireSlot = true
     /// Mute only when the news ident matches. Used until a station's speech rule has been checked in shadow mode.
     public var identOnly = false
@@ -17,6 +20,22 @@ public struct DetectorConfig: Codable, Sendable, Equatable {
     public var minBulletinSeconds = 90.0
     public var maxBulletinSeconds = 360.0
     public init() {}
+
+    /// Tolerant decoding: profiles written by older versions keep working, with new fields at their defaults.
+    public init(from decoder: Decoder) throws {
+        self.init()
+        let c = try decoder.container(keyedBy: Keys.self)
+        func get<T: Decodable>(_ k: Keys, _ v: inout T) { if let x = try? c.decodeIfPresent(T.self, forKey: k) { v = x } }
+        get(.speechThreshold, &speechThreshold); get(.sustainedSpeechSeconds, &sustainedSpeechSeconds); get(.gapSeconds, &gapSeconds)
+        get(.musicThreshold, &musicThreshold); get(.speechCeilingForMusic, &speechCeilingForMusic); get(.sustainedMusicSeconds, &sustainedMusicSeconds)
+        get(.slotMinutes, &slotMinutes); get(.slotBeforeMinutes, &slotBeforeMinutes); get(.slotAfterMinutes, &slotAfterMinutes)
+        get(.requireSlot, &requireSlot); get(.identOnly, &identOnly); get(.maxMuteSeconds, &maxMuteSeconds)
+        get(.minBulletinSeconds, &minBulletinSeconds); get(.maxBulletinSeconds, &maxBulletinSeconds)
+    }
+    enum Keys: String, CodingKey {
+        case speechThreshold, sustainedSpeechSeconds, gapSeconds, musicThreshold, speechCeilingForMusic, sustainedMusicSeconds
+        case slotMinutes, slotBeforeMinutes, slotAfterMinutes, requireSlot, identOnly, maxMuteSeconds, minBulletinSeconds, maxBulletinSeconds
+    }
 }
 
 /// One classifier window in absolute time (Unix seconds).
@@ -60,8 +79,9 @@ public struct NewsDetector: Sendable {
         guard config.requireSlot else { return true }
         let minute = (t.truncatingRemainder(dividingBy: 3600)) / 60
         return config.slotMinutes.contains { m in
-            let d = abs(minute - Double(m))
-            return min(d, 60 - d) <= config.slotWindowMinutes
+            var d = minute - Double(m)                 // minutes after the slot, wrapped to -30...30
+            if d > 30 { d -= 60 } else if d < -30 { d += 60 }
+            return d >= -config.slotBeforeMinutes && d <= config.slotAfterMinutes
         }
     }
 
