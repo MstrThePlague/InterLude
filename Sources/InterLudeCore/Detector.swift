@@ -68,6 +68,8 @@ public struct NewsDetector: Sendable {
     private var lastSpeech: Double = 0
     private var musicRunStart: Double?
     private var suppressUntilMusic = false
+    private var history: [ScoreSample] = []
+    private var freshAfter: Double = 0     // speech before this time no longer counts towards a run
     public private(set) var lastSpeechRun: (start: Double, end: Double)?
     public var trackPlaying: Bool = false      // evidence from the metadata poller
 
@@ -87,7 +89,13 @@ public struct NewsDetector: Sendable {
 
     /// Feed windows in time order.
     public mutating func ingest(_ s: ScoreSample) {
-        let isSpeech = s.speech >= config.speechThreshold
+        history.append(s)
+        if history.count > 400 { history.removeFirst(history.count - 400) }     // about 10 minutes
+        process(s)
+    }
+
+    private mutating func process(_ s: ScoreSample) {
+        let isSpeech = s.speech >= config.speechThreshold && s.time >= freshAfter
         let isMusic = s.music >= config.musicThreshold && s.speech < config.speechCeilingForMusic
         if isMusic { suppressUntilMusic = false }
 
@@ -128,12 +136,17 @@ public struct NewsDetector: Sendable {
         runStart = nil
     }
 
-    /// "Not news": closes the open block now and holds off reopening until music is heard.
+    /// "Not news": the block ends at `t`, the point the listener has reached. The detector is already about a delay
+    /// ahead of the listener, so audio after `t` is judged again from scratch. Speech that carries on into a real
+    /// bulletin therefore still starts a new block once it has been sustained from `t`.
     public mutating func rejectOpenBlock(at t: Double) {
         guard let i = blocks.lastIndex(where: \.isOpen) else { return }
         blocks[i].falseStart = true
         close(i, at: t, timedOut: false, why: "rejected by user")
-        suppressUntilMusic = true
+        suppressUntilMusic = false
+        freshAfter = t
+        runStart = nil; musicRunStart = nil
+        for s in history where s.time >= t { process(s) }
     }
 
     /// "Wrong" on a recent block.
