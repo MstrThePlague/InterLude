@@ -134,6 +134,8 @@ Built from this:
 - A theme match inside a block moves the block's start to 8 s before the match (the learned stretch sits about 6 s into the theme), so the presenter's handover plays. Unfetched segments are re-judged after every analysis chunk.
 - Learning from muted bulletins uses 10 s before to 60 s after the speech start.
 
+Live check, 19:30 BST: the theme matched at 0.98 and the block's start moved 6 s later, from the presenter's first word to the theme; the block closed 206 s later when music returned.
+
 The end is unchanged: a voice model of the newsreader does not separate them from the presenter either, so muting still runs until music returns (about 20 s of presenter talk in the labelled case).
 
 ## Spec amendments made
