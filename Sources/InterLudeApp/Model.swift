@@ -80,6 +80,7 @@ final class AppModel {
     var learnedNote: String? {
         let p = profile(selectedStationID)
         if status.learningJingle { return "Learning the news jingle…" }
+        if status.speechModel == "checking" { return "Getting speech recognition ready…" }
         if !p.idents.isEmpty { return "Knows the news jingle" }
         return p.candidates.isEmpty ? nil : "Learning the news jingle"
     }

@@ -75,6 +75,8 @@ public struct NewsDetector: Sendable {
     private var freshAfter: Double = 0     // speech before this time no longer counts towards a run
     /// After "Not news", speech only counts again once there has been a clear break (music, a jingle, a pause).
     private var awaitingBreak = false
+    /// After the newsreader signs off, talk (trails, the presenter) does not start a new block for a while.
+    private var openingsPausedUntil: Double = 0
     public private(set) var speechRuns: [(start: Double, end: Double)] = []
     public var trackPlaying: Bool = false      // evidence from the metadata poller
 
@@ -123,7 +125,7 @@ public struct NewsDetector: Sendable {
             return
         }
         musicRunStart = nil
-        guard !config.identOnly, !suppressUntilMusic, !trackPlaying, let r = runStart, lastSpeech - r >= config.sustainedSpeechSeconds, inSlot(r) else { return }
+        guard !config.identOnly, !suppressUntilMusic, !trackPlaying, s.time >= openingsPausedUntil, let r = runStart, lastSpeech - r >= config.sustainedSpeechSeconds, inSlot(r) else { return }
         blocks.append(NewsBlock(start: r, evidence: "speech>=\(config.speechThreshold) for \(Int(lastSpeech - r))s near a slot"))
     }
 
@@ -154,6 +156,27 @@ public struct NewsDetector: Sendable {
         b.anchoredOnIdent = true
         blocks.append(b)
         runStart = nil
+    }
+
+    /// The newsreader's opening was heard: like the theme, it marks where the bulletin really starts.
+    public mutating func anchorStart(at t: Double, why: String) {
+        guard let i = blocks.lastIndex(where: { !$0.falseStart && abs($0.start - t) <= 120 && ($0.end.map { t < $0 } ?? true) }),
+              !blocks[i].anchoredOnIdent else { return }
+        blocks[i].evidence += "; start moved \(Int(t - blocks[i].start)) s: \(why)"
+        blocks[i].start = t
+        blocks[i].anchoredOnIdent = true
+    }
+
+    /// The newsreader signed off at `t`: the bulletin ends there, even if the presenter talks on.
+    /// Talk for the next four minutes does not start another block.
+    public mutating func endBlock(at t: Double, why: String) {
+        guard let i = blocks.lastIndex(where: { !$0.falseStart && $0.start < t && ($0.end.map { $0 > t } ?? true) }) else { return }
+        if blocks[i].isOpen { close(i, at: t, timedOut: false, why: why) }
+        else {
+            blocks[i].evidence += "; end moved \(Int((blocks[i].end ?? t) - t)) s earlier: \(why)"
+            blocks[i].end = t
+        }
+        openingsPausedUntil = t + 240
     }
 
     /// "Not news": the block ends at `t`, the point the listener has reached. The detector is already about a delay

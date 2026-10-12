@@ -113,8 +113,9 @@ public enum IdentMatcher {
     /// The 6 Music news theme scored 0.81 to 0.89 at seven bulletins across four shows; nothing else in five
     /// hours of audio scored above 0.75.
     public static let defaultThreshold: Float = 0.78
-    /// The reference sits a few seconds into the theme (about 6 s for 6 Music), so muting starts this long before the match.
-    public static let leadSeconds = 8.0
+    /// Muting starts this long before a match. Transcripts put the learned 6 Music stretch at the sung "Six Music",
+    /// right after the presenter's handover, so a small margin is enough.
+    public static let leadSeconds = 2.0
 
     /// Looks for a short stretch that recurs in at least three candidate windows, wherever it falls in each.
     /// Returns the average of the aligned stretches, or nil when no stretch is shared by three.

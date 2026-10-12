@@ -244,3 +244,43 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     d.identMatch(at: hour + 1850, score: 0.95)          // heard again in the next chunk: no change
     #expect(d.openBlock?.start == hour + 1840)
 }
+
+@Test func findsNewsOpeningAndSignOffInTranscripts() {
+    // From the 17:30 BST bulletin on 12 October (on-device transcript).
+    let start = [SpokenPhrase(start: 7.0, end: 11.2, text: "It's called Goodwife from Friedberg, and we'll be back with Republican, Matilda Finn,"),
+                 SpokenPhrase(start: 12.1, end: 13.3, text: "Slim after this news."),
+                 SpokenPhrase(start: 14.0, end: 14.8, text: " Six music."),
+                 SpokenPhrase(start: 15.6, end: 16.5, text: " This is BBC "),
+                 SpokenPhrase(start: 16.5, end: 17.7, text: "Radio, 6 "),
+                 SpokenPhrase(start: 18.5, end: 19.6, text: " BBC News at "),
+                 SpokenPhrase(start: 19.6, end: 20.5, text: "5.30")]
+    #expect(NewsPhrases.opening(in: start) == 15.6)
+    let end = [SpokenPhrase(start: 32.5, end: 37.0, text: "said the waterway is now on the road to recovery."),
+               SpokenPhrase(start: 37.2, end: 37.8, text: " Now, 6 "),
+               SpokenPhrase(start: 37.8, end: 38.5, text: "music news."),
+               SpokenPhrase(start: 38.5, end: 38.9, text: " Your next "),
+               SpokenPhrase(start: 38.9, end: 39.6, text: "update's at "),
+               SpokenPhrase(start: 39.6, end: 40.2, text: "6.30."),
+               SpokenPhrase(start: 41.0, end: 43.1, text: " Get 6 music on your smart speaker.")]
+    #expect(NewsPhrases.signOff(in: end) == 40.2)
+    #expect(NewsPhrases.signOff(in: start) == nil)
+}
+
+@Test func signOffEndsTheBlockAndPausesReopening() {
+    var d = NewsDetector()
+    for s in samples(from: hour + 1810, speech: true, seconds: 200) { d.ingest(s) }     // bulletin, then presenter talk
+    d.endBlock(at: hour + 1980, why: "newsreader signed off")
+    #expect(d.blocks.count == 1 && d.blocks[0].end == hour + 1980)
+    for s in samples(from: hour + 2010, speech: true, seconds: 60) { d.ingest(s) }     // trail and chat
+    #expect(d.openBlock == nil)
+    #expect(!d.isNews(segmentStart: hour + 1990))
+}
+
+@Test func signOffMovesAnEndThatMusicAlreadyClosed() {
+    var d = NewsDetector()
+    for s in samples(from: hour + 1810, speech: true, seconds: 200) { d.ingest(s) }
+    for s in samples(from: hour + 2010, speech: false, seconds: 20) { d.ingest(s) }
+    #expect(d.blocks[0].end != nil && d.blocks[0].end! > hour + 2000)
+    d.endBlock(at: hour + 1980, why: "newsreader signed off")
+    #expect(d.blocks[0].end == hour + 1980)
+}
