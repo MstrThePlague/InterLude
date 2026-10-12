@@ -36,6 +36,8 @@ public struct SessionStatus: Sendable {
     /// The playout clock fell badly behind (for example after the Mac slept). The caller should start a new session.
     public var needsRestart = false
     public var learningJingle = false
+    /// On-device speech model for finding the newsreader's sign-off: checking, installing, ready or unavailable.
+    public var speechModel = "unavailable"
     public init() {}
 }
 
@@ -63,6 +65,15 @@ public actor PlayerSession {
     private var silenceCache: [Int: Data] = [:]
     private var lastServed = 0
     private var featureRing: [(time: Double, frame: [Float])] = []
+    // Transcription of muted blocks, to find the newsreader's opening and sign-off (macOS 26 and later).
+    private var transcriber: AnyObject?
+    private var speechState = "unavailable"
+    private var monoTail: [Float] = []                  // the last 30 s of audio analysed
+    private var blockAudio: [Float] = []
+    private var blockAudioStart: Double = 0
+    private var blockAudioFor: UUID?
+    private var transcribedThrough: Double = 0
+    private var signedOff: Set<UUID> = []
     private var lastMono: [Float] = []
 
     private var tracks: [(observedAt: Date, track: NowPlaying)] = []
@@ -107,6 +118,15 @@ public actor PlayerSession {
         tasks.append(Task { await self.emitLoop() })
         tasks.append(Task { await self.metadataLoop() })
         if settings.muteNews && settings.profile.idents.isEmpty { tasks.append(Task(priority: .utility) { await self.learnJingleFromRewind() }) }
+        if #available(macOS 26, *), settings.station.kind == .music {
+            let stt = NewsTranscriber()
+            transcriber = stt
+            speechState = "checking"
+            tasks.append(Task(priority: .utility) {
+                let ok = await stt.prepare(install: true)
+                await self.setSpeechState(ok ? "ready" : "unavailable")
+            })
+        }
     }
 
     public func stop() {
@@ -215,9 +235,11 @@ public actor PlayerSession {
                     detector.ingest(ScoreSample(time: clipStart + s.time, duration: s.duration, speech: s.speech, music: s.music))
                 }
                 lastAnalysisSegment = buffers.last
-                updateIdents(chunkStart: HLS.startTime(ofIndex: firstNew).timeIntervalSince1970, buffers: buffers)
+                let chunkStart = HLS.startTime(ofIndex: firstNew).timeIntervalSince1970
+                let newMono = updateIdents(chunkStart: chunkStart, buffers: buffers)
                 logBlocks()
                 rejudgePending()
+                await listenForNewsreader(chunkStart: chunkStart, newMono: newMono)
             }
             analysedThrough = chunkEnd
             i = chunkEnd + 1
@@ -225,7 +247,8 @@ public actor PlayerSession {
     }
 
     /// Extracts features over the new audio plus a little earlier context, stores them, and looks for known idents.
-    private func updateIdents(chunkStart: Double, buffers: [AVAudioPCMBuffer]) {
+    @discardableResult
+    private func updateIdents(chunkStart: Double, buffers: [AVAudioPCMBuffer]) -> [Float] {
         let ctx = lastMono
         var mono = ctx
         for b in buffers { mono += IdentFeatures.mono(b) }
@@ -242,6 +265,48 @@ public actor PlayerSession {
                 detector.identMatch(at: t0 + Double(m.offset) * IdentFeatures.frameSeconds - IdentMatcher.leadSeconds, score: m.score)
             }
         }
+        return Array(mono.dropFirst(ctx.count))
+    }
+
+    /// While a bulletin is being muted, transcribes its latest audio and looks for the newsreader's opening (when the
+    /// theme is not known) and sign-off. The sign-off ends the block there, so the presenter's talk afterwards plays.
+    private func listenForNewsreader(chunkStart: Double, newMono: [Float]) async {
+        let rate = 48000.0
+        monoTail += newMono
+        if monoTail.count > Int(30 * rate) { monoTail.removeFirst(monoTail.count - Int(30 * rate)) }
+        let chunkEnd = chunkStart + Double(newMono.count) / rate
+        let tailStart = chunkEnd - Double(monoTail.count) / rate
+        guard #available(macOS 26, *), let stt = transcriber as? NewsTranscriber, speechState == "ready", let p = playout else { return }
+        let listener = HLS.startTime(ofIndex: p.next - 1 - Playout.headStart).timeIntervalSince1970
+        guard let b = detector.blocks.last(where: { !$0.falseStart && !signedOff.contains($0.id) && ($0.isOpen || ($0.end ?? 0) > listener) }) else {
+            blockAudioFor = nil; blockAudio = []; return
+        }
+        if blockAudioFor != b.id {
+            blockAudioFor = b.id
+            let from = max(tailStart, b.start - 20)
+            blockAudio = Array(monoTail.dropFirst(Int((from - tailStart) * rate)))
+            blockAudioStart = from
+            transcribedThrough = from
+        } else {
+            blockAudio += newMono
+        }
+        if blockAudio.count > Int(480 * rate) { return }                 // longer than any bulletin: leave it to the music rule
+        let end = blockAudioStart + Double(blockAudio.count) / rate
+        guard end - transcribedThrough >= 5 else { return }
+        let from = max(blockAudioStart, transcribedThrough - 20)          // overlap, so phrases split across calls are kept
+        let samples = Array(blockAudio.dropFirst(Int((from - blockAudioStart) * rate)))
+        transcribedThrough = end
+        guard let phrases = try? await stt.transcribe(samples: samples, sampleRate: rate), !phrases.isEmpty else { return }
+        if !b.anchoredOnIdent, let o = NewsPhrases.opening(in: phrases), from + o < b.start + 90 {
+            detector.anchorStart(at: from + o - 3, why: "newsreader's opening heard")
+        }
+        if let e = NewsPhrases.signOff(in: phrases, after: b.start + 45 - from) {
+            detector.endBlock(at: from + e + 0.3, why: "newsreader signed off")
+            signedOff.insert(b.id)
+            write(["event": "signOff", "block": b.id.uuidString, "at": from + e])
+        }
+        logBlocks()
+        rejudgePending()
     }
 
     /// Segments already listed but not yet fetched follow the latest view of the timeline
@@ -254,6 +319,8 @@ public actor PlayerSession {
         if p.window != before { silenceCache = silenceCache.filter { $0.key <= lastServed } }
         playout = p
     }
+
+    private func setSpeechState(_ s: String) { speechState = s }
 
     private func remember(index: Int, info: TSSegmentInfo) {
         if let pts = info.firstPTS { ptsByIndex[index] = pts }
@@ -420,7 +487,7 @@ public actor PlayerSession {
 
     public func status() -> SessionStatus {
         var s = SessionStatus()
-        s.state = state; s.delaySeconds = settings.delaySeconds; s.muteNews = settings.muteNews; s.needsRestart = needsRestart; s.learningJingle = learningJingle
+        s.state = state; s.delaySeconds = settings.delaySeconds; s.muteNews = settings.muteNews; s.needsRestart = needsRestart; s.learningJingle = learningJingle; s.speechModel = speechState
         if let p = playout {
             let playing = p.next - 1 - Playout.headStart
             s.muted = p.window.first(where: { $0.index == playing })?.source == .silence

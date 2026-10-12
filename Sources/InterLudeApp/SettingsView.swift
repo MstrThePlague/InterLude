@@ -61,7 +61,7 @@ struct SettingsView: View {
                         }
                     }
                 } header: { Text("News detection for \(st.name)") } footer: {
-                    FooterText("Bulletin minutes are when bulletins usually start, in minutes past the hour. Speech from a minute before to three minutes after counts as news. When you press Play, InterLude learns the station's news jingle from the last few hours of bulletins, and keeps learning from each one it mutes. Once it knows the jingle, muting starts at the jingle, so the presenter's handover plays.")
+                    FooterText("Bulletin minutes are when bulletins usually start, in minutes past the hour. Speech from a minute before to three minutes after counts as news. When you press Play, InterLude learns the station's news jingle from the last few hours of bulletins, and keeps learning from each one it mutes. Once it knows the jingle, muting starts at the jingle, so the presenter's handover plays. While muting, InterLude listens for the newsreader's sign-off (“…your next update's at…”) and ends the mute there. Speech recognition runs on this Mac; nothing is sent anywhere.")
                 }
             }
 
