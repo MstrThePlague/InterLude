@@ -43,7 +43,14 @@ public final class CastDiscovery: @unchecked Sendable {
     public let updates: AsyncStream<[CastDevice]>
     private let cont: AsyncStream<[CastDevice]>.Continuation
 
-    public init() { (updates, cont) = AsyncStream.makeStream(of: [CastDevice].self, bufferingPolicy: .bufferingNewest(1)) }
+    /// Yields true when macOS has refused local network access.
+    public let permission: AsyncStream<Bool>
+    private let permCont: AsyncStream<Bool>.Continuation
+
+    public init() {
+        (updates, cont) = AsyncStream.makeStream(of: [CastDevice].self, bufferingPolicy: .bufferingNewest(1))
+        (permission, permCont) = AsyncStream.makeStream(of: Bool.self, bufferingPolicy: .bufferingNewest(1))
+    }
 
     public func start() {
         let b = NWBrowser(for: .bonjourWithTXTRecord(type: "_googlecast._tcp", domain: nil), using: .tcp)
@@ -58,6 +65,10 @@ public final class CastDiscovery: @unchecked Sendable {
                 out.append(CastDevice(id: name, name: fn, model: md, endpoint: r.endpoint))
             }
             cont.yield(out.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
+        }
+        b.stateUpdateHandler = { [permCont] st in
+            if case .waiting(let e) = st, case .dns(let code) = e, code == -65570 { permCont.yield(true) }     // kDNSServiceErr_PolicyDenied
+            if case .failed = st { permCont.yield(true) }
         }
         b.start(queue: queue)
         browser = b

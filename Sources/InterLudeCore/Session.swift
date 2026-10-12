@@ -29,6 +29,8 @@ public struct SessionStatus: Sendable {
     public var nowPlaying: NowPlaying?
     /// Seconds the listener has been in the current muted bulletin, when muted.
     public var muteElapsed: Double?
+    /// Seconds until a bulletin the detector has already found reaches the listener and is muted.
+    public var muteStartsIn: Double?
     public var recentBlocks: [NewsBlock] = []
     public var notices: [String] = []
     /// The playout clock fell badly behind (for example after the Mac slept). The caller should start a new session.
@@ -271,6 +273,11 @@ public actor PlayerSession {
 
     public func setMuteNews(_ on: Bool) { settings.muteNews = on }
 
+    /// Options that take effect at once, without a restart.
+    public func setLiveOptions(muteNews: Bool, shadowMode: Bool) {
+        settings.muteNews = muteNews; settings.profile.shadowMode = shadowMode
+    }
+
     /// "Not news": unmute from the next segment the player fetches, then judge what follows again.
     public func notNews() {
         let first = lastServed + 1
@@ -299,7 +306,13 @@ public actor PlayerSession {
             }
         }
         if let e = b.end { settings.profile.learn(start: b.start, end: e) }
-        settings.profile.save(settings.station)
+        // Save only what was learned, on top of the file, so settings changed meanwhile in the app are kept.
+        var disk = StationProfile.load(settings.station)
+        disk.candidates = settings.profile.candidates; disk.idents = settings.profile.idents
+        disk.startMinuteHistogram = settings.profile.startMinuteHistogram; disk.bulletinSeconds = settings.profile.bulletinSeconds
+        disk.detector.minBulletinSeconds = settings.profile.detector.minBulletinSeconds
+        disk.detector.maxBulletinSeconds = settings.profile.detector.maxBulletinSeconds
+        disk.save(settings.station)
     }
 
     public func profile() -> StationProfile { settings.profile }
@@ -316,9 +329,14 @@ public actor PlayerSession {
             let playing = p.next - 1 - Playout.headStart
             s.muted = p.window.first(where: { $0.index == playing })?.source == .silence
             s.delaySeconds = Double(liveEdge - playing) * segmentDuration
+            let heard = HLS.startTime(ofIndex: playing).timeIntervalSince1970
             if s.muted {
-                let heard = HLS.startTime(ofIndex: playing).timeIntervalSince1970
                 if let b = detector.blocks.last(where: { !$0.falseStart && $0.start <= heard && ($0.end ?? .infinity) > heard }) { s.muteElapsed = heard - b.start }
+            } else if settings.muteNews && !settings.profile.shadowMode,
+                      let b = detector.blocks.last(where: { !$0.falseStart && $0.start > heard }) {
+                // Mutes start on a segment boundary, so round the countdown to the segment the block starts in.
+                let segStart = floor(b.start / segmentDuration) * segmentDuration
+                s.muteStartsIn = max(0, segStart - heard)
             }
         }
         let at = Date().addingTimeInterval(-settings.delaySeconds)
