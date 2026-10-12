@@ -71,6 +71,8 @@ public struct NewsDetector: Sendable {
     private var suppressUntilMusic = false
     private var history: [ScoreSample] = []
     private var freshAfter: Double = 0     // speech before this time no longer counts towards a run
+    /// After "Not news", speech only counts again once there has been a clear break (music, a jingle, a pause).
+    private var awaitingBreak = false
     public private(set) var speechRuns: [(start: Double, end: Double)] = []
     public var trackPlaying: Bool = false      // evidence from the metadata poller
 
@@ -96,7 +98,8 @@ public struct NewsDetector: Sendable {
     }
 
     private mutating func process(_ s: ScoreSample) {
-        let isSpeech = s.speech >= config.speechThreshold && s.time >= freshAfter
+        if awaitingBreak && s.time >= freshAfter && s.speech < 0.4 { awaitingBreak = false }
+        let isSpeech = s.speech >= config.speechThreshold && s.time >= freshAfter && !awaitingBreak
         let isMusic = s.music >= config.musicThreshold && s.speech < config.speechCeilingForMusic
         if isMusic { suppressUntilMusic = false }
 
@@ -140,14 +143,16 @@ public struct NewsDetector: Sendable {
     }
 
     /// "Not news": the block ends at `t`, the point the listener has reached. The detector is already about a delay
-    /// ahead of the listener, so audio after `t` is judged again from scratch. Speech that carries on into a real
-    /// bulletin therefore still starts a new block once it has been sustained from `t`.
+    /// ahead of the listener, so audio after `t` is judged again from scratch. Talk that simply carries on stays
+    /// unmuted (the listener said it was not news), but after a clear break, such as a jingle or music, sustained
+    /// speech can start a new block, so a bulletin that follows presenter chat is still caught.
     public mutating func rejectOpenBlock(at t: Double) {
         guard let i = blocks.lastIndex(where: \.isOpen) else { return }
         blocks[i].falseStart = true
         close(i, at: t, timedOut: false, why: "rejected by user")
         suppressUntilMusic = false
         freshAfter = t
+        awaitingBreak = true
         runStart = nil; musicRunStart = nil
         for s in history where s.time >= t { process(s) }
     }

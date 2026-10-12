@@ -88,7 +88,11 @@ final class AppModel {
         if selectedStation?.kind == .speech { return "Off for speech stations, where talk is the programme." }
         if p.shadowMode { return "Shadow mode: bulletins are noted but not muted." }
         if !p.muteNews { return "Off. Bulletins will play." }
-        return p.detector.identOnly ? "Mutes when the station's news jingle plays." : "Silences bulletins until the music returns."
+        if p.detector.identOnly {
+            return p.idents.isEmpty ? "Set to jingle only, but no jingle is learned yet, so nothing is muted. Change this in Settings."
+                                    : "Mutes when the station's news jingle plays."
+        }
+        return "Silences bulletins until the music returns."
     }
     var footerText: String { "\(delayDescription) behind live" }
 

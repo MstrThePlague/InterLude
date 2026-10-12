@@ -95,6 +95,24 @@ Learning now also uses every bulletin that closes normally (music returned, sens
 
 Evidence so far (`ident-check` on the five likely bulletins in the recordings: 05:30, 06:00, 06:30, 08:00, 10:30 UTC): no stretch within 25 s of the starts recurs consistently. Best pairwise scores were 0.57 to 0.79 at unrelated offsets, with 6 s, 2.5 s and finer (64-band) features alike. So either 6 Music does not use one fixed jingle, or it falls outside that window, or these features cannot see it under the presenter. Learning is therefore safe (it will not promote noise) but may never trigger for 6 Music. The speech rule remains the main detector.
 
+## Event log review (12 October, export at 17:11 BST)
+
+Times are on the stream clock, about 30 s ahead of real time.
+
+| Stream time (UTC) | What happened |
+|---|---|
+| 10:27:08, 32 s | False start from the old ±4 minute slot window (fixed earlier). |
+| 10:30:25 | Real bulletin detected; "Not news" pressed 7 s in; the bulletin then played (old build; fixed earlier). |
+| 10:31:54, 24 s | "That was news" marked the newest analysed speech, not the bulletin (old build; fixed earlier). |
+| 12:32:06 to 12:34:17, 130 s | Bulletin found in the start-up analysis; it had already finished when playback began. Correct. |
+| 15:31:57 | The delayed 16:31 BST bulletin, detected 22 s in. "Not news" was pressed twice; each time the block reopened within seconds because the newsreader kept talking. |
+| 15:31:53 to 15:35:30, 217 s | After a restart the same bulletin was muted in full, closing when music returned. |
+
+Changes made from this:
+- "Not news" now holds while the same talk carries on. Speech only counts again after a clear break (a window with speech below 0.4: a jingle, music or a pause), so a bulletin after presenter chat is still caught but a rejected one is not re-muted.
+- The 6 Music profile had "Mute only when the news jingle plays" on with no jingle learned, which mutes nothing. The panel now says so, and the toggle can only be turned on once a jingle exists.
+- The profile's longest mute was 4 minutes; :30 bulletins of up to 260 s have been seen. The slider now starts at 5 minutes.
+
 ## Spec amendments made
 
 1. Wall-clock mapping of a segment uses `(index − 1) × 6.4` (the index is the end time). The stream clock runs about 29 s ahead of the system clock.
