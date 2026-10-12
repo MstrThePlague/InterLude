@@ -14,6 +14,8 @@ let package = Package(
         .executableTarget(name: "serve", dependencies: ["InterLudeCore"], path: "Tools/Serve"),
         .executableTarget(name: "cast-spike", dependencies: ["InterLudeCore"], path: "Tools/CastSpike"),
         .executableTarget(name: "ident-check", dependencies: ["InterLudeCore"], path: "Tools/IdentCheck"),
+        .executableTarget(name: "voice-changes", dependencies: ["InterLudeCore"], path: "Tools/VoiceChanges"),
+        .executableTarget(name: "presenter-check", dependencies: ["InterLudeCore"], path: "Tools/PresenterCheck"),
         .executableTarget(name: "rms-poll", path: "Tools/RmsPoll"),
         .testTarget(name: "InterLudeCoreTests", dependencies: ["InterLudeCore"], path: "Tests/InterLudeCoreTests"),
     ]
