@@ -263,7 +263,12 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
                SpokenPhrase(start: 39.6, end: 40.2, text: "6.30."),
                SpokenPhrase(start: 41.0, end: 43.1, text: " Get 6 music on your smart speaker.")]
     #expect(NewsPhrases.signOff(in: end) == 40.2)
-    #expect(NewsPhrases.signOff(in: start) == nil)
+    #expect(NewsPhrases.signOff(in: start, after: 14) == nil)      // the presenter's "after this news" comes before
+    let lastOfTheEvening = [SpokenPhrase(start: 184.6, end: 187.1, text: "overnight lows of between 12 and 15 Celsius."),
+                            SpokenPhrase(start: 187.1, end: 187.6, text: " That's "), SpokenPhrase(start: 187.6, end: 187.9, text: "6 music "),
+                            SpokenPhrase(start: 187.9, end: 188.3, text: "news for "), SpokenPhrase(start: 188.3, end: 188.9, text: "tonight."),
+                            SpokenPhrase(start: 192.4, end: 193.2, text: " This is 6 Music.")]
+    #expect(NewsPhrases.signOff(in: lastOfTheEvening, after: 45) == 188.3)
 }
 
 @Test func signOffEndsTheBlockAndPausesReopening() {
@@ -283,4 +288,16 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     #expect(d.blocks[0].end != nil && d.blocks[0].end! > hour + 2000)
     d.endBlock(at: hour + 1980, why: "newsreader signed off")
     #expect(d.blocks[0].end == hour + 1980)
+}
+
+@Test func releasedTalkStaysUnmutedButTheThemeStillOpensABlock() {
+    var d = NewsDetector()
+    for s in samples(from: hour + 60, speech: true, seconds: 50) { d.ingest(s) }          // chat at 1 minute past
+    let id = d.openBlock!.id
+    d.rejectOpenBlock(at: hour + 60, why: "no news theme or newsreader heard: presenter talk")
+    #expect(!d.isNews(segmentStart: hour + 70))
+    for s in samples(from: hour + 110, speech: true, seconds: 20) { d.ingest(s) }         // the chat goes on
+    #expect(d.openBlock == nil)
+    d.identMatch(at: hour + 130, score: 0.9)                                             // a late theme after all
+    #expect(d.openBlock != nil && d.openBlock!.id != id)
 }

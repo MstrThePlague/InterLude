@@ -14,7 +14,11 @@ public struct SpokenPhrase: Sendable, Equatable {
 /// show, for example "BBC News at 5.30. This is …" and "6 Music News. Your next update's at 6.30."
 public enum NewsPhrases {
     static let openings = ["bbc news at", "this is bbc radio", "6 music news with", "six music news with"]
-    static let signOffs = ["next update", "next news", "next bulletin", "updates at", "update is at", "next full news", "news more at", "more news at", "more at the top of the hour"]
+    /// Sign-offs seen: "6 Music News. Your next update's at 6.30", "That's 6 Music News, more at seven",
+    /// "That's 6 Music News for tonight". The station's news name is only said again at the end, and only phrases
+    /// 45 s or more into the bulletin are considered, so the presenter's "after the 6 Music News" never counts.
+    static let signOffs = ["next update", "next news", "next bulletin", "updates at", "update is at", "next full news",
+                           "more news at", "music news", "that's the news"]
 
     static func normalise(_ s: String) -> String {
         s.lowercased().replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: ",", with: " ")
@@ -53,11 +57,16 @@ public enum NewsPhrases {
                 if signOffs.contains(where: { both.contains($0) }) { hit = i + 1 }
             }
             guard let h = hit else { continue }
-            // Include a following time ("at 6.30") if it comes straight after.
+            // Carry on over the rest of the sign-off: more sign-off wording or a time ("… your next update's at 6.30").
             var end = phrases[h].end
-            for q in phrases.dropFirst(h + 1).prefix(3) where q.start - end < 1.5 {
-                let t = normalise(q.text)
-                if isTime(t) { end = q.end } else { break }
+            var k = h + 1
+            while k < phrases.count, phrases[k].start - end < 1.5 {
+                let t = normalise(phrases[k].text)
+                let pair = k + 1 < phrases.count ? t + " " + normalise(phrases[k + 1].text) : t
+                if isTime(t) || signOffs.contains(where: { t.contains($0) }) { end = phrases[k].end; k += 1 }
+                else if signOffs.contains(where: { pair.contains($0) }) { end = phrases[k + 1].end; k += 2 }
+                else if ["your", "the", "and"].contains(t) { k += 1 }          // a fragment before the rest of the sign-off
+                else { break }
             }
             return end
         }

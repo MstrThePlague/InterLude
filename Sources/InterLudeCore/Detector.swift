@@ -183,10 +183,10 @@ public struct NewsDetector: Sendable {
     /// ahead of the listener, so audio after `t` is judged again from scratch. Talk that simply carries on stays
     /// unmuted (the listener said it was not news), but after a clear break, such as a jingle or music, sustained
     /// speech can start a new block, so a bulletin that follows presenter chat is still caught.
-    public mutating func rejectOpenBlock(at t: Double) {
+    public mutating func rejectOpenBlock(at t: Double, why: String = "rejected by user") {
         guard let i = blocks.lastIndex(where: \.isOpen) else { return }
         blocks[i].falseStart = true
-        close(i, at: t, timedOut: false, why: "rejected by user")
+        close(i, at: t, timedOut: false, why: why)
         suppressUntilMusic = false
         freshAfter = t
         awaitingBreak = true
