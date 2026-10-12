@@ -69,6 +69,10 @@ Endpoint `https://rms.api.bbc.co.uk/v2/services/{serviceId}/segments/latest?limi
 - **Live end-to-end test.** At 08:30 UTC the session opened a block (speech for 22 s near the half-hour slot) and closed it 251 s later when music returned. The served stream captured with ffmpeg was silent for 256.0 s (40 whole segments), with normal audio on both sides. The log line is in `recordings/serve-events.jsonl`.
 - Leaked news audio and lost music at the edges are still to be measured against labels (checklist D).
 
+## First live false start (12 October, about 11:26 BST)
+
+A presenter talking over a song was muted on a Chromecast Audio; "Not news" unmuted it after a few seconds. Cause: the slot window was ±4 minutes, so 20 s of speech at 11:26 qualified for the 11:30 slot. The three likely bulletins in `6music-a` all began 26 to 46 s after the slot. The window is now from 1 minute before to 3 minutes after (`slotBeforeMinutes`, `slotAfterMinutes`). On `6music-a` this keeps the three likely bulletins and removes three short off-slot blocks. This is tuned on one recording and one false start, so it needs the labelled evaluation. Speech over a song can still be muted inside the window.
+
 ## Spec amendments made
 
 1. Wall-clock mapping of a segment uses `(index − 1) × 6.4` (the index is the end time). The stream clock runs about 29 s ahead of the system clock.
