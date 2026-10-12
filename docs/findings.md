@@ -85,6 +85,10 @@ Read through the new token-protected `/diagnostics` endpoint (the Export diagnos
 2. 10:30:25 UTC (stream clock): the real bulletin was detected, 22 s into its speech. It was muted. "Not news" was pressed 7 s into the mute, so the bulletin that followed was audible. Fixed as above.
 3. "That was news" marked a 24 s speech run at 10:31:54 to 10:32:18, which was the newest speech the detector had analysed (about a minute ahead of the listener), not the bulletin's start. The ident candidate saved from it was therefore the wrong audio. Fixed: it now uses the speech the listener has reached, prefers the latest run of at least 30 s, and saves the audio from 4 s before to 6 s after the run's start. A bad candidate is harmless on its own, since three candidates must agree before one becomes an ident.
 
+## Owner result (12 October, 16:31 BST)
+
+A 6 Music bulletin that started about a minute late (16:31) was caught and muted, with the narrower slot window (one minute before to three minutes after) and the reworked "Not news". This is the first owner-confirmed correct mute.
+
 ## Spec amendments made
 
 1. Wall-clock mapping of a segment uses `(index − 1) × 6.4` (the index is the end time). The stream clock runs about 29 s ahead of the system clock.
