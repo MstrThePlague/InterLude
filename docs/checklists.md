@@ -16,7 +16,7 @@ Do this at a time when a 6 Music bulletin is due (usually on the hour or half pa
 3. When music returns it should come back with no click or gap beyond the bulletin itself.
 4. Note: did any news words leak? How many seconds? Did the sound return too late (music missing at the start)?
 5. If a presenter link was muted wrongly, press "Not news" while muted. Sound should return within about 7 seconds.
-6. After a bulletin that played, press "That was news". Do this for three bulletins on one station and InterLude learns the station's ident.
+6. After a bulletin that played, press "News got through". Do this for three bulletins on one station and InterLude learns the station's ident.
 
 ## C. Cast (Phase 0.4 and Phase 4)
 Use one Chromecast Audio first, then a Cast group. Say the device name when you ask me to run it.

@@ -7,6 +7,9 @@ public struct Station: Codable, Sendable, Hashable, Identifiable {
     public var serviceId: String
     public var poolId: String
     public var kind: StationKind
+    /// Optional presentation: a one or two character badge and a colour as hex, for the panel.
+    public var short: String?
+    public var colour: String?
     public var id: String { serviceId }
     public init(name: String, serviceId: String, poolId: String, kind: StationKind) {
         self.name = name; self.serviceId = serviceId; self.poolId = poolId; self.kind = kind

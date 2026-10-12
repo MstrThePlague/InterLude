@@ -12,6 +12,7 @@ rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$SB/release/InterLude" "$APP/Contents/MacOS/InterLude"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Data/stations.json "$APP/Contents/Resources/stations.json"
+cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 ID=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ {print $2; exit}')
 ENT=Resources/InterLude.entitlements
 if [[ "${SANDBOX:-1}" == "0" ]]; then

@@ -1,15 +1,15 @@
 {
   "urlTemplate": "https://as-hls-uk-live.akamaized.net/pool_{poolId}/live/uk/{serviceId}/{serviceId}.isml/{serviceId}-audio%3d{bitrate}.norewind.m3u8",
   "stations": [
-    { "name": "Radio 1", "serviceId": "bbc_radio_one", "poolId": "01505109", "kind": "music" },
-    { "name": "Radio 1Xtra", "serviceId": "bbc_1xtra", "poolId": "92079267", "kind": "music" },
-    { "name": "Radio 2", "serviceId": "bbc_radio_two", "poolId": "74208725", "kind": "music" },
-    { "name": "Radio 3", "serviceId": "bbc_radio_three", "poolId": "23461179", "kind": "music" },
-    { "name": "Radio 4", "serviceId": "bbc_radio_fourfm", "poolId": "55057080", "kind": "speech" },
-    { "name": "Radio 4 Extra", "serviceId": "bbc_radio_four_extra", "poolId": "26173715", "kind": "speech" },
-    { "name": "Radio 5 Live", "serviceId": "bbc_radio_five_live", "poolId": "89021708", "kind": "speech" },
-    { "name": "Radio 6 Music", "serviceId": "bbc_6music", "poolId": "81827798", "kind": "music" },
-    { "name": "Asian Network", "serviceId": "bbc_asian_network", "poolId": "22108647", "kind": "music" },
-    { "name": "World Service", "serviceId": "bbc_world_service", "poolId": "87948813", "kind": "speech" }
+    {"name": "Radio 1", "serviceId": "bbc_radio_one", "poolId": "01505109", "kind": "music", "short": "1", "colour": "#E5007E"},
+    {"name": "Radio 1Xtra", "serviceId": "bbc_1xtra", "poolId": "92079267", "kind": "music", "short": "1X", "colour": "#D7001F"},
+    {"name": "Radio 2", "serviceId": "bbc_radio_two", "poolId": "74208725", "kind": "music", "short": "2", "colour": "#E66B21"},
+    {"name": "Radio 3", "serviceId": "bbc_radio_three", "poolId": "23461179", "kind": "music", "short": "3", "colour": "#9B1D74"},
+    {"name": "Radio 4", "serviceId": "bbc_radio_fourfm", "poolId": "55057080", "kind": "speech", "short": "4", "colour": "#1F6FB2"},
+    {"name": "Radio 4 Extra", "serviceId": "bbc_radio_four_extra", "poolId": "26173715", "kind": "speech", "short": "4X", "colour": "#2A8C8C"},
+    {"name": "Radio 5 Live", "serviceId": "bbc_radio_five_live", "poolId": "89021708", "kind": "speech", "short": "5", "colour": "#00A0D6"},
+    {"name": "Radio 6 Music", "serviceId": "bbc_6music", "poolId": "81827798", "kind": "music", "short": "6", "colour": "#1A9E5F"},
+    {"name": "Asian Network", "serviceId": "bbc_asian_network", "poolId": "22108647", "kind": "music", "short": "AN", "colour": "#C4228F"},
+    {"name": "World Service", "serviceId": "bbc_world_service", "poolId": "87948813", "kind": "speech", "short": "WS", "colour": "#B4161B"}
   ]
 }
