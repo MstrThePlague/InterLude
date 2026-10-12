@@ -21,7 +21,7 @@ struct SettingsView: View {
                         model.updateProfile(stationID) { $0.delaySeconds = v }
                     }
                     if station?.kind == .music {
-                        SliderRow(title: "Longest mute", value: p.detector.maxMuteSeconds / 60, range: 3...20, step: 1, unit: "min") { v in
+                        SliderRow(title: "Longest mute", value: p.detector.maxMuteSeconds / 60, range: 5...20, step: 1, unit: "min") { v in
                             model.updateProfile(stationID) { $0.detector.maxMuteSeconds = v * 60 }
                         }
                     }
@@ -41,7 +41,16 @@ struct SettingsView: View {
                 Section {
                     TextField("Bulletin minutes", text: $slots, prompt: Text("0, 30"))
                         .onSubmit { commitSlots() }
-                    Toggle("Mute only when the news jingle plays", isOn: Binding(get: { p.detector.identOnly }, set: { v in model.updateProfile(stationID) { $0.detector.identOnly = v } }))
+                    Toggle(isOn: Binding(get: { p.detector.identOnly }, set: { v in model.updateProfile(stationID) { $0.detector.identOnly = v } })) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Mute only when the news jingle plays")
+                            if p.idents.isEmpty {
+                                Text(p.detector.identOnly ? "No jingle learned yet, so nothing is being muted." : "Available once a jingle is learned.")
+                                    .font(.caption).foregroundStyle(p.detector.identOnly ? Color.orange : Color.secondary)
+                            }
+                        }
+                    }
+                    .disabled(p.idents.isEmpty && !p.detector.identOnly)
                     Toggle("Shadow mode: note bulletins, never mute", isOn: Binding(get: { p.shadowMode }, set: { v in model.updateProfile(stationID) { $0.shadowMode = v } }))
                     LabeledContent("News jingle") {
                         HStack {

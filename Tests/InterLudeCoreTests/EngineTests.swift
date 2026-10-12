@@ -52,18 +52,26 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     #expect(b.timedOut && b.end != nil)
 }
 
-@Test func notNewsClosesBlockAndRejudgesLaterAudio() {
-    var d = NewsDetector()
-    // Presenter chat from :26:00 is flagged only because the slot window is wide here.
+@Test func notNewsHoldsWhileTalkContinues() {
     var cfg = DetectorConfig(); cfg.slotBeforeMinutes = 5
-    d = NewsDetector(config: cfg)
+    var d = NewsDetector(config: cfg)
     for s in samples(from: hour + 1800 - 120, speech: true, seconds: 100) { d.ingest(s) }   // already analysed, ahead of the listener
     #expect(d.openBlock != nil)
     d.rejectOpenBlock(at: hour + 1800 - 60)          // the listener has only reached -60 s
     #expect(d.blocks[0].falseStart)
-    // The speech after -60 s carried on into the bulletin, so it counts again from that point.
-    #expect(d.openBlock != nil && d.openBlock!.start >= hour + 1800 - 60)
-    #expect(!d.isNews(segmentStart: hour + 1800 - 120))
+    #expect(d.openBlock == nil)                      // the same talk carrying on is not muted again
+    for s in samples(from: hour + 1800 - 20, speech: true, seconds: 40) { d.ingest(s) }
+    #expect(d.openBlock == nil)
+}
+
+@Test func notNewsStillCatchesABulletinAfterABreak() {
+    var cfg = DetectorConfig(); cfg.slotBeforeMinutes = 5
+    var d = NewsDetector(config: cfg)
+    for s in samples(from: hour + 1800 - 120, speech: true, seconds: 60) { d.ingest(s) }    // presenter chat
+    d.rejectOpenBlock(at: hour + 1800 - 90)
+    for s in samples(from: hour + 1800 - 60, speech: false, seconds: 6) { d.ingest(s) }     // jingle
+    for s in samples(from: hour + 1800 - 54, speech: true, seconds: 60) { d.ingest(s) }     // the news
+    #expect(d.openBlock != nil && d.openBlock!.start >= hour + 1800 - 54)
     #expect(d.isNews(segmentStart: hour + 1800 - 20))
 }
 
