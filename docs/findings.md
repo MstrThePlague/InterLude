@@ -113,6 +113,16 @@ Changes made from this:
 - The 6 Music profile had "Mute only when the news jingle plays" on with no jingle learned, which mutes nothing. The panel now says so, and the toggle can only be turned on once a jingle exists.
 - The profile's longest mute was 4 minutes; :30 bulletins of up to 260 s have been seen. The slider now starts at 5 minutes.
 
+## Mute edges (12 October, 17:30 and 18:31 BST bulletins)
+
+Owner report: no news heard in over an hour, but muted periods overlap wanted content. Both blocks were 225 s and 212 s. The classifier trace shows unbroken speech from the end of a record to the start of the next, so the block covers all talk around the bulletin: presenter handover, the bulletin, and any presenter talk before the next record. Speech and music scores cannot divide it.
+
+Two attempts to find the newsreader's part by voice:
+- `voice-changes`: change peaks inside the 17:30 block at about +62 s, +170 s and +195 s, consistent with a presenter link before and after, but a bulletin's own clips produce peaks too.
+- `presenter-check`: a presenter voice model from 21 minutes of links away from the slots. The whole block, newsreader included, scores as close to the presenter as the links themselves (0.2 to 0.5; music after is 0.8). Cepstral averages do not separate the two voices.
+
+Next step needs ground truth: where the bulletin actually starts and ends within the block.
+
 ## Spec amendments made
 
 1. Wall-clock mapping of a segment uses `(index − 1) × 6.4` (the index is the end time). The stream clock runs about 29 s ahead of the system clock.
