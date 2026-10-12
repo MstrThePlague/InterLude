@@ -70,7 +70,7 @@ public struct NewsDetector: Sendable {
     private var suppressUntilMusic = false
     private var history: [ScoreSample] = []
     private var freshAfter: Double = 0     // speech before this time no longer counts towards a run
-    public private(set) var lastSpeechRun: (start: Double, end: Double)?
+    public private(set) var speechRuns: [(start: Double, end: Double)] = []
     public var trackPlaying: Bool = false      // evidence from the metadata poller
 
     public init(config: DetectorConfig = DetectorConfig()) { self.config = config }
@@ -102,7 +102,9 @@ public struct NewsDetector: Sendable {
         if isSpeech {
             if runStart == nil || s.time - lastSpeech > config.gapSeconds { runStart = s.time }
             lastSpeech = s.time + s.duration
-            lastSpeechRun = (runStart ?? s.time, lastSpeech)
+            let start = runStart ?? s.time
+            if let last = speechRuns.last, abs(last.start - start) < 0.001 { speechRuns[speechRuns.count - 1].end = lastSpeech }
+            else { speechRuns.append((start, lastSpeech)); if speechRuns.count > 30 { speechRuns.removeFirst() } }
         } else if let r = runStart, s.time - lastSpeech > config.gapSeconds { _ = r; runStart = nil }
 
         if let i = blocks.lastIndex(where: \.isOpen) {
@@ -154,10 +156,13 @@ public struct NewsDetector: Sendable {
         if let i = blocks.firstIndex(where: { $0.id == id }) { blocks[i].falseStart = true }
     }
 
-    /// "That was news": the latest speech run becomes a block.
+    /// "That was news": the listener has just heard a bulletin that was not muted. The detector is about a delay ahead
+    /// of the listener, so look at speech the listener has reached (`listenerTime`), not the newest speech analysed.
+    /// Prefers the latest run of at least 30 s, since a bulletin is longer than presenter chat.
     @discardableResult
-    public mutating func markLastSpeechAsNews() -> NewsBlock? {
-        guard let r = lastSpeechRun else { return nil }
+    public mutating func markNewsHeard(listenerTime: Double) -> NewsBlock? {
+        let heard = speechRuns.filter { $0.start <= listenerTime }
+        guard let r = heard.last(where: { $0.end - $0.start >= 30 }) ?? heard.last else { return nil }
         let b = NewsBlock(start: r.start, end: r.end, evidence: "marked by user")
         blocks.append(b)
         return b
