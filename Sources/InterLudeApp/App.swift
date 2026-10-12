@@ -20,7 +20,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showWindow() {
         if window == nil {
-            let w = NSWindow(contentViewController: NSHostingController(rootView: PanelView(model: AppModel.shared)))
+            let demoSettings = CommandLine.arguments.contains("--demo=settings")
+            let w = NSWindow(contentViewController: demoSettings
+                             ? NSHostingController(rootView: SettingsView(model: AppModel.shared))
+                             : NSHostingController(rootView: PanelView(model: AppModel.shared)))
             w.title = "InterLude"
             w.styleMask = [.titled, .closable, .miniaturizable]
             w.isReleasedWhenClosed = false

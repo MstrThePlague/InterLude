@@ -13,13 +13,22 @@ public struct SessionSettings: Sendable {
     }
 }
 
+public struct NowPlaying: Sendable, Equatable {
+    public var artist: String
+    public var title: String?
+    public var imageURL: URL?
+    public init(artist: String, title: String?, imageURL: URL?) { self.artist = artist; self.title = title; self.imageURL = imageURL }
+}
+
 public struct SessionStatus: Sendable {
     public enum State: Sendable, Equatable { case starting, playing, failed(String) }
     public var state: State = .starting
     public var delaySeconds = 0.0
     public var muteNews = true
     public var muted = false
-    public var nowPlaying: String?
+    public var nowPlaying: NowPlaying?
+    /// Seconds the listener has been in the current muted bulletin, when muted.
+    public var muteElapsed: Double?
     public var recentBlocks: [NewsBlock] = []
     public var notices: [String] = []
     /// The playout clock fell badly behind (for example after the Mac slept). The caller should start a new session.
@@ -52,7 +61,7 @@ public actor PlayerSession {
     private var featureRing: [(time: Double, frame: [Float])] = []
     private var lastMono: [Float] = []
 
-    private var tracks: [(observedAt: Date, text: String)] = []
+    private var tracks: [(observedAt: Date, track: NowPlaying)] = []
     private var notices: [String] = []
     private var state: SessionStatus.State = .starting
     private let eventLog: URL?
@@ -168,8 +177,9 @@ public actor PlayerSession {
                    let cur = arr.first(where: { ($0["offset"] as? [String: Any])?["now_playing"] as? Bool == true }),
                    let t = cur["titles"] as? [String: Any], let artist = t["primary"] as? String {
                     let title = t["secondary"] as? String
-                    let text = title.map { "\(artist) – \($0)" } ?? artist
-                    if tracks.last?.text != text { tracks.append((Date(), text)); if tracks.count > 50 { tracks.removeFirst() } }
+                    let img = (cur["image_url"] as? String).flatMap { URL(string: $0.replacingOccurrences(of: "{recipe}", with: "480x480")) }
+                    let np = NowPlaying(artist: artist, title: title, imageURL: img)
+                    if tracks.last?.track != np { tracks.append((Date(), np)); if tracks.count > 50 { tracks.removeFirst() } }
                 }
                 backoff = 30
             } catch { backoff = min(backoff * 2, 300) }
@@ -306,9 +316,13 @@ public actor PlayerSession {
             let playing = p.next - 1 - Playout.headStart
             s.muted = p.window.first(where: { $0.index == playing })?.source == .silence
             s.delaySeconds = Double(liveEdge - playing) * segmentDuration
+            if s.muted {
+                let heard = HLS.startTime(ofIndex: playing).timeIntervalSince1970
+                if let b = detector.blocks.last(where: { !$0.falseStart && $0.start <= heard && ($0.end ?? .infinity) > heard }) { s.muteElapsed = heard - b.start }
+            }
         }
         let at = Date().addingTimeInterval(-settings.delaySeconds)
-        s.nowPlaying = tracks.last(where: { $0.observedAt <= at })?.text
+        s.nowPlaying = tracks.last(where: { $0.observedAt <= at })?.track
         s.recentBlocks = Array(detector.blocks.filter { !$0.isOpen || $0.start > 0 }.suffix(8).reversed())
         s.notices = notices
         return s

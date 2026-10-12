@@ -11,46 +11,63 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("Station") {
+            Section {
                 Picker("Station", selection: $stationID) {
                     ForEach(model.orderedStations) { Text($0.name).tag($0.serviceId) }
                 }
                 if station != nil {
                     let p = model.profile(stationID)
-                    LabeledContent("Delay behind live") {
-                        HStack {
-                            Slider(value: Binding(get: { p.delaySeconds }, set: { v in model.updateProfile(stationID) { $0.delaySeconds = v.rounded() } }), in: 30...600, step: 5)
-                            Text("\(Int(p.delaySeconds)) s").monospacedDigit().frame(width: 52, alignment: .trailing)
+                    SliderRow(title: "Delay behind live", value: p.delaySeconds, range: 30...600, step: 5, unit: "s") { v in
+                        model.updateProfile(stationID) { $0.delaySeconds = v }
+                    }
+                    if station?.kind == .music {
+                        SliderRow(title: "Longest mute", value: p.detector.maxMuteSeconds / 60, range: 3...20, step: 1, unit: "min") { v in
+                            model.updateProfile(stationID) { $0.detector.maxMuteSeconds = v * 60 }
                         }
                     }
-                    LabeledContent("Longest mute") {
-                        HStack {
-                            Slider(value: Binding(get: { p.detector.maxMuteSeconds / 60 }, set: { v in model.updateProfile(stationID) { $0.detector.maxMuteSeconds = v.rounded() * 60 } }), in: 3...20, step: 1)
-                            Text("\(Int(p.detector.maxMuteSeconds / 60)) min").monospacedDigit().frame(width: 52, alignment: .trailing)
-                        }
-                    }
-                    Toggle("Shadow mode (log bulletins, never mute)", isOn: Binding(get: { p.shadowMode }, set: { v in model.updateProfile(stationID) { $0.shadowMode = v } }))
-                    Toggle("Mute only on the news ident", isOn: Binding(get: { p.detector.identOnly }, set: { v in model.updateProfile(stationID) { $0.detector.identOnly = v } }))
-                    TextField("Bulletin slots (minutes past the hour)", text: $slots)
+                }
+            } header: { Text("Playback") } footer: {
+                Text("A longer delay gives InterLude more time to recognise a bulletin before you hear it. Changes apply the next time you press Play.")
+            }
+
+            if let st = station, st.kind == .music {
+                let p = model.profile(stationID)
+                Section {
+                    TextField("Bulletin minutes", text: $slots, prompt: Text("0, 30"))
                         .onSubmit { commitSlots() }
-                    Text("Changes to delay and slots apply the next time you press Play.").font(.caption).foregroundStyle(.secondary)
+                    Toggle("Mute only when the news ident is heard", isOn: Binding(get: { p.detector.identOnly }, set: { v in model.updateProfile(stationID) { $0.detector.identOnly = v } }))
+                    Toggle("Shadow mode: log bulletins, never mute", isOn: Binding(get: { p.shadowMode }, set: { v in model.updateProfile(stationID) { $0.shadowMode = v } }))
+                    LabeledContent("News ident") {
+                        HStack {
+                            Text(p.idents.isEmpty ? (p.candidates.isEmpty ? "Not learned" : "\(p.candidates.count) of 3 candidates") : "Learned").foregroundStyle(.secondary)
+                            if !p.idents.isEmpty || !p.candidates.isEmpty {
+                                Button("Forget") { model.updateProfile(stationID) { $0.idents = []; $0.candidates = [] } }.controlSize(.small)
+                            }
+                        }
+                    }
+                } header: { Text("News detection for \(st.name)") } footer: {
+                    Text("Bulletin minutes are the minutes past the hour when bulletins usually start, for example 0, 30. Speech starting within a minute before to three minutes after one is treated as news. Press “That was news” after a bulletin that got through, three times, and InterLude learns the station's ident.")
                 }
             }
-            Section("General") {
+
+            Section {
                 Picker("Bitrate", selection: $model.bitrate) { Text("128 kbps").tag(128_000); Text("320 kbps").tag(320_000) }
                 TextField("Server port", value: $model.port, format: .number.grouping(.never))
-                Toggle("Keep Mac awake while playing", isOn: $model.keepAwake)
-                Text("A MacBook with its lid closed and no external display will still sleep and stop playback.").font(.caption).foregroundStyle(.secondary)
+                Toggle("Keep this Mac awake while playing", isOn: $model.keepAwake)
                 Toggle("Start at login", isOn: Binding(get: { model.startAtLogin }, set: { model.setStartAtLogin($0) }))
+            } header: { Text("General") } footer: {
+                Text("A MacBook with its lid closed and no external display will still sleep and stop playback. The server port applies after you quit and reopen InterLude.")
             }
-            Section("Diagnostics") {
+
+            Section {
                 Button("Export diagnostics…") { export() }
-                Text("Zips the event log, station list and profiles. Nothing is sent anywhere.").font(.caption).foregroundStyle(.secondary)
+            } header: { Text("Diagnostics") } footer: {
+                Text("Saves a zip of the event log, station list and profiles. Nothing is sent anywhere.")
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460)
-        .padding(.bottom, 8)
+        .frame(width: 480)
+        .fixedSize(horizontal: false, vertical: true)
         .onAppear { stationID = model.selectedStationID; loadSlots() }
         .onChange(of: stationID) { loadSlots() }
     }
@@ -73,6 +90,24 @@ struct SettingsView: View {
         NSFileCoordinator().coordinate(readingItemAt: folder, options: .forUploading, error: &err) { zip in
             try? FileManager.default.removeItem(at: dest)
             try? FileManager.default.copyItem(at: zip, to: dest)
+        }
+    }
+}
+
+private struct SliderRow: View {
+    let title: String
+    let value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let unit: String
+    let onChange: (Double) -> Void
+
+    var body: some View {
+        LabeledContent(title) {
+            HStack(spacing: 10) {
+                Slider(value: Binding(get: { value }, set: { onChange($0.rounded()) }), in: range, step: step).frame(width: 180)
+                Text("\(Int(value)) \(unit)").monospacedDigit().foregroundStyle(.secondary).frame(width: 56, alignment: .trailing)
+            }
         }
     }
 }

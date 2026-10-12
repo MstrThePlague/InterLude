@@ -58,6 +58,7 @@ public struct NewsBlock: Sendable, Codable, Equatable, Identifiable {
     public var falseStart = false
     public var evidence = ""
     public var isOpen: Bool { end == nil }
+    public init(start: Double, end: Double? = nil, evidence: String = "") { self.start = start; self.end = end; self.evidence = evidence }
 }
 
 /// Deterministic bulletin detector. Starts are decided quickly; ends wait for music to return.
