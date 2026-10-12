@@ -27,7 +27,7 @@ func run() async throws {
         print("  opening:  " + (open.map { "\(f.string(from: Date(timeIntervalSince1970: $0)))  (\(String(format: "%+.0f", $0 - bs)) s from block start)" } ?? "not found"))
         print("  sign-off: " + (sign.map { "\(f.string(from: Date(timeIntervalSince1970: $0)))  (\(String(format: "%+.0f", $0 - be)) s from block end)" } ?? "not found"))
         if sign == nil || open == nil {
-            for ph in phrases where clipStart + ph.start > be - 40 || clipStart + ph.start < bs + 30 { print(String(format: "    %+6.1f  ", clipStart + ph.start - bs) + ph.text) }
+            for ph in phrases where clipStart + ph.start > be - Double(ProcessInfo.processInfo.environment["TAIL"] ?? "40")! || clipStart + ph.start < bs + 30 { print(String(format: "    %+6.1f  ", clipStart + ph.start - bs) + ph.text) }
         }
     }
 }

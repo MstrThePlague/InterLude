@@ -74,6 +74,7 @@ public actor PlayerSession {
     private var blockAudioFor: UUID?
     private var transcribedThrough: Double = 0
     private var signedOff: Set<UUID> = []
+    private var listenedTo: Set<UUID> = []
     private var lastMono: [Float] = []
 
     private var tracks: [(observedAt: Date, track: NowPlaying)] = []
@@ -297,8 +298,17 @@ public actor PlayerSession {
         let samples = Array(blockAudio.dropFirst(Int((from - blockAudioStart) * rate)))
         transcribedThrough = end
         guard let phrases = try? await stt.transcribe(samples: samples, sampleRate: rate), !phrases.isEmpty else { return }
+        if !listenedTo.contains(b.id) { listenedTo.insert(b.id); write(["event": "transcribing", "block": b.id.uuidString, "phrases": phrases.count]) }
         if !b.anchoredOnIdent, let o = NewsPhrases.opening(in: phrases), from + o < b.start + 90 {
             detector.anchorStart(at: from + o - 3, why: "newsreader's opening heard")
+        }
+        // Speech alone opened this block. Once the station's theme is known, a bulletin shows it (or the newsreader's
+        // opening) within about 41 s of the talk starting; by 45 s without either, this is the presenter talking.
+        // If the theme turns up later after all, it opens a new block.
+        if let cur = detector.blocks.first(where: { $0.id == b.id }), cur.isOpen, !cur.anchoredOnIdent,
+           !settings.profile.idents.isEmpty, end >= cur.start + 45 {
+            detector.rejectOpenBlock(at: cur.start, why: "no news theme or newsreader heard: presenter talk")
+            write(["event": "released", "block": b.id.uuidString])
         }
         if let e = NewsPhrases.signOff(in: phrases, after: b.start + 45 - from) {
             detector.endBlock(at: from + e + 0.3, why: "newsreader signed off")

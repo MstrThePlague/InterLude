@@ -138,6 +138,26 @@ Live check, 19:30 BST: the theme matched at 0.98 and the block's start moved 6 s
 
 The end is unchanged: a voice model of the newsreader does not separate them from the presenter either, so muting still runs until music returns (about 20 s of presenter talk in the labelled case).
 
+## Ending at the newsreader's sign-off (12 October, evening)
+
+On-device transcription (SpeechAnalyzer and SpeechTranscriber, macOS 26+, British English model already installed) of seven recorded bulletins across four presenters and two newsreaders, about 4 s per bulletin:
+
+| Bulletin (UTC) | Sign-off heard | Presenter talk no longer muted |
+|---|---|---|
+| 05:30 | "That's 6 Music News, more at seven" | 14 s |
+| 06:00 | "…next update…" | 14 s |
+| 06:30 | "…next updates at eight" | 39 s |
+| 08:00 | "…next update…" | 20 s |
+| 16:30 | "Now, 6 Music News. Your next update's at 6.30" | 14 s (owner label: news ended 20 s before the mute did; the sign-off time matches the owner's to within a second on the clip) |
+| 17:31 | "…next update…" | 8 s |
+| 19:30 | "That's 6 Music News for tonight" | 88 s |
+
+Rule: any "Music News" or "next update" wording 45 s or more into the block is the sign-off; the end runs on over the rest of the sign-off and any time that follows. After a sign-off, talk does not open a new block for 4 minutes (the theme still can). The newsreader's opening ("This is BBC Radio 6 Music… BBC News at…") was found in 6 of 7 and anchors the start when the theme is unknown. Transcripts also showed the learned theme stretch is the sung "Six Music", so the lead before a theme match is now 2 s, not 8.
+
+20:01 BST: a 57 s mute with no theme was two presenters chatting (transcript). Once a station's theme is known, a block opened by speech alone is released if neither the theme nor the newsreader's opening is heard within 45 s (latest theme seen: 41 s after the talk began). A later theme still opens a new block.
+
+Replay test (a local stand-in for the BBC serving 20:24 to 20:37 in real time to the headless session): the block's start moved to the theme, the sign-off was found at 19:33:38, and the captured output was silent for 192 s (30 segments). The same bulletin was muted for 275 s live, before this change.
+
 ## Spec amendments made
 
 1. Wall-clock mapping of a segment uses `(index − 1) × 6.4` (the index is the end time). The stream clock runs about 29 s ahead of the system clock.
