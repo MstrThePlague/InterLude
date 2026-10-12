@@ -64,21 +64,40 @@ public enum IdentFeatures {
 }
 
 public enum IdentMatcher {
+    /// Frame-by-frame dot products of `a` against `b` (a.count x b.count, row major), computed with one matrix multiply.
+    static func similarity(_ a: [[Float]], _ b: [[Float]]) -> [Float] {
+        let d = a.first?.count ?? 0
+        let fa = a.flatMap { $0 }, fb = b.flatMap { $0 }
+        var bt = [Float](repeating: 0, count: fb.count)
+        vDSP_mtrans(fb, 1, &bt, 1, vDSP_Length(d), vDSP_Length(b.count))
+        var out = [Float](repeating: 0, count: a.count * b.count)
+        vDSP_mmul(fa, 1, bt, 1, &out, 1, vDSP_Length(a.count), vDSP_Length(b.count), vDSP_Length(d))
+        return out
+    }
+
+    /// Prefix sums of each frame's squared length, for the norm of any run of frames.
+    static func energyPrefix(_ x: [[Float]]) -> [Float] {
+        var p = [Float](repeating: 0, count: x.count + 1)
+        for (i, f) in x.enumerated() { var e: Float = 0; vDSP_svesq(f, 1, &e, vDSP_Length(f.count)); p[i + 1] = p[i] + e }
+        return p
+    }
+
     /// Normalised correlation of `reference` against every offset of `stream`. Returns (frame offset, score) of the best match.
     public static func bestMatch(reference: [[Float]], in stream: [[Float]]) -> (offset: Int, score: Float)? {
-        guard !reference.isEmpty, stream.count >= reference.count, let w = reference.first?.count else { return nil }
-        let flatRef = reference.flatMap { $0 }
-        var refNorm: Float = 0; vDSP_svesq(flatRef, 1, &refNorm, vDSP_Length(flatRef.count)); refNorm = sqrt(refNorm)
+        let l = reference.count, n = stream.count
+        guard l > 0, n >= l, reference.first?.count == stream.first?.count else { return nil }
+        let g = similarity(stream, reference)                 // n x l
+        let ep = energyPrefix(stream), er = energyPrefix(reference)
+        let refNorm = sqrt(er[l])
         guard refNorm > 0 else { return nil }
         var best: (Int, Float) = (0, -1)
-        let flat = stream.flatMap { $0 }
-        for off in 0...(stream.count - reference.count) {
-            let seg = Array(flat[(off * w)..<((off + reference.count) * w)])
-            var dot: Float = 0; vDSP_dotpr(seg, 1, flatRef, 1, &dot, vDSP_Length(seg.count))
-            var n: Float = 0; vDSP_svesq(seg, 1, &n, vDSP_Length(seg.count)); n = sqrt(n)
-            guard n > 0 else { continue }
-            let score = dot / (n * refNorm)
-            if score > best.1 { best = (off, score) }
+        for o in 0...(n - l) {
+            var dot: Float = 0
+            for j in 0..<l { dot += g[(o + j) * l + j] }
+            let norm = sqrt(ep[o + l] - ep[o])
+            guard norm > 0 else { continue }
+            let score = dot / (norm * refNorm)
+            if score > best.1 { best = (o, score) }
         }
         return best
     }
@@ -90,31 +109,52 @@ public enum IdentMatcher {
     }
 
     /// Length of a learned jingle reference.
-    public static let referenceSeconds = 3.0
-    /// Short references match unrelated audio more easily; 0.79 was the best chance score seen between
-    /// unrelated 6 Music bulletin starts, so a match must beat this.
-    public static let defaultThreshold: Float = 0.85
+    public static let referenceSeconds = 4.0
+    /// The 6 Music news theme scored 0.81 to 0.89 at seven bulletins across four shows; nothing else in five
+    /// hours of audio scored above 0.75.
+    public static let defaultThreshold: Float = 0.78
+    /// The reference sits a few seconds into the theme (about 6 s for 6 Music), so muting starts this long before the match.
+    public static let leadSeconds = 8.0
 
     /// Looks for a short stretch that recurs in at least three candidate windows, wherever it falls in each.
     /// Returns the average of the aligned stretches, or nil when no stretch is shared by three.
+    /// Uses one similarity matrix per pair of windows, so any stretch can be compared at any offset cheaply.
     public static func promote(candidates: [[[Float]]], threshold: Float = defaultThreshold) -> IdentReference? {
-        guard candidates.count >= 3 else { return nil }
         let w = Int(referenceSeconds / IdentFeatures.frameSeconds)
+        let usable = candidates.filter { $0.count >= w }
+        guard usable.count >= 3 else { return nil }
+        let prefixes = usable.map(energyPrefix)
         var best: (count: Int, score: Float, ref: [[Float]])?
-        for (bi, base) in candidates.enumerated() where base.count >= w {
-            var k = 0
-            while k + w <= base.count {
-                let piece = Array(base[k..<(k + w)])
-                var aligned = [piece], total: Float = 0
-                for (ci, c) in candidates.enumerated() where ci != bi {
-                    if let m = bestMatch(reference: piece, in: c), m.score >= threshold, m.offset + w <= c.count {
-                        aligned.append(Array(c[m.offset..<(m.offset + w)])); total += m.score
+        for (bi, base) in usable.enumerated() {
+            let positions = Array(stride(from: 0, through: base.count - w, by: 4))
+            // For each position in the base: best (score, offset) in each other window.
+            var hits = [[(score: Float, window: Int, offset: Int)]](repeating: [], count: positions.count)
+            for (ci, c) in usable.enumerated() where ci != bi {
+                let m = similarity(base, c)                        // base.count x c.count
+                let nc = c.count
+                for (pi, k) in positions.enumerated() {
+                    let nb = sqrt(prefixes[bi][k + w] - prefixes[bi][k])
+                    guard nb > 0 else { continue }
+                    var top: (Float, Int) = (-1, 0)
+                    for o in 0...(nc - w) {
+                        var dot: Float = 0
+                        var r = k * nc + o
+                        for _ in 0..<w { dot += m[r]; r += nc + 1 }
+                        let no = sqrt(prefixes[ci][o + w] - prefixes[ci][o])
+                        guard no > 0 else { continue }
+                        let sc = dot / (nb * no)
+                        if sc > top.0 { top = (sc, o) }
                     }
+                    if top.0 >= threshold { hits[pi].append((top.0, ci, top.1)) }
                 }
-                if aligned.count >= 3, best == nil || aligned.count > best!.count || (aligned.count == best!.count && total > best!.score) {
+            }
+            for (pi, k) in positions.enumerated() where hits[pi].count >= 2 {
+                let total = hits[pi].reduce(0) { $0 + $1.score }
+                if best == nil || hits[pi].count + 1 > best!.count || (hits[pi].count + 1 == best!.count && total > best!.score) {
+                    var aligned = [Array(base[k..<(k + w)])]
+                    for h in hits[pi] { aligned.append(Array(usable[h.window][h.offset..<(h.offset + w)])) }
                     best = (aligned.count, total, average(aligned))
                 }
-                k += 4
             }
         }
         return best.map { IdentReference(features: $0.ref, threshold: threshold) }

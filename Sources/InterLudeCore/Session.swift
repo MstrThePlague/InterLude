@@ -35,6 +35,7 @@ public struct SessionStatus: Sendable {
     public var notices: [String] = []
     /// The playout clock fell badly behind (for example after the Mac slept). The caller should start a new session.
     public var needsRestart = false
+    public var learningJingle = false
     public init() {}
 }
 
@@ -50,6 +51,7 @@ public actor PlayerSession {
     private var analysedThrough = 0
     private var lastAnalysisSegment: AVAudioPCMBuffer?
     private var base: URL?
+    private var segmentPrefix: String?
     private var tasks: [Task<Void, Never>] = []
     private var running = false
     private var needsRestart = false
@@ -81,7 +83,7 @@ public actor PlayerSession {
         let client = PlaylistClient()
         let (pl, base) = try await client.fetch(catalogue: catalogue, station: settings.station, bitrate: settings.bitrate)
         guard let name = pl.names.first, let (prefix, _) = HLS.splitName(name) else { throw FetchError.unhealthy("Unreadable playlist") }
-        self.base = base
+        self.base = base; self.segmentPrefix = prefix
         liveEdge = pl.lastSequence
         let dir = cacheRoot.appendingPathComponent(settings.station.serviceId, isDirectory: true)
         let store = SegmentStore(directory: dir, base: base, prefix: prefix)
@@ -104,6 +106,7 @@ public actor PlayerSession {
         tasks.append(Task { await self.pollLoop() })
         tasks.append(Task { await self.emitLoop() })
         tasks.append(Task { await self.metadataLoop() })
+        if settings.muteNews && settings.profile.idents.isEmpty { tasks.append(Task(priority: .utility) { await self.learnJingleFromRewind() }) }
     }
 
     public func stop() {
@@ -214,6 +217,7 @@ public actor PlayerSession {
                 lastAnalysisSegment = buffers.last
                 updateIdents(chunkStart: HLS.startTime(ofIndex: firstNew).timeIntervalSince1970, buffers: buffers)
                 logBlocks()
+                rejudgePending()
             }
             analysedThrough = chunkEnd
             i = chunkEnd + 1
@@ -235,9 +239,20 @@ public actor PlayerSession {
         if featureRing.count > 20_000 { featureRing.removeFirst(featureRing.count - 20_000) }
         for ref in settings.profile.idents {
             if let m = IdentMatcher.bestMatch(reference: ref.features, in: frames), m.score >= ref.threshold {
-                detector.identMatch(at: t0 + Double(m.offset) * IdentFeatures.frameSeconds, score: m.score)
+                detector.identMatch(at: t0 + Double(m.offset) * IdentFeatures.frameSeconds - IdentMatcher.leadSeconds, score: m.score)
             }
         }
+    }
+
+    /// Segments already listed but not yet fetched follow the latest view of the timeline
+    /// (for example when the news theme moves a block's start).
+    private func rejudgePending() {
+        guard var p = playout else { return }
+        let det = detector, mute = settings.muteNews && !settings.profile.shadowMode
+        let before = p.window
+        p.refreshPending(from: lastServed + 1) { mute && det.isNews(segmentStart: HLS.startTime(ofIndex: $0).timeIntervalSince1970) }
+        if p.window != before { silenceCache = silenceCache.filter { $0.key <= lastServed } }
+        playout = p
     }
 
     private func remember(index: Int, info: TSSegmentInfo) {
@@ -301,28 +316,83 @@ public actor PlayerSession {
     }
 
     /// Saves the audio around a bulletin's start as a jingle candidate, and the bulletin's time and length.
-    /// When a short stretch recurs in three candidates it becomes the station's jingle reference.
+    /// The news theme has been seen 11 to 41 s after the speech starts, so the window runs from 10 s before to 60 s after.
     private func learn(from b: NewsBlock) {
-        let slice = featureRing.filter { $0.time >= b.start - 20 && $0.time < b.start + 10 }.map(\.frame)
-        if slice.count > 400 {
+        if let e = b.end { settings.profile.learn(start: b.start, end: e) }
+        let slice = featureRing.filter { $0.time >= b.start - 10 && $0.time < b.start + 60 }.map(\.frame)
+        if slice.count > 1000 {
             settings.profile.candidates.append(slice)
             settings.profile.candidateSources.append(b.id.uuidString)
             while settings.profile.candidates.count > 8 { settings.profile.candidates.removeFirst(); settings.profile.candidateSources.removeFirst() }
             promoteIdent()
         }
-        if let e = b.end { settings.profile.learn(start: b.start, end: e) }
         saveLearning()
         write(["event": "candidate", "block": b.id.uuidString, "candidates": settings.profile.candidates.count, "identLearned": !settings.profile.idents.isEmpty])
     }
 
+    /// Runs promotion off the actor (it takes a few seconds), then adopts the result.
     private func promoteIdent() {
-        let had = !settings.profile.idents.isEmpty
-        if let ref = IdentMatcher.promote(candidates: settings.profile.candidates) {
-            settings.profile.idents = [ref]
-            if !had { notices.append("Learned the news jingle for \(settings.station.name)") }
-        } else {
-            settings.profile.idents = []
+        let cands = settings.profile.candidates
+        Task.detached(priority: .utility) { [weak self] in
+            let ref = IdentMatcher.promote(candidates: cands)
+            await self?.adoptIdent(ref, source: "recent bulletins", keepExisting: true)
         }
+    }
+
+    private func adoptIdent(_ ref: IdentReference?, source: String, keepExisting: Bool) {
+        let had = !settings.profile.idents.isEmpty
+        if let ref { settings.profile.idents = [ref] } else if !keepExisting { settings.profile.idents = [] }
+        if !had, ref != nil {
+            notices.append("Learned the news jingle for \(settings.station.name) from \(source)")
+            write(["event": "identLearned", "source": source])
+        }
+        saveLearning()
+    }
+
+    // MARK: Learning the jingle from the BBC's rewind window
+
+    public private(set) var learningJingle = false
+
+    /// Looks at the 150 s after each of the last eight bulletin slots, from the BBC's six hour window,
+    /// and learns the news theme if at least three share it. About 50 MB of downloads, once per station.
+    private func learnJingleFromRewind() async {
+        guard settings.station.kind == .music, settings.profile.idents.isEmpty, let base, let prefix = segmentPrefix else { return }
+        learningJingle = true
+        defer { learningJingle = false }
+        let live = HLS.startTime(ofIndex: liveEdge).timeIntervalSince1970
+        var slots: [Double] = []
+        var hour = (live / 3600).rounded(.down) * 3600
+        while slots.count < 8 && hour > live - 5.5 * 3600 {
+            for m in settings.profile.detector.slotMinutes.sorted(by: >) {
+                let t = hour + Double(m) * 60
+                if t + 160 < live && t > live - 5.5 * 3600 && slots.count < 8 { slots.append(t) }
+            }
+            hour -= 3600
+        }
+        guard slots.count >= 3 else { return }
+        let dir = cacheRoot.appendingPathComponent("rewind-\(settings.station.serviceId)", isDirectory: true)
+        let store = SegmentStore(directory: dir, base: base, prefix: prefix)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var windows: [[[Float]]] = []
+        for t in slots {
+            if Task.isCancelled || !running { return }
+            let first = Int(floor(t / segmentDuration)) + 1, last = Int(floor((t + 150) / segmentDuration)) + 1
+            var mono: [Float] = []
+            for i in first...last {
+                guard let d = try? await store.segment(i) else { mono += [Float](repeating: 0, count: 307_200); continue }
+                let decoded: [Float]? = await Task.detached(priority: .utility) {
+                    guard let info = TS.parse(d), let b = try? Decode.pcm(frames: info.frames) else { return nil }
+                    return IdentFeatures.mono(b)
+                }.value
+                mono += decoded ?? [Float](repeating: 0, count: 307_200)
+            }
+            let skip = Int(max(0, t - HLS.startTime(ofIndex: first).timeIntervalSince1970) * 48000)
+            let clip = Array(mono.dropFirst(skip))
+            windows.append(await Task.detached(priority: .utility) { IdentFeatures.extract(clip) }.value)
+        }
+        let ref = await Task.detached(priority: .utility) { IdentMatcher.promote(candidates: windows) }.value
+        adoptIdent(ref, source: "the last few hours", keepExisting: true)
+        write(["event": "rewindLearning", "slots": slots.count, "learned": ref != nil])
     }
 
     /// Save only what was learned, on top of the file, so settings changed meanwhile in the app are kept.
@@ -350,7 +420,7 @@ public actor PlayerSession {
 
     public func status() -> SessionStatus {
         var s = SessionStatus()
-        s.state = state; s.delaySeconds = settings.delaySeconds; s.muteNews = settings.muteNews; s.needsRestart = needsRestart
+        s.state = state; s.delaySeconds = settings.delaySeconds; s.muteNews = settings.muteNews; s.needsRestart = needsRestart; s.learningJingle = learningJingle
         if let p = playout {
             let playing = p.next - 1 - Playout.headStart
             s.muted = p.window.first(where: { $0.index == playing })?.source == .silence

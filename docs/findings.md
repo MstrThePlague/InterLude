@@ -123,6 +123,19 @@ Two attempts to find the newsreader's part by voice:
 
 Next step needs ground truth: where the bulletin actually starts and ends within the block.
 
+### Owner labels and the news theme
+
+Owner listening to the 17:30 BST bulletin: the news theme comes in about 8 s after the mute started, just after the presenter says "news"; the news ends about 20 s before the mute ended. So most of the overlap is presenter talk after the bulletin.
+
+The 4 s of theme from that point recur at every recorded bulletin and nowhere else: 05:30, 06:00, 06:30, 08:00, 10:30, 16:30, 17:30 UTC across at least four shows, found 11 to 41 s after the speech began. Learning from slot windows alone (150 s after each :00 and :30, bulletin or not) finds it without labels: matches at exactly the six slots that had bulletins, none at the three that did not. Held out of learning, the two other recordings matched once each, at their bulletins (0.99); 99.9% of all other audio scored 0.67 or lower. The earlier search missed it because its window ended 10 s after the speech start.
+
+Built from this:
+- On Play, with no jingle known, the session learns it from the 150 s after the last eight slots in the BBC's rewind window (about 50 MB, in the background). Live test: learned in about 30 s.
+- A theme match inside a block moves the block's start to 8 s before the match (the learned stretch sits about 6 s into the theme), so the presenter's handover plays. Unfetched segments are re-judged after every analysis chunk.
+- Learning from muted bulletins uses 10 s before to 60 s after the speech start.
+
+The end is unchanged: a voice model of the newsreader does not separate them from the presenter either, so muting still runs until music returns (about 20 s of presenter talk in the labelled case).
+
 ## Spec amendments made
 
 1. Wall-clock mapping of a segment uses `(index − 1) × 6.4` (the index is the end time). The stream clock runs about 29 s ahead of the system clock.

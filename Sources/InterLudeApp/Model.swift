@@ -79,8 +79,9 @@ final class AppModel {
     }
     var learnedNote: String? {
         let p = profile(selectedStationID)
-        if !p.idents.isEmpty { return "News jingle learned" }
-        return p.candidates.isEmpty ? nil : "Learning the jingle"
+        if status.learningJingle { return "Learning the news jingle…" }
+        if !p.idents.isEmpty { return "Knows the news jingle" }
+        return p.candidates.isEmpty ? nil : "Learning the news jingle"
     }
     var delayDescription: String { "About \(Int((status.delaySeconds / 5).rounded()) * 5) seconds" }
     var muteSubtitle: String {
@@ -412,7 +413,8 @@ final class AppModel {
             while !Task.isCancelled {
                 guard let self, let s = self.session else { return }
                 let st = await s.status()
-                if st.recentBlocks.count != self.status.recentBlocks.count || st.recentBlocks.first?.end != self.status.recentBlocks.first?.end,
+                if st.recentBlocks.count != self.status.recentBlocks.count || st.recentBlocks.first?.end != self.status.recentBlocks.first?.end
+                    || st.learningJingle != self.status.learningJingle,
                    let station = self.selectedStation {
                     self.profiles[station.serviceId] = StationProfile.load(station)
                 }

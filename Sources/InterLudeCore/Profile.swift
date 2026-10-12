@@ -26,7 +26,8 @@ public struct StationProfile: Codable, Sendable, Equatable {
         get(.startMinuteHistogram, &startMinuteHistogram); get(.bulletinSeconds, &bulletinSeconds)
         // Candidates from before candidate windows changed are a different shape; drop them.
         let expected = IdentFeatures.bands
-        if candidates.contains(where: { $0.first?.count != expected || $0.count < 400 }) { candidates = []; candidateSources = []; idents = [] }
+        if candidates.contains(where: { $0.first?.count != expected || $0.count < 1000 }) { candidates = []; candidateSources = [] }
+        if idents.contains(where: { $0.features.first?.count != expected }) { idents = [] }
         if candidateSources.count != candidates.count { candidateSources = Array(repeating: "", count: candidates.count) }
     }
     enum Keys: String, CodingKey {

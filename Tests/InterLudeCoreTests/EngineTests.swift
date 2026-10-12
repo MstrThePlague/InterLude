@@ -232,3 +232,15 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     d.identMatch(at: hour + 30 * 60 + 20, score: 0.95)
     #expect(d.openBlock != nil)
 }
+
+@Test func newsThemeMovesTheStartPastThePresenter() {
+    var d = NewsDetector()
+    // Presenter starts talking at :30:10, runs into the bulletin; the theme starts at :30:40.
+    for s in samples(from: hour + 1810, speech: true, seconds: 40) { d.ingest(s) }
+    #expect(d.openBlock?.start == hour + 1810)
+    d.identMatch(at: hour + 1840, score: 0.95)
+    #expect(d.openBlock?.start == hour + 1840 && d.openBlock?.anchoredOnIdent == true)
+    #expect(!d.isNews(segmentStart: hour + 1815))       // the handover plays
+    d.identMatch(at: hour + 1850, score: 0.95)          // heard again in the next chunk: no change
+    #expect(d.openBlock?.start == hour + 1840)
+}
