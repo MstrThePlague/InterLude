@@ -157,6 +157,9 @@ final class AppModel {
         case "casterror": errorText = "Cast connection lost. Kitchen B&W Speaker stopped responding."; castFailed = true
         case "upcoming": isPlaying = true; status.muteStartsIn = 38
         case "welcome": showWelcome = true
+        case "welcome-dismiss":      // closes the note after 3 s, to check the window shrinks
+            demoHidesWelcome = false; showWelcome = true
+            Task { try? await Task.sleep(for: .seconds(3)); demoHidesWelcome = true }
         case "starting": isStarting = true
         case "stopped": break
         default: isPlaying = true

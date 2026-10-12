@@ -23,6 +23,8 @@ struct PanelView: View {
         }
         .padding(16)
         .frame(width: 340)
+        .fixedSize(horizontal: false, vertical: true)
+        .fitsHostWindow()
         .animation(.snappy(duration: 0.25), value: model.status.muted)
         .animation(.snappy(duration: 0.25), value: model.status.muteStartsIn == nil)
         .animation(.snappy(duration: 0.25), value: model.isPlaying)
