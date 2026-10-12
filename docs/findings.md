@@ -77,6 +77,14 @@ A presenter talking over a song was muted on a Chromecast Audio; "Not news" unmu
 
 After "Not news" on a presenter-over-song false start, the 11:30 bulletin was not muted and the ident was heard. Cause: the detector runs about one delay (60 s) ahead of the listener, so by the time "Not news" was pressed it had already analysed the speech that carried on into the bulletin. Rejecting closed the block and then ignored speech until music returned, which never happened before the news. Fix: "Not news" now closes the block at the point the listener has reached, then re-judges the audio after that point from scratch (speech must be sustained from that point). The already-listed segments are re-muted or unmuted to match. Cost: presenter chat that carries on for 20 s or more after pressing the button is muted again. An offline replay of 09:45 to 10:31 UTC with the new slot window finds only the 10:30 bulletin and no false start.
 
+### What the app's event log showed
+
+Read through the new token-protected `/diagnostics` endpoint (the Export diagnostics zip had dropped the log and profiles; export now rewrites the files instead of copying them):
+
+1. 10:27 UTC: a 32 s block opened and closed by itself (music returned): the first false start, from the wide slot window.
+2. 10:30:25 UTC (stream clock): the real bulletin was detected, 22 s into its speech. It was muted. "Not news" was pressed 7 s into the mute, so the bulletin that followed was audible. Fixed as above.
+3. "That was news" marked a 24 s speech run at 10:31:54 to 10:32:18, which was the newest speech the detector had analysed (about a minute ahead of the listener), not the bulletin's start. The ident candidate saved from it was therefore the wrong audio. Fixed: it now uses the speech the listener has reached, prefers the latest run of at least 30 s, and saves the audio from 4 s before to 6 s after the run's start. A bad candidate is harmless on its own, since three candidates must agree before one becomes an ident.
+
 ## Spec amendments made
 
 1. Wall-clock mapping of a segment uses `(index − 1) × 6.4` (the index is the end time). The stream clock runs about 29 s ahead of the system clock.

@@ -191,3 +191,14 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     let c = try JSONDecoder().decode(DetectorConfig.self, from: Data(old.utf8))
     #expect(c.speechThreshold == 0.7 && c.slotAfterMinutes == 3 && c.maxMuteSeconds == 480)
 }
+
+@Test func newsHeardUsesSpeechTheListenerHasReached() {
+    var d = NewsDetector()
+    for s in samples(from: hour + 1800, speech: true, seconds: 120) { d.ingest(s) }          // the bulletin
+    for s in samples(from: hour + 1920, speech: false, seconds: 60) { d.ingest(s) }
+    for s in samples(from: hour + 1980, speech: true, seconds: 15) { d.ingest(s) }           // later chat, already analysed
+    let b = d.markNewsHeard(listenerTime: hour + 1850)
+    #expect(b != nil && abs(b!.start - (hour + 1800)) < 0.01)
+    let later = d.markNewsHeard(listenerTime: hour + 2000)     // prefers the long run over the short one
+    #expect(later != nil && abs(later!.start - (hour + 1800)) < 0.01)
+}

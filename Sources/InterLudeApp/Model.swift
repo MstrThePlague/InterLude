@@ -314,9 +314,15 @@ final class AppModel {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("InterLude-diagnostics", isDirectory: true)
         try? FileManager.default.removeItem(at: tmp)
         try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
-        for name in ["events.jsonl", "stations.json", "profiles"] {
-            let src = support.appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: src.path) { try? FileManager.default.copyItem(at: src, to: tmp.appendingPathComponent(name)) }
+        // Read and rewrite the files rather than copying them, which skipped files the app had written itself.
+        func put(_ src: URL, as name: String) {
+            if let d = try? Data(contentsOf: src) { try? d.write(to: tmp.appendingPathComponent(name)) }
+        }
+        put(support.appendingPathComponent("events.jsonl"), as: "events.jsonl")
+        put(support.appendingPathComponent("stations.json"), as: "stations.json")
+        let profiles = support.appendingPathComponent("profiles")
+        for f in (try? FileManager.default.contentsOfDirectory(atPath: profiles.path)) ?? [] {
+            put(profiles.appendingPathComponent(f), as: "profile-\(f)")
         }
         return tmp
     }

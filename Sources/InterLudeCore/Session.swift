@@ -274,10 +274,12 @@ public actor PlayerSession {
 
     /// "That was news": the most recent speech block is marked as news.
     public func thatWasNews() {
-        guard let b = detector.markLastSpeechAsNews() else { return }
-        write(["event": "marked", "block": blockJSON(b)])
-        // Save the first 8 seconds as a candidate ident; three that agree become the reference.
-        let slice = featureRing.filter { $0.time >= b.start && $0.time < b.start + 8 }.map(\.frame)
+        guard let p = playout else { return }
+        let listener = HLS.startTime(ofIndex: p.next - 1 - Playout.headStart).timeIntervalSince1970
+        guard let b = detector.markNewsHeard(listenerTime: listener) else { notices.append("No speech to mark as news"); return }
+        write(["event": "marked", "listenerTime": listener, "block": blockJSON(b)])
+        // Save the audio from just before the bulletin starts (to catch the ident) as a candidate; three that agree become the reference.
+        let slice = featureRing.filter { $0.time >= b.start - 4 && $0.time < b.start + 6 }.map(\.frame)
         if slice.count > 100 {
             settings.profile.candidates.append(slice)
             if settings.profile.candidates.count > 8 { settings.profile.candidates.removeFirst() }
@@ -319,6 +321,12 @@ public actor PlayerSession {
             guard let p = playout else { return .notFound }
             let text = HLS.write(mediaSequence: p.mediaSequence, segments: p.window.map(\.index)) { "seg/\($0).ts" }
             return HTTPResponse(contentType: "application/vnd.apple.mpegurl", body: Data(text.utf8), noCache: true)
+        }
+        if relative == "diagnostics" {
+            var out = "event log: \(eventLog?.path ?? "none")\n"
+            if let u = eventLog, let t = try? String(contentsOf: u, encoding: .utf8) { out += t } else { out += "(event log missing or unreadable)\n" }
+            out += "\nnotices: \(notices)\nblocks in memory: \(detector.blocks.count)\n"
+            return HTTPResponse(contentType: "text/plain", body: Data(out.utf8), noCache: true)
         }
         if relative == "health" {
             let st = status()
