@@ -38,8 +38,14 @@ for (i, c) in ceps.enumerated() {
     let t = t0 + Double(i) / fps
     if isSpeech(t) && !nearSlot(t) && !blocks.contains(where: { t >= $0.0 - 30 && t <= $0.1 + 30 }) { training.append(c) }
 }
-let model = VoicePrint(training)
+var model = VoicePrint(training)
 print("presenter model from \(Int(Double(training.count) / fps)) s of speech away from bulletins")
+if let n = ProcessInfo.processInfo.environment["NEWS"]?.split(separator: ",").compactMap({ Double($0) }), n.count == 2 {
+    // Model the newsreader instead, from a stretch known to be the bulletin.
+    let i0 = Int((n[0] - t0) * fps), i1 = Int((n[1] - t0) * fps)
+    model = VoicePrint(Array(ceps[i0..<i1]))
+    print("newsreader model from \(Int(n[1] - n[0])) s; low numbers now mean the newsreader")
+}
 
 let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; f.timeZone = TimeZone(identifier: "UTC")
 for (bs, be) in blocks {

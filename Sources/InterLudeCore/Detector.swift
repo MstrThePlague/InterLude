@@ -57,6 +57,8 @@ public struct NewsBlock: Sendable, Codable, Equatable, Identifiable {
     public var doubtful = false
     public var falseStart = false
     public var evidence = ""
+    /// The start was moved to the news theme.
+    public var anchoredOnIdent = false
     public var isOpen: Bool { end == nil }
     public init(start: Double, end: Double? = nil, evidence: String = "") { self.start = start; self.end = end; self.evidence = evidence }
 }
@@ -134,11 +136,23 @@ public struct NewsDetector: Sendable {
         runStart = nil; musicRunStart = nil
     }
 
-    /// A known news ident was heard: start a block here without waiting for sustained speech.
+    /// The news theme was heard at `t` (already moved back to where the theme begins).
+    /// Inside a block that speech opened, the start moves to the theme, so the presenter's handover is not muted.
+    /// Otherwise it opens a block, without waiting for sustained speech.
     public mutating func identMatch(at t: Double, score: Float) {
-        guard openBlock == nil, !suppressUntilMusic, inSlot(t) else { return }
-        if let last = blocks.last, let e = last.end, t - e < 30 { return }     // same ident heard again
-        blocks.append(NewsBlock(start: t, evidence: "news ident matched (\(String(format: "%.2f", score)))"))
+        guard inSlot(t) else { return }
+        if let i = blocks.lastIndex(where: { !$0.falseStart && abs($0.start - t) <= 120 && ($0.end.map { t < $0 } ?? true) }) {
+            guard !blocks[i].anchoredOnIdent else { return }
+            blocks[i].evidence += "; start moved \(Int(t - blocks[i].start)) s to the news theme (\(String(format: "%.2f", score)))"
+            blocks[i].start = t
+            blocks[i].anchoredOnIdent = true
+            return
+        }
+        guard openBlock == nil, !suppressUntilMusic else { return }
+        if let last = blocks.last, let e = last.end, t - e < 30 { return }
+        var b = NewsBlock(start: t, evidence: "news theme heard (\(String(format: "%.2f", score)))")
+        b.anchoredOnIdent = true
+        blocks.append(b)
         runStart = nil
     }
 

@@ -44,6 +44,77 @@ for arg in CommandLine.arguments.dropFirst() {
     print("\(dir.lastPathComponent): \(f.count) frames, \(starts.count) bulletins")
 }
 
+if env["BOOT"] != nil {
+    // Simulates learning on Play: a window after every :00 and :30 slot, bulletin or not, then promotion.
+    var windows: [[[Float]]] = []
+    var labels: [String] = []
+    let iso = ISO8601DateFormatter()
+    let testNames = Set((env["TEST"] ?? "").split(separator: ",").map(String.init))
+    for r in recs where !testNames.contains(r.name) {
+        var slot = (r.t0 / 1800).rounded(.up) * 1800
+        while slot + 150 <= r.t0 + Double(r.f.count) / fps {
+            let a = Int((slot - r.t0) * fps), b = Int((slot + 150 - r.t0) * fps)
+            windows.append(Array(r.f[a..<b])); labels.append(iso.string(from: Date(timeIntervalSince1970: slot)))
+            slot += 1800
+        }
+    }
+    print("\(windows.count) slot windows: \(labels.joined(separator: ", "))")
+    let t = Date()
+    guard let ref = IdentMatcher.promote(candidates: windows) else { print("no jingle found"); exit(0) }
+    print(String(format: "learned a %d-frame reference in %.1f s", ref.features.count, Date().timeIntervalSince(t)))
+    for (i, wdw) in windows.enumerated() {
+        let m = IdentMatcher.bestMatch(reference: ref.features, in: wdw)
+        print("  \(labels[i])  best \(String(format: "%.2f", m?.score ?? 0)) at +\(String(format: "%.0f", Double(m?.offset ?? 0) / fps)) s\((m?.score ?? 0) >= ref.threshold ? "  MATCH" : "")")
+    }
+    // Held-out recordings: scan end to end.
+    for r in recs where testNames.contains(r.name) {
+        var k = 0, hits: [(Double, Float)] = [], all: [Float] = []
+        while k + ref.features.count + 40 <= r.f.count {
+            if let m = IdentMatcher.bestMatch(reference: ref.features, in: Array(r.f[k..<(k + ref.features.count + 40)])) {
+                all.append(m.score); if m.score >= ref.threshold { hits.append((r.t0 + Double(k + m.offset) / fps, m.score)) }
+            }
+            k += 40
+        }
+        var merged: [(Double, Float)] = []
+        for h in hits { if let l = merged.last, h.0 - l.0 < 10 { if h.1 > l.1 { merged[merged.count - 1] = h } } else { merged.append(h) } }
+        let srt = all.sorted()
+        print("held out \(r.name): \(merged.count) matches; highest score elsewhere \(String(format: "%.2f", srt.last ?? 0)), 99.9th \(String(format: "%.2f", srt[srt.count * 999 / 1000]))")
+        for (t, sc) in merged { print("  \(iso.string(from: Date(timeIntervalSince1970: t)))  \(String(format: "%.2f", sc))") }
+    }
+    exit(0)
+}
+
+if let refSpec = env["REF"] {
+    // REF=<recording name>:<unix start>:<seconds>  Use that stretch as the jingle and look for it everywhere.
+    let p = refSpec.split(separator: ":")
+    guard p.count == 3, let rs = Double(p[1]), let rl = Double(p[2]), let r = recs.first(where: { $0.name == String(p[0]) }) else { print("bad REF"); exit(2) }
+    let a = Int((rs - r.t0) * fps), b = Int((rs + rl - r.t0) * fps)
+    let ref = Array(r.f[a..<b])
+    let iso = ISO8601DateFormatter()
+    for rec in recs {
+        var hits: [(Double, Float)] = []
+        var all: [Float] = []
+        var k = 0
+        let step = 40
+        while k + ref.count + step <= rec.f.count {
+            if let m = IdentMatcher.bestMatch(reference: ref, in: Array(rec.f[k..<(k + ref.count + step)])) {
+                all.append(m.score)
+                if m.score >= 0.75 { hits.append((rec.t0 + Double(k + m.offset) / fps, m.score)) }
+            }
+            k += step
+        }
+        var merged: [(Double, Float)] = []
+        for h in hits { if let l = merged.last, h.0 - l.0 < 10 { if h.1 > l.1 { merged[merged.count - 1] = h } } else { merged.append(h) } }
+        let sorted = all.sorted()
+        print("\n\(rec.name): \(merged.count) matches >= 0.75 (median elsewhere \(String(format: "%.2f", sorted[sorted.count / 2])), 99.9th \(String(format: "%.2f", sorted[min(sorted.count - 1, sorted.count * 999 / 1000)])))")
+        for (t, s) in merged {
+            let near = rec.starts.map { t - $0 }.min(by: { abs($0) < abs($1) })
+            print("  \(iso.string(from: Date(timeIntervalSince1970: t)))  \(String(format: "%.2f", s))" + (near.map { String(format: "  (%+.0f s from detected start)", $0) } ?? ""))
+        }
+    }
+    exit(0)
+}
+
 if ProcessInfo.processInfo.environment["EXPLORE"] != nil {
     // For each pair of bulletins: the best-matching 6 s stretch of A within 40 s around B's start.
     var clips: [(String, [[Float]])] = []
