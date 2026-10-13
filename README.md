@@ -6,7 +6,7 @@ A macOS menu bar app that plays BBC radio to Chromecast devices (or the Mac itse
 
 ## How it works
 
-InterLude downloads the station's HLS segments, classifies the audio a short way ahead of the playhead, and serves its own HLS playlist from the Mac. Playback holds a fixed delay (60 seconds by default). When a bulletin starts, InterLude serves silent segments, with the timestamps of the segments they replace, until music returns. The silence lasts as long as the bulletin, so the delay never changes.
+InterLude downloads the station's HLS segments, classifies the audio a short way ahead of the playhead, and serves its own HLS playlist from the Mac. Playback holds a fixed delay (60 seconds by default). When a bulletin starts, InterLude serves silent segments, with the timestamps of the segments they replace, until music returns. The silence lasts as long as the bulletin, so the delay never changes. In Settings you can choose ocean waves, a woodland stream or woodland birds instead of silence; the sound fades in as the mute starts and out as the station returns.
 
 Detection combines Apple's built-in sound classifier (speech and music scores), a learned news ident per station, bulletin-time slots (default minutes 0 and 30), and a track-metadata poll for display. The rule is deterministic and every decision is written to `events.jsonl`.
 
@@ -50,6 +50,10 @@ All tools are in `Tools/` and are run with `swift run --scratch-path ~/Library/C
 | `evaluate <csv> [labels.json] [profile.json]` | Replay the detector; report recall, false starts, edge loss. |
 | `serve <serviceId> [delay] [port]` | Headless session for testing with ffmpeg or curl. |
 | `cast-spike list` / `play <device> <url>` | List Cast devices and groups; load a stream. |
+
+## Sounds
+
+The bulletin sounds in `Resources/Ambience` are trimmed from recordings by Joseph Sardin at [BigSoundBank](https://bigsoundbank.com), released into the public domain (CC0): sea waves #0698, forest and stream #2 #2714, forest #3 #2715.
 
 ## Licence
 

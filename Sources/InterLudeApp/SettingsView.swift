@@ -66,6 +66,14 @@ struct SettingsView: View {
             }
 
             Section {
+                Picker("During bulletins", selection: $model.ambience) {
+                    ForEach(AppModel.ambienceChoices, id: \.id) { Text($0.name).tag($0.id) }
+                }
+            } header: { Text("Sound") } footer: {
+                FooterText("Instead of silence, play a gentle background sound while a bulletin is muted. It fades in as the mute starts and fades out as the station returns. Changes apply straight away. Recordings by Joseph Sardin, BigSoundBank.com, public domain (CC0).")
+            }
+
+            Section {
                 Picker("Bitrate", selection: $model.bitrate) { Text("128 kbps").tag(128_000); Text("320 kbps").tag(320_000) }
                 TextField("Server port", value: $model.port, format: .number.grouping(.never))
                 Toggle("Keep this Mac awake while playing", isOn: $model.keepAwake)

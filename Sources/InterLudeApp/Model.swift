@@ -53,6 +53,22 @@ final class AppModel {
     var port: Int { didSet { UserDefaults.standard.set(port, forKey: "port") } }
     var bitrate: Int { didSet { UserDefaults.standard.set(bitrate, forKey: "bitrate") } }
     var keepAwake: Bool { didSet { UserDefaults.standard.set(keepAwake, forKey: "keepAwake"); updateActivity() } }
+    /// What plays during muted bulletins: "silence" or the name of a sound in Resources/Ambience.
+    var ambience: String {
+        didSet {
+            UserDefaults.standard.set(ambience, forKey: "ambience")
+            let url = ambienceURL
+            Task { await session?.setAmbience(url) }
+        }
+    }
+    static let ambienceChoices: [(id: String, name: String)] = [
+        ("silence", "Silence"), ("ocean", "Ocean waves"), ("stream", "Woodland stream"), ("birds", "Woodland birds"),
+    ]
+    var ambienceURL: URL? {
+        guard ambience != "silence" else { return nil }
+        return Bundle.main.url(forResource: ambience, withExtension: "m4a", subdirectory: "Ambience")
+            ?? URL(fileURLWithPath: "Resources/Ambience/\(ambience).m4a")
+    }
     var startAtLogin: Bool = false
 
     // State
@@ -94,7 +110,9 @@ final class AppModel {
             return p.idents.isEmpty ? "Set to jingle only, but no jingle is learned yet, so nothing is muted. Change this in Settings."
                                     : "Mutes when the station's news jingle plays."
         }
-        return "Silences bulletins until the music returns."
+        if ambience == "silence" { return "Silences bulletins until the music returns." }
+        let name = Self.ambienceChoices.first { $0.id == ambience }?.name.lowercased() ?? "a soothing sound"
+        return "Plays \(name) over bulletins until the music returns."
     }
     var footerText: String { "\(delayDescription) behind live" }
 
@@ -134,6 +152,7 @@ final class AppModel {
         port = d.object(forKey: "port") as? Int ?? 8642
         bitrate = d.object(forKey: "bitrate") as? Int ?? 320_000
         keepAwake = d.object(forKey: "keepAwake") as? Bool ?? true
+        ambience = d.string(forKey: "ambience") ?? "silence"
         showWelcome = !d.bool(forKey: "welcomeDismissed")
         showRecent = d.bool(forKey: "showRecent")
         let args = CommandLine.arguments
@@ -247,6 +266,7 @@ final class AppModel {
         let output = selectedOutput
         var settings = SessionSettings(station: station, profile: profile(station.serviceId))
         settings.bitrate = bitrate
+        settings.ambience = ambienceURL
         Task {
             do {
                 let cacheRoot = try AppPaths.cacheDirectory()

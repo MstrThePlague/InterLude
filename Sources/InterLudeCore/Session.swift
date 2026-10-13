@@ -6,6 +6,8 @@ public struct SessionSettings: Sendable {
     public var bitrate = 320_000
     public var delaySeconds = 60.0
     public var muteNews = true
+    /// A looping sound to play in place of muted bulletins; nil plays silence.
+    public var ambience: URL?
     public var profile: StationProfile
     public init(station: Station, profile: StationProfile = StationProfile()) {
         self.station = station; self.profile = profile
@@ -62,6 +64,7 @@ public actor PlayerSession {
     private var ccByIndex: [Int: (UInt8, UInt8)] = [:]
     private var prototype: TSSegmentInfo?
     private var silentFrame: Data?
+    private var ambience: Ambience?
     private var silenceCache: [Int: Data] = [:]
     private var lastServed = 0
     private var featureRing: [(time: Double, frame: [Float])] = []
@@ -96,6 +99,7 @@ public actor PlayerSession {
         let (pl, base) = try await client.fetch(catalogue: catalogue, station: settings.station, bitrate: settings.bitrate)
         guard let name = pl.names.first, let (prefix, _) = HLS.splitName(name) else { throw FetchError.unhealthy("Unreadable playlist") }
         self.base = base; self.segmentPrefix = prefix
+        loadAmbience()
         liveEdge = pl.lastSequence
         let dir = cacheRoot.appendingPathComponent(settings.station.serviceId, isDirectory: true)
         let store = SegmentStore(directory: dir, base: base, prefix: prefix)
@@ -367,6 +371,20 @@ public actor PlayerSession {
 
     public func setMuteNews(_ on: Bool) { settings.muteNews = on }
 
+    /// Changes the sound played during bulletins, from the next segment the player fetches.
+    public func setAmbience(_ url: URL?) {
+        settings.ambience = url
+        loadAmbience()
+        silenceCache = silenceCache.filter { $0.key <= lastServed }
+    }
+
+    private func loadAmbience() {
+        ambience = nil
+        guard let url = settings.ambience else { return }
+        do { ambience = try Ambience(url: url) }
+        catch { notices.append("Could not load the sound for bulletins (\(url.lastPathComponent)); muting with silence") }
+    }
+
     /// Options that take effect at once, without a restart.
     public func setLiveOptions(muteNews: Bool, shadowMode: Bool) {
         settings.muteNews = muteNews; settings.profile.shadowMode = shadowMode
@@ -541,19 +559,38 @@ public actor PlayerSession {
         if relative.hasPrefix("seg/"), relative.hasSuffix(".ts"), let i = Int(relative.dropFirst(4).dropLast(3)) {
             lastServed = max(lastServed, i)
             let listed = playout?.window.first(where: { $0.index == i })
-            if listed?.source == .silence, let d = await silentSegment(i) {
+            if listed?.source == .silence, let d = mutedSegment(i) {
                 return HTTPResponse(contentType: "video/mp2t", body: d)
             }
             if let d = await store?.cached(i) { return HTTPResponse(contentType: "video/mp2t", body: d) }
-            if let d = await silentSegment(i) { return HTTPResponse(contentType: "video/mp2t", body: d) }
+            if let d = replacementSegment(i, frames: silentFrame.map { Array(repeating: $0, count: 300) }) {
+                return HTTPResponse(contentType: "video/mp2t", body: d)
+            }
         }
         return .notFound
     }
 
-    /// Silence that carries the timestamps of the segment it replaces.
-    private func silentSegment(_ i: Int) async -> Data? {
+    /// The segment heard in place of muted segment `i`: the chosen ambience, or silence. Ambience fades in at the
+    /// start of a muted run and out at its end, judged from the neighbouring segments in the playlist.
+    private func mutedSegment(_ i: Int) -> Data? {
         if let d = silenceCache[i] { return d }
-        guard let proto = prototype, let frame = silentFrame else { return nil }
+        var frames = silentFrame.map { Array(repeating: $0, count: 300) }
+        if let amb = ambience, let like = prototype?.frames.first {
+            let window = playout?.window ?? []
+            let before = window.first { $0.index == i - 1 }?.source, after = window.first { $0.index == i + 1 }?.source
+            if let raw = try? amb.frames(forSegment: i, fadeIn: before != .silence, fadeOut: after == .station) {
+                frames = raw.map { Silence.adts(raw: $0, like: like) }
+            }
+        }
+        guard let d = replacementSegment(i, frames: frames) else { return nil }
+        silenceCache[i] = d
+        if silenceCache.count > 200 { silenceCache.removeValue(forKey: silenceCache.keys.min()!) }
+        return d
+    }
+
+    /// Builds a segment from `frames` that carries the timestamps of the segment it replaces.
+    private func replacementSegment(_ i: Int, frames: [Data]?) -> Data? {
+        guard let proto = prototype, let frames else { return nil }
         let step = Int64(segmentDuration * 90_000)
         let mask: Int64 = 0x1_FFFF_FFFF
         let pts: Int64
@@ -563,9 +600,6 @@ public actor PlayerSession {
         else if let any = ptsByIndex.first { pts = (any.value + Int64(i - any.key) * step) & mask }
         else { return nil }
         let cc = ccByIndex[i] ?? ccByIndex[i - 1].map { (($0.0 + 1) & 0xF, ($0.1 + 1) & 0xF) } ?? (0, 0)
-        let d = TS.build(frames: Array(repeating: frame, count: 300), startPTS: pts, prototype: proto, patCC: cc.0, pmtCC: cc.1)
-        silenceCache[i] = d
-        if silenceCache.count > 200 { silenceCache.removeValue(forKey: silenceCache.keys.min()!) }
-        return d
+        return TS.build(frames: frames, startPTS: pts, prototype: proto, patCC: cc.0, pmtCC: cc.1)
     }
 }
