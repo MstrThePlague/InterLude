@@ -75,8 +75,8 @@ public actor PlayerSession {
     private var silenceCache: [Int: Data] = [:]
     private var lastServed = 0
     private var featureRing: [(time: Double, frame: [Float])] = []
-    // Transcription of muted blocks, to find the newsreader's opening and sign-off (macOS 26 and later).
-    private var transcriber: AnyObject?
+    // Transcription of muted blocks, to find the newsreader's opening and sign-off.
+    private var transcriber: NewsTranscriber?
     private var speechState = "unavailable"
     private var monoTail: [Float] = []                  // the last 30 s of audio analysed
     private var blockAudio: [Float] = []
@@ -130,7 +130,7 @@ public actor PlayerSession {
         tasks.append(Task { await self.emitLoop() })
         tasks.append(Task { await self.metadataLoop() })
         if settings.muteNews && settings.profile.idents.isEmpty { tasks.append(Task(priority: .utility) { await self.learnJingleFromRewind() }) }
-        if #available(macOS 26, *), settings.station.kind == .music {
+        if settings.station.kind == .music {
             let stt = NewsTranscriber()
             transcriber = stt
             speechState = "checking"
@@ -294,7 +294,7 @@ public actor PlayerSession {
         if monoTail.count > Int(30 * rate) { monoTail.removeFirst(monoTail.count - Int(30 * rate)) }
         let chunkEnd = chunkStart + Double(newMono.count) / rate
         let tailStart = chunkEnd - Double(monoTail.count) / rate
-        guard #available(macOS 26, *), let stt = transcriber as? NewsTranscriber, speechState == "ready", let p = playout else { return }
+        guard let stt = transcriber, speechState == "ready", let p = playout else { return }
         let listener = HLS.startTime(ofIndex: p.next - 1 - Playout.headStart).timeIntervalSince1970
         guard let b = detector.blocks.last(where: { !$0.falseStart && !signedOff.contains($0.id) && ($0.isOpen || ($0.end ?? 0) > listener) }) else {
             blockAudioFor = nil; blockAudio = []; return

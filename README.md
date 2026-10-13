@@ -22,7 +22,7 @@ A bulletin is found in a few ways, all running on the Mac:
 
 1. **Speech near the hour or half hour.** Apple's built-in sound classifier scores speech and music every 1.5 seconds. Twenty seconds of sustained speech close to a bulletin slot starts a mute.
 2. **The news theme.** InterLude learns the station's news jingle from recent bulletins and starts the mute when it hears it, so the presenter's handover still plays.
-3. **The newsreader's words.** While a bulletin is muted, on-device speech recognition listens for the sign-off ("…your next update's at six thirty", "That's 6 Music News for tonight") and ends the mute there, so trails and the presenter's chat afterwards are not lost. This needs macOS 26 or later; otherwise the mute ends when music returns.
+3. **The newsreader's words.** While a bulletin is muted, on-device speech recognition listens for the sign-off ("…your next update's at six thirty", "That's 6 Music News for tonight") and ends the mute there, so trails and the presenter's chat afterwards are not lost. If no sign-off is heard, the mute ends when music returns.
 
 Muted segments are replaced one for one with segments carrying the same timestamps, so the player sees one continuous stream and the delay never drifts. If a mute is wrong, **Not news** brings the sound back within a few seconds, and **News got through** teaches it from a bulletin it missed.
 
@@ -30,11 +30,26 @@ The design, the measurements behind each rule and the mistakes along the way are
 
 ## Requirements
 
-- macOS 15 or later on Apple silicon (macOS 26 or later for ending mutes at the newsreader's sign-off)
-- Xcode, to build
+- macOS 26 or later on Apple silicon
 - The BBC's UK stream addresses, which may not play outside the UK
 
-## Build and run
+## Download
+
+Get the zip from the [latest release](../../releases/latest), unzip it and move `InterLude.app` to Applications.
+
+InterLude is signed but not notarised by Apple (that needs a paid developer account), so macOS blocks it the first time:
+
+1. Double-click InterLude. macOS says it can't be opened; click **Done**.
+2. Open **System Settings › Privacy & Security** and scroll down to the message about InterLude.
+3. Click **Open Anyway**, confirm with your password or Touch ID, then click **Open**.
+
+You only need to do this once. The first time you look for speakers, macOS also asks to let InterLude find devices on your local network; allow it, or Chromecasts won't appear.
+
+If you'd rather not run an app downloaded from the internet, build it yourself instead.
+
+## Build from source
+
+You'll need Xcode.
 
 ```
 ./scripts/build-app.sh
@@ -44,6 +59,8 @@ open build/InterLude.app
 The script builds `build/InterLude.app` and signs it with your Apple Development certificate if you have one (a free Apple ID is enough), or ad hoc otherwise. A stable signature stops macOS asking for local network permission after every rebuild. `SANDBOX=0 ./scripts/build-app.sh` builds without the App Sandbox.
 
 Builds go to `~/Library/Caches/InterLudeBuild`, because `codesign` rejects files with the extended attributes that iCloud-synced folders such as Documents add.
+
+`./scripts/package-release.sh` builds the app and zips it into `dist/` for a release.
 
 To run the tests:
 
