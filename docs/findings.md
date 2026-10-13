@@ -53,7 +53,8 @@ Endpoint `https://rms.api.bbc.co.uk/v2/services/{serviceId}/segments/latest?limi
 
 - Bonjour discovery from a command-line tool found 6 services: **All speakers** (Google Cast Group) and five Chromecast Audio devices. Names and models come from the `fn` and `md` TXT keys as specified.
 - The direct Cast v2 sender (`DirectCastController`: TLS, protobuf framing, heartbeat, launch of app `CC1AD845`, LOAD with `hlsSegmentFormat` tried as `ts_aac`, `ts`, then omitted) is written and its message framing is unit-tested, but **has not been run against a device**. No playback was started on your speakers without your say-so.
-- **Owner result (12 October 2026):** playback to a single Chromecast Audio (the one in the office) works through the app. Not yet recorded: which `hlsSegmentFormat` was accepted (the app tries `ts_aac`, `ts`, then none, and does not log which), how a muted bulletin sounds on the device, and the group test.
+- **Owner result (12 October 2026):** playback to a single Chromecast Audio (the one in the office) works through the app. Not yet recorded: which `hlsSegmentFormat` was accepted (the app tries `ts_aac`, `ts`, then none, and does not log which).
+- **Owner result (13 October 2026):** playback to Chromecast Audio groups also works.
 - Silent-segment template: built at run time from the system AAC encoder, wrapped in an ADTS header copied from a real frame. The 300-frame silent segment decodes to −91 dB, with no timestamp break. Verified with ffprobe and ffmpeg.
 
 ## Phase 1: local player
@@ -168,8 +169,10 @@ Replay test (a local stand-in for the BBC serving 20:24 to 20:37 in real time to
 6. Playlist start: the player starts about 3 segments behind the newest listed segment, so the app lists 6 segments at start with the newest 3 segments ahead of the delay.
 7. After the Mac sleeps, the playout clock restarts the session rather than racing to catch up.
 
+## BBC terms
+
+The owner reviewed the BBC's terms for its online services before the first public release (13 October 2026) and was satisfied.
+
 ## Not done yet (needs time or a person)
 
 - Phase 2 acceptance (5 weekdays of 6 Music logs against labels) and the Radio 2 3-day shadow run. The app logs every candidate block to `events.jsonl`; shadow mode and ident-only detection are built, and Radio 2 defaults to both.
-- Cast tests on a Chromecast Audio and on a group (checklist C).
-- The BBC's terms for its online services have not been read. Record what they say here before any public release.
