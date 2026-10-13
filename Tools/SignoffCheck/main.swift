@@ -4,7 +4,6 @@ import InterLudeCore
 
 // signoff-check <dir>:<blockStart>,<blockEnd> ...
 // Transcribes each muted block (20 s before to 10 s after) and reports the newsreader's opening and sign-off.
-@available(macOS 26, *)
 func run() async throws {
     let stt = NewsTranscriber()
     guard await stt.prepare() else { print("speech model unavailable"); return }
@@ -31,4 +30,4 @@ func run() async throws {
         }
     }
 }
-if #available(macOS 26, *) { try await run() }
+try await run()

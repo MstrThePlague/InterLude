@@ -1,9 +1,9 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import PackageDescription
 
 let package = Package(
     name: "InterLude",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v26)],
     targets: [
         .target(name: "InterLudeCore", path: "Sources/InterLudeCore"),
         .executableTarget(name: "InterLude", dependencies: ["InterLudeCore"], path: "Sources/InterLudeApp"),

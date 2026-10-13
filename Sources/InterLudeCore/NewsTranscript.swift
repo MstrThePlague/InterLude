@@ -74,8 +74,7 @@ public enum NewsPhrases {
     }
 }
 
-/// On-device transcription with Apple's speech model (macOS 26 and later). Nothing leaves the Mac.
-@available(macOS 26, *)
+/// On-device transcription with Apple's speech model. Nothing leaves the Mac.
 public actor NewsTranscriber {
     public enum State: Sendable, Equatable { case unavailable, needsModel, installing, ready }
     public private(set) var state: State = .unavailable
