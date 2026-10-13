@@ -10,7 +10,8 @@ public struct SoundScore: Sendable, Codable {
     public var music: Double
 }
 
-/// Decodes ADTS AAC frames to PCM by round-tripping through a temporary file.
+/// Decodes ADTS AAC frames to PCM by round-tripping through a temporary file. AVAudioFile reads ADTS directly,
+/// which is simpler and more robust than driving an AudioConverter by hand for decoding.
 public enum Decode {
     public static func pcm(frames: [Data]) throws -> AVAudioPCMBuffer? {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("il-\(UUID().uuidString).aac")

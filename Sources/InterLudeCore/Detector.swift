@@ -1,5 +1,11 @@
 import Foundation
 
+// Deciding which stretches of audio are news.
+//
+// The classifier produces speech and music scores every 1.5 s. A bulletin opens when speech is sustained near a
+// bulletin slot (or the news theme is heard) and closes when music returns or the newsreader signs off. The
+// detector runs about a delay ahead of the listener, so it can change its mind before anything is heard.
+
 /// Every number the decision rule uses. Lives in the station profile file, never in code paths.
 public struct DetectorConfig: Codable, Sendable, Equatable {
     public var speechThreshold = 0.6
@@ -38,7 +44,7 @@ public struct DetectorConfig: Codable, Sendable, Equatable {
     }
 }
 
-/// One classifier window in absolute time (Unix seconds).
+/// One classifier window in absolute time (Unix seconds, on the stream's clock).
 public struct ScoreSample: Sendable, Codable, Equatable {
     public var time: Double
     public var duration: Double
@@ -49,6 +55,7 @@ public struct ScoreSample: Sendable, Codable, Equatable {
     }
 }
 
+/// A stretch the detector believes is a bulletin. `falseStart` blocks are kept for the log but never muted.
 public struct NewsBlock: Sendable, Codable, Equatable, Identifiable {
     public var id = UUID()
     public var start: Double
@@ -63,7 +70,7 @@ public struct NewsBlock: Sendable, Codable, Equatable, Identifiable {
     public init(start: Double, end: Double? = nil, evidence: String = "") { self.start = start; self.end = end; self.evidence = evidence }
 }
 
-/// Deterministic bulletin detector. Starts are decided quickly; ends wait for music to return.
+/// Deterministic bulletin detector, so every mute can be explained from the event log.
 public struct NewsDetector: Sendable {
     public var config: DetectorConfig
     public private(set) var blocks: [NewsBlock] = []
@@ -77,13 +84,14 @@ public struct NewsDetector: Sendable {
     private var awaitingBreak = false
     /// After the newsreader signs off, talk (trails, the presenter) does not start a new block for a while.
     private var openingsPausedUntil: Double = 0
+    /// Recent runs of speech, so "News got through" can find the bulletin the listener just heard.
     public private(set) var speechRuns: [(start: Double, end: Double)] = []
-    public var trackPlaying: Bool = false      // evidence from the metadata poller
 
     public init(config: DetectorConfig = DetectorConfig()) { self.config = config }
 
     public var openBlock: NewsBlock? { blocks.last(where: \.isOpen) }
 
+    /// Whether `t` falls in a bulletin slot: from a minute before to three minutes after :00 or :30 by default.
     func inSlot(_ t: Double) -> Bool {
         guard config.requireSlot else { return true }
         let minute = (t.truncatingRemainder(dividingBy: 3600)) / 60
@@ -113,7 +121,7 @@ public struct NewsDetector: Sendable {
             let start = runStart ?? s.time
             if let last = speechRuns.last, abs(last.start - start) < 0.001 { speechRuns[speechRuns.count - 1].end = lastSpeech }
             else { speechRuns.append((start, lastSpeech)); if speechRuns.count > 30 { speechRuns.removeFirst() } }
-        } else if let r = runStart, s.time - lastSpeech > config.gapSeconds { _ = r; runStart = nil }
+        } else if runStart != nil, s.time - lastSpeech > config.gapSeconds { runStart = nil }
 
         if let i = blocks.lastIndex(where: \.isOpen) {
             if isMusic { if musicRunStart == nil { musicRunStart = s.time } } else { musicRunStart = nil }
@@ -125,7 +133,7 @@ public struct NewsDetector: Sendable {
             return
         }
         musicRunStart = nil
-        guard !config.identOnly, !suppressUntilMusic, !trackPlaying, s.time >= openingsPausedUntil, let r = runStart, lastSpeech - r >= config.sustainedSpeechSeconds, inSlot(r) else { return }
+        guard !config.identOnly, !suppressUntilMusic, s.time >= openingsPausedUntil, let r = runStart, lastSpeech - r >= config.sustainedSpeechSeconds, inSlot(r) else { return }
         blocks.append(NewsBlock(start: r, evidence: "speech>=\(config.speechThreshold) for \(Int(lastSpeech - r))s near a slot"))
     }
 
@@ -194,12 +202,12 @@ public struct NewsDetector: Sendable {
         for s in history where s.time >= t { process(s) }
     }
 
-    /// "Wrong" on a recent block.
+    /// "Wasn't news" on a recent block.
     public mutating func markFalseStart(id: UUID) {
         if let i = blocks.firstIndex(where: { $0.id == id }) { blocks[i].falseStart = true }
     }
 
-    /// "That was news": the listener has just heard a bulletin that was not muted. The detector is about a delay ahead
+    /// "News got through": the listener has just heard a bulletin that was not muted. The detector is about a delay ahead
     /// of the listener, so look at speech the listener has reached (`listenerTime`), not the newest speech analysed.
     /// Prefers the latest run of at least 30 s, since a bulletin is longer than presenter chat.
     @discardableResult

@@ -12,7 +12,8 @@ public struct HTTPResponse: Sendable {
     public static let notFound = HTTPResponse(status: 404, contentType: "text/plain", body: Data("not found".utf8))
 }
 
-/// A small GET-only HTTP server on NWListener. Paths are prefixed with a random token.
+/// A small GET-only HTTP server on NWListener. It serves the playlist and segments to AVPlayer (on loopback) and to
+/// Chromecasts (on the LAN). Every path starts with a random token, so other devices cannot guess the URLs.
 public final class LocalServer: @unchecked Sendable {
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "interlude.server")
@@ -24,7 +25,8 @@ public final class LocalServer: @unchecked Sendable {
     }
 
     public func start() throws {
-        let l = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port)!)
+        guard let p = NWEndpoint.Port(rawValue: port), port > 0 else { throw NWError.posix(.EINVAL) }
+        let l = try NWListener(using: .tcp, on: p)
         l.newConnectionHandler = { [weak self] c in self?.accept(c) }
         l.start(queue: queue)
         listener = l
@@ -32,6 +34,7 @@ public final class LocalServer: @unchecked Sendable {
 
     public func stop() { listener?.cancel(); listener = nil }
 
+    /// One request per connection: the players ask for small files, so keep-alive is not worth the complexity.
     private func accept(_ c: NWConnection) {
         c.start(queue: queue)
         c.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [handler] data, _, _, err in
@@ -55,7 +58,7 @@ public final class LocalServer: @unchecked Sendable {
         }
     }
 
-    /// The Mac's LAN IPv4 address (en0, en1, ...), never loopback.
+    /// The Mac's LAN IPv4 address (en0, en1, ...), never loopback. A Chromecast cannot reach `localhost`.
     public static func lanAddress() -> String? {
         var ifap: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&ifap) == 0, let first = ifap else { return nil }

@@ -104,9 +104,12 @@ public actor NewsTranscriber {
     public func transcribe(samples: [Float], sampleRate: Double = 48000) async throws -> [SpokenPhrase] {
         guard state == .ready, let locale, !samples.isEmpty,
               let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1),
-              let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)) else { return [] }
+              let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(samples.count)),
+              let channel = buf.floatChannelData?[0] else { return [] }
         buf.frameLength = AVAudioFrameCount(samples.count)
-        samples.withUnsafeBufferPointer { src in buf.floatChannelData![0].update(from: src.baseAddress!, count: samples.count) }
+        samples.withUnsafeBufferPointer { src in
+            if let base = src.baseAddress { channel.update(from: base, count: samples.count) }
+        }
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("il-stt-\(UUID().uuidString).caf")
         defer { try? FileManager.default.removeItem(at: tmp) }
         do {

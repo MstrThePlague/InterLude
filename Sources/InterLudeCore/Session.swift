@@ -1,6 +1,10 @@
 import Foundation
 import AVFoundation
 
+// A playing session: it follows the station's live playlist, analyses audio about a minute ahead of the listener,
+// keeps the playout clock, and answers the local server's requests with station or replacement segments.
+
+/// What a session needs to know when it starts.
 public struct SessionSettings: Sendable {
     public var station: Station
     public var bitrate = 320_000
@@ -15,6 +19,7 @@ public struct SessionSettings: Sendable {
     }
 }
 
+/// The track the station's metadata says is playing, shown in the panel.
 public struct NowPlaying: Sendable, Equatable {
     public var artist: String
     public var title: String?
@@ -22,6 +27,7 @@ public struct NowPlaying: Sendable, Equatable {
     public init(artist: String, title: String?, imageURL: URL?) { self.artist = artist; self.title = title; self.imageURL = imageURL }
 }
 
+/// A snapshot for the user interface, polled once a second.
 public struct SessionStatus: Sendable {
     public enum State: Sendable, Equatable { case starting, playing, failed(String) }
     public var state: State = .starting
@@ -60,6 +66,7 @@ public actor PlayerSession {
     private var running = false
     private var needsRestart = false
 
+    // What is known about each segment, for building replacements with matching timestamps.
     private var ptsByIndex: [Int: Int64] = [:]
     private var ccByIndex: [Int: (UInt8, UInt8)] = [:]
     private var prototype: TSSegmentInfo?
@@ -80,7 +87,7 @@ public actor PlayerSession {
     private var listenedTo: Set<UUID> = []
     private var lastMono: [Float] = []
 
-    private var tracks: [(observedAt: Date, track: NowPlaying)] = []
+    private var tracks: [(observedAt: Date, track: NowPlaying)] = []     // metadata as seen live, shown after the delay
     private var notices: [String] = []
     private var state: SessionStatus.State = .starting
     private let eventLog: URL?
@@ -160,7 +167,10 @@ public actor PlayerSession {
                         for i in (old + 1)...newEdge { g.addTask { _ = try? await store.segment(i) } }
                     }
                     await analyse(upTo: newEdge)
-                    if let p = playout { await store.evict(below: p.next - 30, above: newEdge + 5) }
+                    if let p = playout {
+                        await store.evict(below: p.next - 30, above: newEdge + 5)
+                        forgetSegments(before: p.next - 60)
+                    }
                 }
             } catch {
                 failures += 1
@@ -191,14 +201,15 @@ public actor PlayerSession {
         let have = await store?.has(idx) ?? false
         let det = detector
         let mute = settings.muteNews && !settings.profile.shadowMode
+        // A segment that could not be downloaded is replaced too, rather than leaving a hole in the playlist.
         let seg = p.tick(muteNews: mute) { !have || det.isNews(segmentStart: HLS.startTime(ofIndex: $0).timeIntervalSince1970) }
-        if !p.log.isEmpty { notices.append(contentsOf: p.log); p = p.clearingLog() }
+        notices.append(contentsOf: p.takeLog())
         if !have && seg.source == .silence { notices.append("Segment \(idx) missing; served as silence") }
-        _ = seg
     }
 
+    /// Polls the BBC's track metadata every 30 s for the now-playing line. Display only: the detector does not use it.
     private func metadataLoop() async {
-        let url = URL(string: "https://rms.api.bbc.co.uk/v2/services/\(settings.station.serviceId)/segments/latest?limit=3")!
+        guard let url = URL(string: "https://rms.api.bbc.co.uk/v2/services/\(settings.station.serviceId)/segments/latest?limit=3") else { return }
         var backoff = 30.0
         while !Task.isCancelled && running {
             do {
@@ -219,6 +230,8 @@ public actor PlayerSession {
 
     // MARK: Analysis
 
+    /// Classifies new segments in chunks of up to ten, with the previous segment as context so no window is cut short,
+    /// then lets the theme matcher and the transcriber look at the same audio.
     private func analyse(upTo end: Int) async {
         guard let store else { return }
         var i = analysedThrough + 1
@@ -336,6 +349,12 @@ public actor PlayerSession {
 
     private func setSpeechState(_ s: String) { speechState = s }
 
+    /// Drops per-segment details the player can no longer ask for.
+    private func forgetSegments(before index: Int) {
+        ptsByIndex = ptsByIndex.filter { $0.key >= index }
+        ccByIndex = ccByIndex.filter { $0.key >= index }
+    }
+
     private func remember(index: Int, info: TSSegmentInfo) {
         if let pts = info.firstPTS { ptsByIndex[index] = pts }
         let pat = info.patPacket.map { $0[3] & 0x0F } ?? 0, pmt = info.pmtPacket.map { $0[3] & 0x0F } ?? 0
@@ -359,8 +378,15 @@ public actor PlayerSession {
         ["id": b.id.uuidString, "start": b.start, "end": b.end as Any? ?? NSNull(), "evidence": b.evidence, "doubtful": b.doubtful,
          "timedOut": b.timedOut, "falseStart": b.falseStart, "station": settings.station.serviceId]
     }
+    /// Appends one JSON line to the event log. When the log passes 5 MB it is renamed to `events.1.jsonl` (replacing
+    /// the previous one) and a new log is started.
     private func write(_ o: [String: Any]) {
         guard let url = eventLog else { return }
+        if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int, size > 5_000_000 {
+            let old = url.deletingPathExtension().appendingPathExtension("1.jsonl")
+            try? FileManager.default.removeItem(at: old)
+            try? FileManager.default.moveItem(at: url, to: old)
+        }
         var o = o; o["loggedAt"] = Date().timeIntervalSince1970
         guard let d = try? JSONSerialization.data(withJSONObject: o) else { return }
         if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
@@ -368,8 +394,6 @@ public actor PlayerSession {
     }
 
     // MARK: Controls
-
-    public func setMuteNews(_ on: Bool) { settings.muteNews = on }
 
     /// Changes the sound played during bulletins, from the next segment the player fetches.
     public func setAmbience(_ url: URL?) {
@@ -394,15 +418,13 @@ public actor PlayerSession {
     public func notNews() {
         let first = lastServed + 1
         detector.rejectOpenBlock(at: HLS.startTime(ofIndex: first).timeIntervalSince1970)
-        let det = detector
-        playout?.refreshPending(from: first) { det.isNews(segmentStart: HLS.startTime(ofIndex: $0).timeIntervalSince1970) }
-        silenceCache = silenceCache.filter { $0.key < first }
+        rejudgePending()
         if let b = detector.blocks.last(where: \.falseStart) { write(["event": "falseStart", "block": blockJSON(b)]) }
         logBlocks()
     }
 
-    /// "That was news": the most recent speech block is marked as news.
-    public func thatWasNews() {
+    /// "News got through": the bulletin the listener just heard was not muted. Learn from it.
+    public func newsGotThrough() {
         guard let p = playout else { return }
         let listener = HLS.startTime(ofIndex: p.next - 1 - Playout.headStart).timeIntervalSince1970
         guard let b = detector.markNewsHeard(listenerTime: listener) else { notices.append("No speech to mark as news"); return }
@@ -501,8 +523,7 @@ public actor PlayerSession {
         disk.save(settings.station)
     }
 
-    public func profile() -> StationProfile { settings.profile }
-
+    /// "Wasn't news" on a recent block: kept in the log as a mistake, and no longer used to learn the theme.
     public func markWrong(id: UUID) {
         detector.markFalseStart(id: id)
         if let b = detector.blocks.first(where: { $0.id == id }) { write(["event": "wrong", "block": blockJSON(b)]) }
@@ -515,7 +536,8 @@ public actor PlayerSession {
 
     public func status() -> SessionStatus {
         var s = SessionStatus()
-        s.state = state; s.delaySeconds = settings.delaySeconds; s.muteNews = settings.muteNews; s.needsRestart = needsRestart; s.learningJingle = learningJingle; s.speechModel = speechState
+        s.state = state; s.delaySeconds = settings.delaySeconds; s.muteNews = settings.muteNews
+        s.needsRestart = needsRestart; s.learningJingle = learningJingle; s.speechModel = speechState
         if let p = playout {
             let playing = p.next - 1 - Playout.headStart
             s.muted = p.window.first(where: { $0.index == playing })?.source == .silence
@@ -532,13 +554,14 @@ public actor PlayerSession {
         }
         let at = Date().addingTimeInterval(-settings.delaySeconds)
         s.nowPlaying = tracks.last(where: { $0.observedAt <= at })?.track
-        s.recentBlocks = Array(detector.blocks.filter { !$0.isOpen || $0.start > 0 }.suffix(8).reversed())
+        s.recentBlocks = Array(detector.blocks.suffix(8).reversed())
         s.notices = notices
         return s
     }
 
     // MARK: Serving
 
+    /// Answers a request from the local server. `relative` is the path after the token.
     public func respond(to relative: String) async -> HTTPResponse {
         if relative == "live.m3u8" {
             guard let p = playout else { return .notFound }
@@ -584,7 +607,7 @@ public actor PlayerSession {
         }
         guard let d = replacementSegment(i, frames: frames) else { return nil }
         silenceCache[i] = d
-        if silenceCache.count > 200 { silenceCache.removeValue(forKey: silenceCache.keys.min()!) }
+        if silenceCache.count > 200, let oldest = silenceCache.keys.min() { silenceCache.removeValue(forKey: oldest) }
         return d
     }
 

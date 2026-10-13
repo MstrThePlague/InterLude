@@ -10,8 +10,8 @@ public struct TSSegmentInfo: Sendable {
 }
 
 public enum TS {
-    public static let packetSize = 188
-
+    /// Reads one segment: finds the audio stream through the PAT and PMT, joins its PES payloads and splits the
+    /// result into ADTS frames. The BBC's frames straddle PES boundaries, so frames are only split after joining.
     public static func parse(_ d: Data) -> TSSegmentInfo? {
         let b = [UInt8](d)
         guard b.count >= 188, b[0] == 0x47 else { return nil }
@@ -81,10 +81,12 @@ public enum TS {
         return TSSegmentInfo(audioPID: audioPID, frames: frames, firstPTS: firstPTS, patPacket: pat, pmtPacket: pmt)
     }
 
+    /// Sets a packet's continuity counter.
     static func setCC(_ packet: Data, _ cc: UInt8) -> Data {
         var p = packet; p[3] = (p[3] & 0xF0) | (cc & 0x0F); return p
     }
 
+    /// The five bytes a PES header uses for a 33-bit timestamp.
     static func ptsBytes(_ pts: Int64, marker: UInt8) -> [UInt8] {
         let v = pts & 0x1_FFFF_FFFF
         return [marker | UInt8((v >> 29) & 0x0E) | 1, UInt8((v >> 22) & 0xFF), UInt8(((v >> 14) & 0xFE) | 1),
@@ -92,6 +94,7 @@ public enum TS {
     }
 
     /// Builds a segment from ADTS frames. `prototype` supplies PAT and PMT packets and the audio PID.
+    /// The audio continuity counter starts at 0, as it does in every BBC segment, so joins look normal to a player.
     /// PTS of the first frame is `startPTS`; each frame lasts 1920 ticks of the 90 kHz clock (1024 samples at 48 kHz).
     public static func build(frames: [Data], startPTS: Int64, prototype: TSSegmentInfo, patCC: UInt8, pmtCC: UInt8, framesPerPES: Int = 4) -> Data {
         var out = Data()
@@ -126,7 +129,7 @@ public enum TS {
                     let need = room - take
                     if af.isEmpty {
                         af = need == 1 ? Data() : Data([0x00]) + Data(repeating: 0xFF, count: need - 2)
-                        pkt[3] = (need == 1 ? 0x30 : 0x30) | (cc & 0x0F)
+                        pkt[3] = 0x30 | (cc & 0x0F)
                         if need == 1 { pkt.append(0) } else { pkt.append(UInt8(need - 1)); pkt.append(af) }
                     } else {
                         af.append(Data(repeating: 0xFF, count: need))
@@ -138,7 +141,7 @@ public enum TS {
                     pkt[3] = 0x10 | (cc & 0x0F)
                 }
                 pkt.append(pes[pos..<(pos + take)])
-                precondition(pkt.count == 188, "bad packet \(pkt.count)")
+                assert(pkt.count == 188, "bad packet \(pkt.count)")
                 out.append(pkt)
                 pos += take; pusi = false; cc = (cc + 1) & 0x0F
             }

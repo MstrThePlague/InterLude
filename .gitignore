@@ -8,4 +8,5 @@ recordings/
 *.m4a
 !Resources/Ambience/*.m4a
 build/
-recordings/
+# Diagnostics exported from the app contain listening history
+InterLude-diagnostics*

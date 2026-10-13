@@ -1,6 +1,7 @@
 import Foundation
 
 /// Per-station settings and learned data. Stored as JSON in Application Support so the user can edit it.
+/// Jingle candidates are large (up to eight 70 s fingerprints), so they live in a binary file beside the JSON.
 public struct StationProfile: Codable, Sendable, Equatable {
     public var delaySeconds = 60.0
     public var muteNews = true
@@ -28,10 +29,19 @@ public struct StationProfile: Codable, Sendable, Equatable {
         let expected = IdentFeatures.bands
         if candidates.contains(where: { $0.first?.count != expected || $0.count < 1000 }) { candidates = []; candidateSources = [] }
         if idents.contains(where: { $0.features.first?.count != expected }) { idents = [] }
-        if candidateSources.count != candidates.count { candidateSources = Array(repeating: "", count: candidates.count) }
     }
     enum Keys: String, CodingKey {
         case delaySeconds, muteNews, favourite, shadowMode, detector, idents, candidates, candidateSources, startMinuteHistogram, bulletinSeconds
+    }
+
+    /// Everything except the candidates, which `save` writes separately.
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: Keys.self)
+        try c.encode(delaySeconds, forKey: .delaySeconds); try c.encode(muteNews, forKey: .muteNews)
+        try c.encode(favourite, forKey: .favourite); try c.encode(shadowMode, forKey: .shadowMode)
+        try c.encode(detector, forKey: .detector); try c.encode(idents, forKey: .idents)
+        try c.encode(candidateSources, forKey: .candidateSources)
+        try c.encode(startMinuteHistogram, forKey: .startMinuteHistogram); try c.encode(bulletinSeconds, forKey: .bulletinSeconds)
     }
 
     public static func url(_ serviceId: String) throws -> URL {
@@ -40,8 +50,19 @@ public struct StationProfile: Codable, Sendable, Equatable {
         return dir.appendingPathComponent("\(serviceId).json")
     }
 
+    static func candidatesURL(_ serviceId: String) throws -> URL {
+        try url(serviceId).deletingPathExtension().appendingPathExtension("candidates")
+    }
+
     public static func load(_ station: Station) -> StationProfile {
-        if let u = try? url(station.serviceId), let d = try? Data(contentsOf: u), let p = try? JSONDecoder().decode(StationProfile.self, from: d) { return p }
+        if let u = try? url(station.serviceId), let d = try? Data(contentsOf: u), var p = try? JSONDecoder().decode(StationProfile.self, from: d) {
+            // Older profiles kept candidates in the JSON; newer ones keep them in the binary file.
+            if p.candidates.isEmpty, let cu = try? candidatesURL(station.serviceId), let blob = try? Data(contentsOf: cu) {
+                p.candidates = CandidateFile.decode(blob)
+            }
+            if p.candidateSources.count != p.candidates.count { p.candidateSources = Array(repeating: "", count: p.candidates.count) }
+            return p
+        }
         var p = StationProfile()
         if station.kind == .speech { p.muteNews = false }
         if station.serviceId == "bbc_radio_two" {      // Radio 2's bulletins and speech content have not been measured
@@ -54,6 +75,7 @@ public struct StationProfile: Codable, Sendable, Equatable {
         guard let u = try? StationProfile.url(station.serviceId) else { return }
         let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]
         try? e.encode(self).write(to: u, options: .atomic)
+        if let cu = try? StationProfile.candidatesURL(station.serviceId) { try? CandidateFile.encode(candidates).write(to: cu, options: .atomic) }
     }
 
     /// Learns the bulletin's start minute and length after a confirmed bulletin.
@@ -70,8 +92,46 @@ public struct StationProfile: Codable, Sendable, Equatable {
     }
 }
 
-/// A stored news ident: log-band features of the first seconds of a bulletin.
+/// A learned news theme: four seconds of log-band features, and the score a match must reach.
 public struct IdentReference: Codable, Sendable, Equatable {
     public var features: [[Float]]
     public var threshold: Float = IdentMatcher.defaultThreshold
+}
+
+/// The binary layout of a `.candidates` file: a count, then for each candidate its frame count, its band count and
+/// the features as little-endian Float32. About 1.7 MB for eight candidates, against several MB of JSON.
+enum CandidateFile {
+    static func encode(_ candidates: [[[Float]]]) -> Data {
+        var d = Data()
+        func put(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
+        put(UInt32(candidates.count))
+        for c in candidates {
+            put(UInt32(c.count)); put(UInt32(c.first?.count ?? 0))
+            for frame in c { for v in frame { put(v.bitPattern) } }
+        }
+        return d
+    }
+
+    static func decode(_ d: Data) -> [[[Float]]] {
+        var pos = 0
+        func get() -> UInt32? {
+            guard pos + 4 <= d.count else { return nil }
+            let v = d[d.startIndex + pos..<d.startIndex + pos + 4].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+            pos += 4
+            return UInt32(littleEndian: v)
+        }
+        guard let n = get() else { return [] }
+        var out: [[[Float]]] = []
+        for _ in 0..<n {
+            guard let frames = get(), let bands = get() else { return [] }
+            var c: [[Float]] = []
+            for _ in 0..<frames {
+                var f: [Float] = []
+                for _ in 0..<bands { guard let v = get() else { return [] }; f.append(Float(bitPattern: v)) }
+                c.append(f)
+            }
+            out.append(c)
+        }
+        return out
+    }
 }

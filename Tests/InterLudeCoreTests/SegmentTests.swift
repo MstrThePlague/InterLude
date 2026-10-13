@@ -80,3 +80,17 @@ func syntheticPrototype() -> TSSegmentInfo {
     #expect(snr(3.5, 6.3, lag: lag) > 15)                // first segment, after its fade-in
     #expect(snr(12.9, 15, lag: lag) > 15)                // third segment, before its fade-out
 }
+
+@Test func jingleCandidatesSurviveTheBinaryFile() {
+    let a: [[Float]] = (0..<5).map { i in (0..<32).map { Float(i) * 0.5 - Float($0) / 7 } }
+    let b: [[Float]] = [[1, -2, .pi], [0, 0, 0]]
+    #expect(CandidateFile.decode(CandidateFile.encode([a, b])) == [a, b])
+    #expect(CandidateFile.decode(Data([1, 0])) == [])               // truncated files read as empty, not a crash
+}
+
+@Test func profileJSONLeavesCandidatesOut() throws {
+    var p = StationProfile()
+    p.candidates = [[[1, 2, 3]]]
+    let json = String(decoding: try JSONEncoder().encode(p), as: UTF8.self)
+    #expect(!json.contains("\"candidates\""))
+}

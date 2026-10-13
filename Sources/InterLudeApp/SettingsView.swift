@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import InterLudeCore
 
+/// Settings, mostly per station: delay, longest mute, bulletin minutes and how detection behaves.
 struct SettingsView: View {
     @Bindable var model: AppModel
     @State private var stationID: String = ""
