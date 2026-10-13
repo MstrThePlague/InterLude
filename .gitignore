@@ -6,5 +6,6 @@ recordings/
 *.ts
 *.aac
 *.m4a
+!Resources/Ambience/*.m4a
 build/
 recordings/

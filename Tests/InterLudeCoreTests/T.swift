@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import AVFoundation
 @testable import InterLudeCore
 
 func syntheticPrototype() -> TSSegmentInfo {
@@ -37,4 +38,45 @@ func syntheticPrototype() -> TSSegmentInfo {
     guard let d = FileManager.default.contents(atPath: "/tmp/seg0.ts") else { return }
     let info = try #require(TS.parse(d))
     print("REAL frames", info.frames.count, "pid", info.audioPID, "pts", info.firstPTS ?? -1, info.frames.prefix(3).map { $0.count })
+}
+
+@Test func ambienceFadesAndJoins() throws {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let amb = try Ambience(url: root.appendingPathComponent("Resources/Ambience/ocean.m4a"))
+    // A three-segment mute: fade in, steady, fade out.
+    let i = 270_000_000
+    var adts = Data()
+    for (k, fi, fo) in [(i, true, false), (i + 1, false, false), (i + 2, false, true)] {
+        let frames = try amb.frames(forSegment: k, fadeIn: fi, fadeOut: fo)
+        #expect(frames.count == 300)
+        for f in frames { adts.append(Silence.adts(raw: f, like: nil)) }
+    }
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("ambience_test.aac")
+    try adts.write(to: url)
+    let file = try AVAudioFile(forReading: url)
+    let buf = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)))
+    try file.read(into: buf)
+    let x = buf.floatChannelData![0], n = Int(buf.frameLength)
+    func rms(_ from: Double, _ to: Double) -> Float {
+        let a = Int(from * 48000), b = min(n, Int(to * 48000))
+        var s: Float = 0; for j in a..<b { s += x[j] * x[j] }; return (s / Float(b - a)).squareRoot()
+    }
+    let steady = rms(7, 12)
+    #expect(steady > 0.01)
+    #expect(rms(0, 0.3) < steady * 0.1)                  // starts from silence
+    #expect(rms(18.9, 19.2) < steady * 0.1)              // ends in silence
+    // Separately encoded segments line up: each one matches the source loop at the same lag.
+    let loopFrames = amb.loop.count / 2
+    func snr(_ from: Double, _ to: Double, lag: Int) -> Double {
+        var sig = 0.0, err = 0.0
+        for j in Int(from * 48000)..<Int(to * 48000) {
+            let ref = Double(amb.loop[2 * ((i * 300 * 1024 + j - lag) % loopFrames)])
+            sig += ref * ref; err += (Double(x[j]) - ref) * (Double(x[j]) - ref)
+        }
+        return 10 * log10(sig / err)
+    }
+    let lag = (-3000...3000).max { snr(8, 8.1, lag: $0) < snr(8, 8.1, lag: $1) }!
+    #expect(snr(7, 12, lag: lag) > 15)
+    #expect(snr(3.5, 6.3, lag: lag) > 15)                // first segment, after its fade-in
+    #expect(snr(12.9, 15, lag: lag) > 15)                // third segment, before its fade-out
 }

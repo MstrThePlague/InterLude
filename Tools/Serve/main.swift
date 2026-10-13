@@ -7,6 +7,8 @@ let cat = try Catalogue.load(from: URL(fileURLWithPath: "Data/stations.json"))
 guard a.count >= 2, let st = cat.station(a[1]) else { print("usage: serve <serviceId> [delaySeconds] [port]"); exit(2) }
 var settings = SessionSettings(station: st, profile: StationProfile.load(st))
 if a.count >= 3, let d = Double(a[2]) { settings.delaySeconds = d }
+// AMBIENCE=ocean (or stream, birds) plays that sound over bulletins instead of silence.
+if let name = ProcessInfo.processInfo.environment["AMBIENCE"] { settings.ambience = URL(fileURLWithPath: "Resources/Ambience/\(name).m4a") }
 let port = a.count >= 4 ? UInt16(a[3]) ?? 8642 : 8642
 let token = "test"
 let session = PlayerSession(catalogue: cat, settings: settings, token: token,
