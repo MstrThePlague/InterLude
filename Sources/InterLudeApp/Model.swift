@@ -38,6 +38,7 @@ actor SessionHolder {
     func respond(_ path: String) async -> HTTPResponse { await session?.respond(to: path) ?? .notFound }
 }
 
+/// Everything the panel and Settings show, and the actions they take. One instance for the life of the app.
 @MainActor @Observable
 final class AppModel {
     static let shared = AppModel()
@@ -50,7 +51,13 @@ final class AppModel {
     var volume: Double { didSet { UserDefaults.standard.set(volume, forKey: "volume"); applyVolume() } }
 
     // Settings
-    var port: Int { didSet { UserDefaults.standard.set(port, forKey: "port") } }
+    /// The local server's port. Takes effect after a relaunch, since the server keeps running between sessions.
+    var port: Int {
+        didSet {
+            if !(1024...65535).contains(port) { port = min(max(port, 1024), 65535) }
+            UserDefaults.standard.set(port, forKey: "port")
+        }
+    }
     var bitrate: Int { didSet { UserDefaults.standard.set(bitrate, forKey: "bitrate") } }
     var keepAwake: Bool { didSet { UserDefaults.standard.set(keepAwake, forKey: "keepAwake"); updateActivity() } }
     /// What plays during muted bulletins: "silence" or the name of a sound in Resources/Ambience.
@@ -156,9 +163,10 @@ final class AppModel {
         showWelcome = !d.bool(forKey: "welcomeDismissed")
         showRecent = d.bool(forKey: "showRecent")
         let args = CommandLine.arguments
-        if let i = args.firstIndex(of: "--token"), i + 1 < args.count { token = args[i + 1] }     // for testing
+        // The token prefixes every URL the local server answers. `--token` fixes it for scripted tests.
+        if let i = args.firstIndex(of: "--token"), i + 1 < args.count { token = args[i + 1] }
         else if let t = d.string(forKey: "token") { token = t } else {
-            token = String((0..<12).map { _ in "abcdefghijklmnopqrstuvwxyz0123456789".randomElement()! })
+            token = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
             d.set(token, forKey: "token")
         }
         startAtLogin = SMAppService.mainApp.status == .enabled
@@ -183,7 +191,7 @@ final class AppModel {
         switch kind {
         case "muted": isPlaying = true; status.muted = true; status.muteElapsed = 83; showRecentDemo()
         case "error": errorText = "Radio 6 Music: HTTP 404. The pool ID (81827798) has probably changed."; stationFailed = true
-        case "casterror": errorText = "Cast connection lost. Kitchen B&W Speaker stopped responding."; castFailed = true
+        case "casterror": errorText = "Cast connection lost. Kitchen speaker stopped responding."; castFailed = true
         case "upcoming": isPlaying = true; status.muteStartsIn = 38
         case "welcome": showWelcome = true
         case "welcome-dismiss":      // closes the note after 3 s, to check the window shrinks
@@ -361,12 +369,15 @@ final class AppModel {
         server = s
     }
 
-    private func playlistURL(host: String) -> URL { URL(string: "http://\(host):\(port)/\(token)/live.m3u8")! }
+    private func playlistURL(host: String) throws -> URL {
+        guard let u = URL(string: "http://\(host):\(port)/\(token)/live.m3u8") else { throw CastError.rejected("bad playlist address") }
+        return u
+    }
 
     private func startOutput(_ output: Output, station: Station) async throws {
         switch output {
         case .thisMac:
-            let p = AVPlayer(url: playlistURL(host: "127.0.0.1"))
+            let p = AVPlayer(url: try playlistURL(host: "127.0.0.1"))
             p.automaticallyWaitsToMinimizeStalling = true
             p.volume = Float(volume); p.play(); player = p
         case .cast(let device):
@@ -374,7 +385,7 @@ final class AppModel {
             lastAddress = ip
             let c = DirectCastController(device: device)
             try await c.connect()
-            try await c.load(url: playlistURL(host: ip), title: station.name)
+            try await c.load(url: try playlistURL(host: ip), title: station.name)
             await c.setVolume(volume)
             cast = c
             castEvents = Task { [weak self] in
@@ -413,14 +424,13 @@ final class AppModel {
 
     /// Reload the stream on the Cast device if the Mac's address changes.
     private func watchNetwork() {
-        guard case .cast(let device) = selectedOutput else { return }
+        guard selectedOutput.isCast else { return }
         let m = NWPathMonitor()
         m.pathUpdateHandler = { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.isPlaying, let ip = LocalServer.lanAddress(), ip != self.lastAddress, let c = self.cast, let st = self.selectedStation else { return }
                 self.lastAddress = ip
-                try? await c.load(url: self.playlistURL(host: ip), title: st.name)
-                _ = device
+                if let url = try? self.playlistURL(host: ip) { try? await c.load(url: url, title: st.name) }
             }
         }
         m.start(queue: .main); pathMonitor = m
@@ -459,9 +469,9 @@ final class AppModel {
         }
     }
 
-    func thatWasNews() {
+    func newsGotThrough() {
         Task {
-            await session?.thatWasNews()
+            await session?.newsGotThrough()
             profiles[selectedStationID] = selectedStation.map { StationProfile.load($0) } ?? profile(selectedStationID)
         }
     }

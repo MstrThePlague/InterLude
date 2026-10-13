@@ -1,6 +1,8 @@
 import SwiftUI
 import InterLudeCore
 
+/// The menu bar panel: what's playing, play and volume, station and speaker, news muting, and recent mutes.
+/// The same view appears in an ordinary window on first launch and when the app is opened again.
 struct PanelView: View {
     @Bindable var model: AppModel
     @Environment(\.openWindow) private var openWindow
@@ -332,7 +334,7 @@ private struct NewsCard: View {
                 }
                 Divider().padding(.horizontal, 12).opacity(model.status.muted || model.status.muteStartsIn != nil ? 0 : 1)
                 HStack {
-                    Button { model.thatWasNews() } label: { Label("News got through", systemImage: "exclamationmark.bubble") }
+                    Button { model.newsGotThrough() } label: { Label("News got through", systemImage: "exclamationmark.bubble") }
                         .buttonStyle(.borderless).controlSize(.small)
                         .help("Press after a bulletin that wasn't muted. InterLude learns from it.")
                     Spacer()

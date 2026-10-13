@@ -1,6 +1,7 @@
 import Foundation
 import AudioToolbox
 
+/// AAC encoding with the system encoder: silent frames for muted segments, and the frames of a chosen sound.
 public enum Silence {
     /// One silent AAC-LC frame (1024 samples, 48 kHz, stereo) in raw form, from the system encoder.
     public static func rawFrame() throws -> Data {
@@ -43,13 +44,15 @@ public enum Silence {
                 var abl = AudioBufferList(mNumberBuffers: 1, mBuffers: AudioBuffer(mNumberChannels: 2, mDataByteSize: UInt32(raw.count), mData: raw.baseAddress))
                 return withExtendedLifetime(feed) {
                     AudioConverterFillComplexBuffer(conv, { _, ioPackets, ioData, _, userData in
-                        let f = Unmanaged<Feed>.fromOpaque(userData!).takeUnretainedValue()
+                        guard let userData else { return -1 }
+                        let f = Unmanaged<Feed>.fromOpaque(userData).takeUnretainedValue()
+                        guard let base = f.samples.baseAddress else { return -1 }
                         let n = min(Int(ioPackets.pointee), f.frameCount - f.pos)
                         ioPackets.pointee = UInt32(max(n, 0))
                         ioData.pointee.mNumberBuffers = 1
                         ioData.pointee.mBuffers.mNumberChannels = 2
                         ioData.pointee.mBuffers.mDataByteSize = UInt32(max(n, 0) * 8)
-                        ioData.pointee.mBuffers.mData = n > 0 ? UnsafeMutableRawPointer(f.samples.baseAddress! + f.pos * 2) : nil
+                        ioData.pointee.mBuffers.mData = n > 0 ? UnsafeMutableRawPointer(base + f.pos * 2) : nil
                         f.pos += max(n, 0)
                         return noErr                          // zero packets marks the end, so the encoder flushes
                     }, Unmanaged.passUnretained(feed).toOpaque(), &packets, &abl, &pd)

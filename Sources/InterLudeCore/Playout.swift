@@ -1,5 +1,6 @@
 import Foundation
 
+/// Whether a listed segment is the station's own audio or a replacement (silence or the chosen sound).
 public enum SegmentSource: Sendable, Equatable { case station, silence }
 
 public struct ListedSegment: Sendable, Equatable {
@@ -7,7 +8,10 @@ public struct ListedSegment: Sendable, Equatable {
     public var source: SegmentSource
 }
 
-/// Holds the fixed delay and the sliding playlist window. No I/O: the caller ticks it every 6.4 seconds.
+/// Holds the fixed delay and the sliding playlist window. No I/O and no clock of its own: the session ticks it
+/// every 6.4 seconds, which keeps it easy to test.
+///
+/// A muted bulletin is replaced segment for segment, so the delay behind live never changes.
 public struct Playout: Sendable {
     public let delaySegments: Int
     public let windowSize: Int
@@ -34,6 +38,7 @@ public struct Playout: Sendable {
         let wantMute = muteNews && isNews(next)
         var source = SegmentSource.station
         if wantMute {
+            // A safety net in case the end of a bulletin is never recognised.
             if mutedRun >= maxMuteSegments { log.append("longest mute reached at \(next)") }
             else { source = .silence; mutedRun += 1 }
         } else { mutedRun = 0 }
@@ -44,17 +49,12 @@ public struct Playout: Sendable {
         return seg
     }
 
-    /// Re-judges segments the player has not fetched yet, after the timeline changed ("Not news").
+    /// Re-judges segments the player has not fetched yet, after the timeline changed ("Not news", the news theme,
+    /// the newsreader's sign-off). Segments already fetched cannot be changed.
     public mutating func refreshPending(from index: Int, isNews: (Int) -> Bool) {
         for i in window.indices where window[i].index >= index { window[i].source = isNews(window[i].index) ? .silence : .station }
     }
 
-    public func clearingLog() -> Playout { var c = self; c.log = []; return c }
-
-    public var isMuted: Bool { window.last?.source == .silence }
-    /// Segments still to be fetched by the player that may be unmuted by "Not news".
-    public mutating func unmutePending(from index: Int) {
-        for i in window.indices where window[i].index >= index { window[i].source = .station }
-        mutedRun = 0
-    }
+    /// Returns and clears anything worth telling the user about.
+    public mutating func takeLog() -> [String] { defer { log = [] }; return log }
 }

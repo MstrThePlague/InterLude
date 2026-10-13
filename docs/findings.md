@@ -51,7 +51,7 @@ Endpoint `https://rms.api.bbc.co.uk/v2/services/{serviceId}/segments/latest?limi
 
 ### 0.4 Cast: discovery works, nothing loaded yet
 
-- Bonjour discovery from a command-line tool found 6 services: **All speakers** (Google Cast Group) and five Chromecast Audio devices (JT Office, Kitchen B&W Speaker, Kraftwerk speaker, Master Bedroom, Vintage Hi-Fi). Names and models come from the `fn` and `md` TXT keys as specified.
+- Bonjour discovery from a command-line tool found 6 services: **All speakers** (Google Cast Group) and five Chromecast Audio devices. Names and models come from the `fn` and `md` TXT keys as specified.
 - The direct Cast v2 sender (`DirectCastController`: TLS, protobuf framing, heartbeat, launch of app `CC1AD845`, LOAD with `hlsSegmentFormat` tried as `ts_aac`, `ts`, then omitted) is written and its message framing is unit-tested, but **has not been run against a device**. No playback was started on your speakers without your say-so.
 - **Owner result (12 October 2026):** playback to a single Chromecast Audio (the one in the office) works through the app. Not yet recorded: which `hlsSegmentFormat` was accepted (the app tries `ts_aac`, `ts`, then none, and does not log which), how a muted bulletin sounds on the device, and the group test.
 - Silent-segment template: built at run time from the system AAC encoder, wrapped in an ADTS header copied from a real frame. The 300-frame silent segment decodes to −91 dB, with no timestamp break. Verified with ffprobe and ffmpeg.

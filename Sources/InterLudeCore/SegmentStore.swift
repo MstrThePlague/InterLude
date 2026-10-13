@@ -1,6 +1,6 @@
 import Foundation
 
-public enum FetchError: Error { case status(Int), notHTTP, unhealthy(String) }
+public enum FetchError: Error { case status(Int), notHTTP, badURL, unhealthy(String) }
 
 /// Downloads and caches station segments on disk. At most `maxInFlight` downloads run at once.
 public actor SegmentStore {
@@ -12,7 +12,6 @@ public actor SegmentStore {
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private var tasks: [Int: Task<Data, Error>] = [:]
     private let session: URLSession
-    private(set) var failed: Set<Int> = []
 
     /// `base` is the playlist's directory; `prefix` the file name before the index, e.g. "bbc_6music-audio=320000-".
     public init(directory: URL, base: URL, prefix: String, maxInFlight: Int = 4) {
@@ -44,26 +43,24 @@ public actor SegmentStore {
         if waiters.isEmpty { inFlight -= 1 } else { waiters.removeFirst().resume() }
     }
 
+    /// Three attempts with a doubling pause, so a segment that is briefly unavailable is not lost.
     private func download(_ i: Int) async throws -> Data {
         await acquire(); defer { release() }
-        let url = URL(string: base.absoluteString + prefix + "\(i).ts")!
+        guard let url = URL(string: base.absoluteString + prefix + "\(i).ts") else { throw FetchError.badURL }
         var delay = 0.5
         var lastError: Error = FetchError.notHTTP
-        for attempt in 0..<3 {
+        for _ in 0..<3 {
             do {
                 let (d, r) = try await session.data(from: url)
                 guard let h = r as? HTTPURLResponse else { throw FetchError.notHTTP }
                 guard h.statusCode == 200 else { throw FetchError.status(h.statusCode) }
                 try d.write(to: path(i), options: .atomic)
-                failed.remove(i)
                 return d
             } catch {
                 lastError = error
-                if case FetchError.status(let s) = error, s == 403 || s == 404, attempt == 0, i > 0 { /* may be too new */ }
                 try? await Task.sleep(for: .seconds(delay)); delay *= 2
             }
         }
-        failed.insert(i)
         throw lastError
     }
 
@@ -77,10 +74,14 @@ public actor SegmentStore {
         }
     }
 
-    public func clear() { try? FileManager.default.removeItem(at: directory); try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
+    public func clear() {
+        try? FileManager.default.removeItem(at: directory)
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
 }
 
-/// Fetches the live playlist, trying HTTPS then HTTP.
+/// Fetches the live playlist, trying HTTPS then HTTP (hosts have differed in which they accept).
+/// A 403 or 404 almost always means the station's pool ID has changed, so the error says so.
 public struct PlaylistClient: Sendable {
     public init() {}
     public func fetch(catalogue: Catalogue, station: Station, bitrate: Int, norewind: Bool = true) async throws -> (ParsedPlaylist, base: URL) {
