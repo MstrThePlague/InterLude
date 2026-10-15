@@ -54,11 +54,13 @@ struct SpectrumBackdrop: View {
         }
     }
 
-    /// 0...1, a lively but smooth blend of sines with a gentle bass-heavy tilt.
+    /// 0...1, with a gentle bass-heavy tilt. Every bar bounces at its own rate and phase, so nothing travels
+    /// along the row: each stays in its column, as on a hardware analyser.
     private func decorative(bar i: Int, t: Double) -> Double {
-        let f = Double(i)
-        let v = 0.5 + 0.28 * sin(t * 2.1 + f * 0.7) + 0.17 * sin(t * 3.4 + f * 1.9 + 1.3) + 0.2 * sin(t * 0.8 + f * 0.31)
-        return max(0.04, min(1, v * (1.0 - 0.45 * f / Double(bars))))
+        func unit(_ k: Double) -> Double { let x = sin(Double(i + 1) * k) * 43758.5453; return x - x.rounded(.down) }
+        let v = 0.5 + 0.3 * sin(t * (1.6 + 2.2 * unit(12.9898)) + 6.28 * unit(78.233))
+                    + 0.2 * sin(t * (3.1 + 3.0 * unit(39.346)) + 6.28 * unit(11.135))
+        return max(0.04, min(1, v * (1.0 - 0.45 * Double(i) / Double(bars))))
     }
 }
 
