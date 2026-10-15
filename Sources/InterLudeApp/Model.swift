@@ -81,6 +81,9 @@ final class AppModel {
     // State
     var isPlaying = false
     var isStarting = false
+    /// Bar heights for what is being heard right now, when this Mac is the output. Nil for Cast, where the
+    /// backdrop falls back to its decorative animation.
+    var spectrumSampler: (@MainActor () -> [Float]?)?
     var status = SessionStatus()
     var errorText: String?
     var stationFailed = false
@@ -321,7 +324,7 @@ final class AppModel {
         timer?.cancel(); timer = nil
         pathMonitor?.cancel(); pathMonitor = nil
         castEvents?.cancel(); castEvents = nil
-        player?.pause(); player = nil
+        player?.pause(); player = nil; spectrumSampler = nil
         if let c = cast { await c.stop(); cast = nil }
         await session?.stop(); session = nil
         await holder.set(nil)
@@ -392,6 +395,13 @@ final class AppModel {
             let p = AVPlayer(url: try playlistURL(host: "127.0.0.1"))
             p.automaticallyWaitsToMinimizeStalling = true
             p.volume = Float(volume); p.play(); player = p
+            if let tape = session?.tape {
+                spectrumSampler = { [weak p] in
+                    guard let p else { return nil }
+                    let t = p.currentTime().seconds
+                    return t.isFinite ? tape.bands(at: t) : nil
+                }
+            }
         case .cast(let device):
             guard let ip = LocalServer.lanAddress() else { throw CastError.rejected("the Mac has no network address") }
             lastAddress = ip

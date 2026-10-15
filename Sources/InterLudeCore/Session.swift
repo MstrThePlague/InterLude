@@ -52,6 +52,8 @@ public struct SessionStatus: Sendable {
 /// One playing session: ingest, analysis, playout clock, and the responses the local server gives.
 public actor PlayerSession {
     public let token: String
+    /// What the player is being served, as bar heights by playback time, for the panel's backdrop.
+    public nonisolated let tape = SpectrumTape()
     private let catalogue: Catalogue
     private var settings: SessionSettings
     private var store: SegmentStore?
@@ -582,12 +584,19 @@ public actor PlayerSession {
         if relative.hasPrefix("seg/"), relative.hasSuffix(".ts"), let i = Int(relative.dropFirst(4).dropLast(3)) {
             lastServed = max(lastServed, i)
             let listed = playout?.window.first(where: { $0.index == i })
-            if listed?.source == .silence, let d = mutedSegment(i) {
-                return HTTPResponse(contentType: "video/mp2t", body: d)
-            }
-            if let d = await store?.cached(i) { return HTTPResponse(contentType: "video/mp2t", body: d) }
-            if let d = replacementSegment(i, frames: silentFrame.map { Array(repeating: $0, count: 300) }) {
-                return HTTPResponse(contentType: "video/mp2t", body: d)
+            var body: Data?
+            if listed?.source == .silence, let d = mutedSegment(i) { body = d }
+            else if let d = await store?.cached(i) { body = d }
+            else if let d = replacementSegment(i, frames: silentFrame.map { Array(repeating: $0, count: 300) }) { body = d }
+            if let body {
+                if tape.claim(i) {
+                    let tape = tape
+                    Task.detached(priority: .utility) {
+                        guard let info = TS.parse(body), let pcm = try? Decode.pcm(frames: info.frames) else { return }
+                        tape.record(i, Spectrum.frames(pcm))
+                    }
+                }
+                return HTTPResponse(contentType: "video/mp2t", body: body)
             }
         }
         return .notFound
