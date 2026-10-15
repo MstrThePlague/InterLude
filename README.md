@@ -8,7 +8,7 @@ I wanted 6 Music in the background all day without the hourly news, so it is tun
 
 ## What it does
 
-- Plays any BBC station a fixed time behind live (60 seconds by default).
+- Plays any of 64 BBC stations (national, nations and local) a fixed time behind live (60 seconds by default).
 - Recognises each bulletin as it arrives and replaces it with silence, or with ocean waves, a woodland stream or birdsong if you prefer. When the bulletin ends, the station comes back.
 - Plays on the Mac, on a Chromecast, or on a Cast group, and you can switch speaker while it plays.
 - Learns a station's news theme from the last few hours of broadcast, the first time you play it (so far proven on 6 Music).
