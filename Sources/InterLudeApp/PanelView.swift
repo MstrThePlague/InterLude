@@ -26,6 +26,9 @@ struct PanelView: View {
         .padding(16)
         .frame(width: 340)
         .fixedSize(horizontal: false, vertical: true)
+        .background(alignment: .bottom) {
+            SpectrumBackdrop(active: model.isPlaying, muted: model.status.muted)
+        }
         .fitsHostWindow()
         .animation(.snappy(duration: 0.25), value: model.status.muted)
         .animation(.snappy(duration: 0.25), value: model.status.muteStartsIn == nil)
