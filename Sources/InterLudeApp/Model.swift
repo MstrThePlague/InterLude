@@ -81,8 +81,8 @@ final class AppModel {
     // State
     var isPlaying = false
     var isStarting = false
-    /// Bar heights for what is being heard right now, when this Mac is the output. Nil for Cast, where the
-    /// backdrop falls back to its decorative animation.
+    /// Bar heights for what is being heard right now, from the Mac's player or the Cast device's reported position.
+    /// Nil when neither is playing, where the backdrop falls back to its decorative animation.
     var spectrumSampler: (@MainActor () -> [Float]?)?
     var status = SessionStatus()
     var errorText: String?
@@ -410,6 +410,9 @@ final class AppModel {
             try await c.load(url: try playlistURL(host: ip), title: station.name)
             await c.setVolume(volume)
             cast = c
+            if let tape = session?.tape {
+                spectrumSampler = { [weak c] in c?.playbackSeconds.flatMap { tape.bands(at: $0) } }
+            }
             castEvents = Task { [weak self] in
                 for await e in c.events {
                     guard let self else { return }

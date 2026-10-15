@@ -22,6 +22,8 @@ public protocol CastController: AnyObject, Sendable {
     func setVolume(_ level: Double) async
     func stop() async
     var events: AsyncStream<CastEvent> { get }
+    /// Seconds into the stream the device is playing now, when it has said. Nil until its first status.
+    var playbackSeconds: Double? { get }
 }
 
 public enum CastError: Error, LocalizedError {
@@ -139,6 +141,9 @@ public final class DirectCastController: CastController, @unchecked Sendable {
     private var sessionId: String?
     private var heartbeat: DispatchSourceTimer?
     private var launched = false
+    private let positionLock = NSLock()
+    private var reported: (time: Double, playing: Bool, at: Date)?
+    private var statusTimer: DispatchSourceTimer?
     private let eventCont: AsyncStream<CastEvent>.Continuation
     public let events: AsyncStream<CastEvent>
 
@@ -196,11 +201,30 @@ public final class DirectCastController: CastController, @unchecked Sendable {
             do {
                 let r = try await request(NS.media, to: t, ["type": "LOAD", "sessionId": sid, "media": media, "autoplay": true, "currentTime": 0], timeout: 20)
                 if let type = r["type"] as? String, type == "LOAD_FAILED" || type == "INVALID_REQUEST" { throw CastError.rejected(type) }
+                startStatusPolling()
                 return
             } catch { lastError = error }
         }
         eventCont.yield(.loadFailed(lastError.localizedDescription))
         throw lastError
+    }
+
+    /// The device's last reported position, carried forward by our own clock while it is playing.
+    public var playbackSeconds: Double? {
+        positionLock.lock(); defer { positionLock.unlock() }
+        guard let r = reported else { return nil }
+        return r.playing ? r.time + Date().timeIntervalSince(r.at) : r.time
+    }
+
+    /// Asks the receiver where it is once a second. The answers arrive as MEDIA_STATUS messages.
+    private func startStatusPolling() {
+        let t = DispatchSource.makeTimerSource(queue: queue)
+        t.schedule(deadline: .now() + 1, repeating: 1)
+        t.setEventHandler { [weak self] in
+            guard let self, let tid = self.transportId else { return }
+            self.send(NS.media, to: tid, ["type": "GET_STATUS", "requestId": self.nextIdUnlocked()])
+        }
+        t.resume(); statusTimer = t
     }
 
     public func setVolume(_ level: Double) async {
@@ -211,6 +235,7 @@ public final class DirectCastController: CastController, @unchecked Sendable {
         if let sid = sessionId { send(NS.receiver, to: "receiver-0", ["type": "STOP", "sessionId": sid, "requestId": nextId()]) }
         try? await Task.sleep(for: .milliseconds(200))
         heartbeat?.cancel(); heartbeat = nil
+        statusTimer?.cancel(); statusTimer = nil
         conn?.cancel(); conn = nil
         eventCont.finish()
     }
@@ -218,6 +243,8 @@ public final class DirectCastController: CastController, @unchecked Sendable {
     // MARK: Plumbing
 
     private func nextId() -> Int { queue.sync { requestId += 1; return requestId } }
+    /// For callers already running on `queue`, where `sync` would deadlock.
+    private func nextIdUnlocked() -> Int { requestId += 1; return requestId }
 
     private func send(_ ns: String, to dest: String, _ obj: [String: Any]) {
         guard let d = try? JSONSerialization.data(withJSONObject: obj), let s = String(data: d, encoding: .utf8) else { return }
@@ -274,6 +301,11 @@ public final class DirectCastController: CastController, @unchecked Sendable {
                 if !apps.contains(where: { $0["appId"] as? String == Self.appId && $0["sessionId"] as? String == sessionId }) { eventCont.yield(.takenOver) }
             }
             if m.namespace == NS.receiver, type == "RECEIVER_STATUS" { launched = true }
+            if m.namespace == NS.media, type == "MEDIA_STATUS", let st = (o["status"] as? [[String: Any]])?.first,
+               let time = (st["currentTime"] as? NSNumber)?.doubleValue {
+                let state = st["playerState"] as? String
+                positionLock.lock(); reported = (time, state == "PLAYING", Date()); positionLock.unlock()
+            }
             if let id = o["requestId"] as? Int, id != 0, let w = waiters.removeValue(forKey: id) { w(.success(JSONBox(o))) }
         }
     }
