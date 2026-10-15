@@ -197,9 +197,13 @@ private struct StationMenu: View {
         Menu {
             if !model.favouriteStations.isEmpty {
                 Section("Favourites") { ForEach(model.favouriteStations) { item($0) } }
-                Section("All stations") { ForEach(model.otherStations) { item($0) } }
-            } else {
-                ForEach(model.stations) { item($0) }
+            }
+            ForEach(model.otherStationGroups, id: \.name) { group in
+                if let name = group.name {
+                    Section(name) { ForEach(group.stations) { item($0) } }
+                } else {
+                    ForEach(group.stations) { item($0) }
+                }
             }
             Divider()
             let fav = model.profile(model.selectedStationID).favourite

@@ -14,6 +14,8 @@ public struct Station: Codable, Sendable, Hashable, Identifiable {
     /// Optional presentation: a one or two character badge and a colour as hex, for the panel.
     public var short: String?
     public var colour: String?
+    /// Optional heading the station appears under in the station menu, such as "National" or "Local".
+    public var group: String?
     public var id: String { serviceId }
     public init(name: String, serviceId: String, poolId: String, kind: StationKind) {
         self.name = name; self.serviceId = serviceId; self.poolId = poolId; self.kind = kind
