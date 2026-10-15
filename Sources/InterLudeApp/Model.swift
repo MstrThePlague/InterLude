@@ -218,7 +218,11 @@ final class AppModel {
                     guard let m = b.station(c.stations[i].serviceId) else { continue }
                     if c.stations[i].short == nil { c.stations[i].short = m.short }
                     if c.stations[i].colour == nil { c.stations[i].colour = m.colour }
+                    if c.stations[i].group == nil { c.stations[i].group = m.group }
                 }
+                // Stations added since the copy was made.
+                let known = Set(c.stations.map(\.serviceId))
+                c.stations += b.stations.filter { !known.contains($0.serviceId) }
             }
             catalogue = c; stations = c.stations
             for s in c.stations { profiles[s.serviceId] = StationProfile.load(s) }
@@ -233,6 +237,14 @@ final class AppModel {
     }
     var favouriteStations: [Station] { stations.filter { profile($0.serviceId).favourite } }
     var otherStations: [Station] { stations.filter { !profile($0.serviceId).favourite } }
+    /// Non-favourite stations under their group headings, in the order the groups first appear.
+    var otherStationGroups: [(name: String?, stations: [Station])] {
+        var groups: [(name: String?, stations: [Station])] = []
+        for s in otherStations {
+            if let i = groups.firstIndex(where: { $0.name == s.group }) { groups[i].stations.append(s) } else { groups.append((s.group, [s])) }
+        }
+        return groups
+    }
     var orderedStations: [Station] { favouriteStations + otherStations }
 
     // MARK: Cast discovery
