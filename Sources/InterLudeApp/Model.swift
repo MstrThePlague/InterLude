@@ -50,6 +50,25 @@ final class AppModel {
     var selectedOutputID: String { didSet { UserDefaults.standard.set(selectedOutputID, forKey: "output") } }
     var volume: Double { didSet { UserDefaults.standard.set(volume, forKey: "volume"); applyVolume() } }
 
+    // Earlier programmes
+    enum Mode: String { case live, earlier }
+    /// Live, or an earlier programme from the start with the news skipped. Changing it stops playback.
+    var mode: Mode {
+        didSet {
+            guard mode != oldValue else { return }
+            UserDefaults.standard.set(mode.rawValue, forKey: "mode")
+            if isPlaying || isStarting { stop() }
+            if mode == .earlier { loadSchedule() }
+        }
+    }
+    var programmes: [Programme] = []
+    enum ScheduleState: Equatable { case idle, loading, failed(String) }
+    var scheduleState: ScheduleState = .idle
+    /// The earlier programme chosen to play, and playing once `isPlaying`.
+    var replaying: Programme?
+    private var scheduleFor: (station: String, at: Date)?
+    var isReplay: Bool { mode == .earlier && (isPlaying || isStarting) }
+
     // Settings
     /// The local server's port. Takes effect after a relaunch, since the server keeps running between sessions.
     var port: Int {
@@ -116,6 +135,10 @@ final class AppModel {
         if selectedStation?.kind == .speech { return "Off for speech stations, where talk is the programme." }
         if p.shadowMode { return "Shadow mode: bulletins are noted but not muted." }
         if !p.muteNews { return "Off. Bulletins will play." }
+        if mode == .earlier {
+            if p.detector.identOnly && p.idents.isEmpty { return "Set to jingle only, but no jingle is learned yet, so nothing is skipped." }
+            return "Cuts bulletins out, so the programme runs on without them."
+        }
         if p.detector.identOnly {
             return p.idents.isEmpty ? "Set to jingle only, but no jingle is learned yet, so nothing is muted. Change this in Settings."
                                     : "Mutes when the station's news jingle plays."
@@ -124,7 +147,14 @@ final class AppModel {
         let name = Self.ambienceChoices.first { $0.id == ambience }?.name.lowercased() ?? "a soothing sound"
         return "Plays \(name) over bulletins until the music returns."
     }
-    var footerText: String { "\(delayDescription) behind live" }
+    var footerText: String {
+        guard isReplay, let r = status.replay else { return "\(delayDescription) behind live" }
+        return "Started at \(r.programme.start.formatted(date: .omitted, time: .shortened)) · \(Self.duration(status.delaySeconds)) behind live"
+    }
+    static func duration(_ seconds: Double) -> String {
+        let m = Int((seconds / 60).rounded())
+        return m >= 60 ? "\(m / 60) h \(m % 60) min" : "\(m) min"
+    }
 
     var menuIcon: String {
         if isPlaying && status.muted { return "speaker.slash.fill" }
@@ -159,6 +189,7 @@ final class AppModel {
         selectedStationID = d.string(forKey: "station") ?? "bbc_6music"
         selectedOutputID = d.string(forKey: "output") ?? "mac"
         volume = d.object(forKey: "volume") as? Double ?? 0.7
+        mode = Mode(rawValue: d.string(forKey: "mode") ?? "") ?? .live
         port = d.object(forKey: "port") as? Int ?? 8642
         bitrate = d.object(forKey: "bitrate") as? Int ?? 320_000
         keepAwake = d.object(forKey: "keepAwake") as? Bool ?? true
@@ -175,6 +206,7 @@ final class AppModel {
         startAtLogin = SMAppService.mainApp.status == .enabled
         loadCatalogue()
         startDiscovery()
+        if mode == .earlier { loadSchedule() }
         if CommandLine.arguments.contains("--autoplay") { start() }
         if let d = CommandLine.arguments.first(where: { $0.hasPrefix("--demo=") }) { demo(String(d.dropFirst(7))) }
     }
@@ -200,6 +232,19 @@ final class AppModel {
         case "welcome-dismiss":      // closes the note after 3 s, to check the window shrinks
             demoHidesWelcome = false; showWelcome = true
             Task { try? await Task.sleep(for: .seconds(3)); demoHidesWelcome = true }
+        case "earlier": mode = .earlier
+        case "replay":
+            mode = .earlier; isPlaying = true
+            let start = Date(timeIntervalSince1970: (now / 3600).rounded(.down) * 3600 - 3600)
+            let prog = Programme(id: "demo", title: "Radcliffe and Maconie", subtitle: "Music, chat and Isobel Campbell",
+                                 start: start, end: start.addingTimeInterval(7200), imageURL: URL(string: "https://ichef.bbci.co.uk/images/ic/480x480/p0lxz91z.jpg"))
+            replaying = prog
+            var r = ReplayStatus(programme: prog, heard: start.addingTimeInterval(2400), analysedThrough: start.addingTimeInterval(3000))
+            r.skipCount = 2; r.skippedSeconds = 371; r.justSkipped = 188
+            r.news = [start.addingTimeInterval(-20)...start.addingTimeInterval(163), start.addingTimeInterval(1790)...start.addingTimeInterval(1978)]
+            status.replay = r
+            status.delaySeconds = Date().timeIntervalSince(r.heard)
+            status.nowPlaying = NowPlaying(artist: prog.subtitle!, title: prog.title, imageURL: prog.imageURL)
         case "starting": isStarting = true
         case "stopped": break
         default: isPlaying = true
@@ -280,6 +325,10 @@ final class AppModel {
 
     func start() {
         guard let catalogue, let station = selectedStation, !isStarting else { return }
+        if mode == .earlier && replaying == nil {
+            guard let p = programmes.first(where: { Schedule.isPlayable($0) }) else { loadSchedule(); return }
+            replaying = p
+        }
         errorText = nil; stationFailed = false; castFailed = false; notifiedFailure = false
         isStarting = true; shownNotices = 0
         if !askedForNotifications {
@@ -290,6 +339,7 @@ final class AppModel {
         var settings = SessionSettings(station: station, profile: profile(station.serviceId))
         settings.bitrate = bitrate
         settings.ambience = ambienceURL
+        if mode == .earlier { settings.replay = replaying }
         Task {
             do {
                 let cacheRoot = try AppPaths.cacheDirectory()
@@ -369,7 +419,38 @@ final class AppModel {
 
     func switchStation(to id: String) {
         selectedStationID = id
+        if mode == .earlier {
+            replaying = nil; programmes = []
+            if isPlaying || isStarting { stop() }
+            loadSchedule(); return
+        }
         if isPlaying || isStarting { Task { await tearDown(); isPlaying = false; isStarting = false; start() } }
+    }
+
+    // MARK: Earlier programmes
+
+    /// Reads the selected station's schedule for the last day. Kept for five minutes per station.
+    func loadSchedule(force: Bool = false) {
+        let id = selectedStationID
+        if !force, let f = scheduleFor, f.station == id, Date().timeIntervalSince(f.at) < 300, !programmes.isEmpty { return }
+        scheduleState = .loading
+        Task {
+            do {
+                let list = try await Schedule.playable(serviceId: id)
+                guard id == selectedStationID else { return }
+                programmes = list; scheduleFor = (id, Date()); scheduleState = .idle
+            } catch {
+                guard id == selectedStationID else { return }
+                scheduleState = .failed("Couldn't get the schedule: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Plays an earlier programme from its start, stopping whatever is playing.
+    func play(_ p: Programme) {
+        guard Schedule.isPlayable(p) else { return }
+        replaying = p
+        if isPlaying || isStarting { Task { await tearDown(); isPlaying = false; isStarting = false; start() } } else { start() }
     }
 
     private func ensureServer() throws {
@@ -407,7 +488,7 @@ final class AppModel {
             lastAddress = ip
             let c = DirectCastController(device: device)
             try await c.connect()
-            try await c.load(url: try playlistURL(host: ip), title: station.name)
+            try await c.load(url: try playlistURL(host: ip), title: settingsTitle(station))
             await c.setVolume(volume)
             cast = c
             if let tape = session?.tape {
@@ -424,6 +505,11 @@ final class AppModel {
                 }
             }
         }
+    }
+
+    private func settingsTitle(_ station: Station) -> String {
+        if mode == .earlier, let p = replaying { return "\(p.title) · \(station.name)" }
+        return station.name
     }
 
     private func castProblem(_ title: String, _ body: String) {

@@ -13,6 +13,8 @@ public struct SessionSettings: Sendable {
     /// A looping sound to play in place of muted bulletins; nil plays silence.
     public var ambience: URL?
     public var profile: StationProfile
+    /// An earlier programme to play from its start, with bulletins skipped. Nil plays live.
+    public var replay: Programme?
     public init(station: Station, profile: StationProfile = StationProfile()) {
         self.station = station; self.profile = profile
         delaySeconds = profile.delaySeconds; muteNews = profile.muteNews
@@ -46,7 +48,27 @@ public struct SessionStatus: Sendable {
     public var learningJingle = false
     /// On-device speech model for finding the newsreader's sign-off: checking, installing, ready or unavailable.
     public var speechModel = "unavailable"
+    /// Set while an earlier programme is playing.
+    public var replay: ReplayStatus?
     public init() {}
+}
+
+/// Where the listener is in an earlier programme, and what has been cut out of it.
+public struct ReplayStatus: Sendable, Equatable {
+    public var programme: Programme
+    /// The broadcast time the listener is hearing.
+    public var heard: Date
+    /// How far ahead of the listener the analysis has got.
+    public var analysedThrough: Date
+    public var skipCount = 0
+    public var skippedSeconds = 0.0
+    /// Seconds of news cut out at the point the listener has just passed, shown for a few seconds after.
+    public var justSkipped: Double?
+    /// Bulletins found so far, as broadcast times.
+    public var news: [ClosedRange<Date>] = []
+    public init(programme: Programme, heard: Date, analysedThrough: Date) {
+        self.programme = programme; self.heard = heard; self.analysedThrough = analysedThrough
+    }
 }
 
 /// One playing session: ingest, analysis, playout clock, and the responses the local server gives.
@@ -58,6 +80,9 @@ public actor PlayerSession {
     private var settings: SessionSettings
     private var store: SegmentStore?
     private var playout: Playout?
+    private var replay: ReplayPlayout?
+    private var replayServed: [Int: ReplaySegment] = [:]     // output index to what it carries, for recent requests
+    private var replayCache: [Int: Data] = [:]
     private var detector: NewsDetector
     private var liveEdge = 0
     private var analysedThrough = 0
@@ -114,6 +139,27 @@ public actor PlayerSession {
         let store = SegmentStore(directory: dir, base: base, prefix: prefix)
         await store.clear()
         self.store = store
+        if let prog = settings.replay {
+            try await startReplay(prog, store: store)
+        } else {
+            try await startLive(store: store)
+        }
+        tasks.append(Task { await self.pollLoop() })
+        tasks.append(Task { await self.emitLoop() })
+        if settings.replay == nil { tasks.append(Task { await self.metadataLoop() }) } else { tasks.append(Task { await self.aheadLoop() }) }
+        if settings.muteNews && settings.profile.idents.isEmpty { tasks.append(Task(priority: .utility) { await self.learnJingleFromRewind() }) }
+        if settings.station.kind == .music, transcriber == nil {
+            let stt = NewsTranscriber()
+            transcriber = stt
+            speechState = "checking"
+            tasks.append(Task(priority: .utility) {
+                let ok = await stt.prepare(install: true)
+                await self.setSpeechState(ok ? "ready" : "unavailable")
+            })
+        }
+    }
+
+    private func startLive(store: SegmentStore) async throws {
         var p = Playout(liveEdge: liveEdge, delaySeconds: settings.delaySeconds, maxMuteSeconds: settings.profile.detector.maxMuteSeconds)
         let first = p.next
         // Fetch from two minutes before the first listed segment up to the live edge, then analyse before starting.
@@ -128,19 +174,98 @@ public actor PlayerSession {
         playout = p
         running = true
         state = .playing
-        tasks.append(Task { await self.pollLoop() })
-        tasks.append(Task { await self.emitLoop() })
-        tasks.append(Task { await self.metadataLoop() })
-        if settings.muteNews && settings.profile.idents.isEmpty { tasks.append(Task(priority: .utility) { await self.learnJingleFromRewind() }) }
-        if settings.station.kind == .music {
-            let stt = NewsTranscriber()
-            transcriber = stt
-            speechState = "checking"
-            tasks.append(Task(priority: .utility) {
-                let ok = await stt.prepare(install: true)
-                await self.setSpeechState(ok ? "ready" : "unavailable")
-            })
+    }
+
+    // MARK: Earlier programmes
+
+    /// Segments of analysis kept ahead of the listener in an earlier programme (about ten minutes), so a bulletin's
+    /// end is known before the listener reaches its start.
+    static let replayAhead = 90
+    /// A segment's verdict is final once the analysis is this many segments past it (the theme, the newsreader's
+    /// opening and the 45 s release rule all settle within that).
+    static let replaySettle = 10
+
+    /// Plays `prog` from its start. The analysis starts two minutes earlier, as live, and gets about four minutes
+    /// ahead before the first segment is listed, so a bulletin at the top of the programme is skipped from the start.
+    private func startReplay(_ prog: Programme, store: SegmentStore) async throws {
+        let first = prog.firstSegment
+        guard first <= liveEdge else { throw FetchError.unhealthy("\(prog.title) hasn't started yet.") }
+        let from = first - 20, to = min(liveEdge, first + 40)
+        do { _ = try await store.segment(from); _ = try await store.segment(first) }
+        catch { throw FetchError.unhealthy("\(prog.title) is no longer available. The BBC keeps about the last 11 hours.") }
+        analysedThrough = from - 1
+        await withTaskGroup(of: Void.self) { g in
+            for i in from...to { g.addTask { _ = try? await store.segment(i) } }
         }
+        if settings.station.kind == .music {
+            // Ready the transcriber first when its model is already installed, so the first bulletin's sign-off is heard.
+            let stt = NewsTranscriber()
+            if await stt.prepare(install: false) { transcriber = stt; speechState = "ready" }
+        }
+        replay = ReplayPlayout(start: first, maxSkipSeconds: settings.profile.detector.maxMuteSeconds)
+        await analyse(upTo: to)
+        guard var p = replay else { return }
+        for _ in 0..<6 { await tickReplay(&p) }
+        replay = p
+        running = true
+        state = .playing
+        write(["event": "replayStart", "programme": prog.id, "start": prog.start.timeIntervalSince1970, "station": settings.station.serviceId])
+    }
+
+    /// Keeps the analysis about ten minutes ahead of the listener, faster than real time.
+    private func aheadLoop() async {
+        while !Task.isCancelled && running {
+            guard let store, let p = replay else { return }
+            let target = min(liveEdge, p.source + Self.replayAhead)
+            if analysedThrough >= target { try? await Task.sleep(for: .seconds(2)); continue }
+            let from = analysedThrough + 1, to = min(target, analysedThrough + 10)
+            await withTaskGroup(of: Void.self) { g in
+                for i in from...to { g.addTask { _ = try? await store.segment(i) } }
+            }
+            await analyse(upTo: to)
+            await store.evict(below: p.source - 30, above: Int.max)
+        }
+    }
+
+    private func tickReplay(_ p: inout ReplayPlayout) async {
+        let det = detector
+        let skip = settings.muteNews && !settings.profile.shadowMode
+        let frontier = min(analysedThrough - Self.replaySettle, liveEdge - Self.replaySettle)
+        let seg = p.tick(skipNews: skip, frontier: frontier) { det.isNews(segmentStart: HLS.startTime(ofIndex: $0).timeIntervalSince1970) }
+        if let store, !seg.silent, !(await store.has(seg.source)) { _ = try? await store.segment(seg.source) }
+        if let k = p.skips.last, k.out == seg.out {
+            write(["event": "skip", "from": k.from, "segments": k.segments, "station": settings.station.serviceId])
+        }
+        replayServed[seg.out] = seg
+        replayServed = replayServed.filter { $0.key > seg.out - 30 }
+        notices.append(contentsOf: p.takeLog())
+    }
+
+    /// The station segment the listener is hearing: live, a delay behind the edge; in an earlier programme, whatever
+    /// the output segment they are on carries.
+    private func listenerIndex() -> Int? {
+        if let p = replay {
+            let out = p.nextOut - 1 - Playout.headStart
+            return replayServed[out]?.source ?? p.window.first?.source ?? settings.replay?.firstSegment
+        }
+        if let p = playout { return p.next - 1 - Playout.headStart }
+        return settings.replay?.firstSegment
+    }
+
+    /// An output segment of an earlier programme: the station segment it carries (or silence), with timestamps
+    /// that run on continuously across skipped news.
+    private func replaySegmentData(_ out: Int) async -> Data? {
+        if let d = replayCache[out] { return d }
+        guard let seg = replayServed[out], let proto = prototype else { return nil }
+        var frames: [Data]? = nil
+        if !seg.silent, let d = await store?.cached(seg.source), let info = TS.parse(d), !info.frames.isEmpty { frames = info.frames }
+        if frames == nil { frames = silentFrame.map { Array(repeating: $0, count: 300) } }
+        guard let frames else { return nil }
+        let pts = (Int64(out) * Int64(segmentDuration * 90_000) + 900_000) & 0x1_FFFF_FFFF
+        let d = TS.build(frames: frames, startPTS: pts, prototype: proto, patCC: UInt8(out & 0xF), pmtCC: UInt8(out & 0xF))
+        replayCache[out] = d
+        replayCache = replayCache.filter { $0.key > out - 12 }
+        return d
     }
 
     public func stop() {
@@ -161,6 +286,7 @@ public actor PlayerSession {
                 let (pl, _) = try await client.fetch(catalogue: catalogue, station: settings.station, bitrate: settings.bitrate)
                 failures = 0
                 if case .failed = state { state = .playing }
+                if replay != nil { liveEdge = max(liveEdge, pl.lastSequence); continue }
                 if pl.lastSequence > liveEdge {
                     let newEdge = pl.lastSequence
                     let old = liveEdge
@@ -191,6 +317,7 @@ public actor PlayerSession {
                 needsRestart = true; deadline = clock.now + .seconds(segmentDuration); continue
             }
             deadline += .seconds(segmentDuration)
+            if var r = replay { await tickReplay(&r); replay = r; continue }
             guard var p = playout else { continue }
             await tick(&p)
             playout = p
@@ -296,8 +423,8 @@ public actor PlayerSession {
         if monoTail.count > Int(30 * rate) { monoTail.removeFirst(monoTail.count - Int(30 * rate)) }
         let chunkEnd = chunkStart + Double(newMono.count) / rate
         let tailStart = chunkEnd - Double(monoTail.count) / rate
-        guard let stt = transcriber, speechState == "ready", let p = playout else { return }
-        let listener = HLS.startTime(ofIndex: p.next - 1 - Playout.headStart).timeIntervalSince1970
+        guard let stt = transcriber, speechState == "ready", let heard = listenerIndex() else { return }
+        let listener = HLS.startTime(ofIndex: heard).timeIntervalSince1970
         guard let b = detector.blocks.last(where: { !$0.falseStart && !signedOff.contains($0.id) && ($0.isOpen || ($0.end ?? 0) > listener) }) else {
             blockAudioFor = nil; blockAudio = []; return
         }
@@ -341,7 +468,7 @@ public actor PlayerSession {
     /// Segments already listed but not yet fetched follow the latest view of the timeline
     /// (for example when the news theme moves a block's start).
     private func rejudgePending() {
-        guard var p = playout else { return }
+        guard replay == nil, var p = playout else { return }
         let det = detector, mute = settings.muteNews && !settings.profile.shadowMode
         let before = p.window
         p.refreshPending(from: lastServed + 1) { mute && det.isNews(segmentStart: HLS.startTime(ofIndex: $0).timeIntervalSince1970) }
@@ -418,7 +545,7 @@ public actor PlayerSession {
 
     /// "Not news": unmute from the next segment the player fetches, then judge what follows again.
     public func notNews() {
-        let first = lastServed + 1
+        let first = replay != nil ? (replayServed[lastServed + 1]?.source ?? (listenerIndex() ?? 0) + 1) : lastServed + 1
         detector.rejectOpenBlock(at: HLS.startTime(ofIndex: first).timeIntervalSince1970)
         rejudgePending()
         if let b = detector.blocks.last(where: \.falseStart) { write(["event": "falseStart", "block": blockJSON(b)]) }
@@ -427,8 +554,8 @@ public actor PlayerSession {
 
     /// "News got through": the bulletin the listener just heard was not muted. Learn from it.
     public func newsGotThrough() {
-        guard let p = playout else { return }
-        let listener = HLS.startTime(ofIndex: p.next - 1 - Playout.headStart).timeIntervalSince1970
+        guard let heard = listenerIndex() else { return }
+        let listener = HLS.startTime(ofIndex: heard).timeIntervalSince1970
         guard let b = detector.markNewsHeard(listenerTime: listener) else { notices.append("No speech to mark as news"); return }
         write(["event": "marked", "listenerTime": listener, "block": blockJSON(b)])
         learn(from: b)
@@ -540,6 +667,33 @@ public actor PlayerSession {
         var s = SessionStatus()
         s.state = state; s.delaySeconds = settings.delaySeconds; s.muteNews = settings.muteNews
         s.needsRestart = needsRestart; s.learningJingle = learningJingle; s.speechModel = speechState
+        if let r = replay, let prog = settings.replay {
+            let out = r.nextOut - 1 - Playout.headStart
+            let seg = replayServed[out]
+            let playing = seg?.source ?? prog.firstSegment
+            let heard = HLS.startTime(ofIndex: playing).timeIntervalSince1970
+            s.muted = seg?.silent ?? false
+            s.delaySeconds = Double(liveEdge - playing) * segmentDuration
+            var rs = ReplayStatus(programme: prog, heard: Date(timeIntervalSince1970: heard),
+                                  analysedThrough: HLS.startTime(ofIndex: analysedThrough + 1))
+            let passed = r.skips.filter { $0.out <= out }
+            rs.skipCount = passed.count
+            rs.skippedSeconds = passed.reduce(0) { $0 + $1.seconds }
+            if let k = passed.last, out - k.out < 2 { rs.justSkipped = k.seconds }
+            rs.news = detector.blocks.filter { !$0.falseStart && ($0.end ?? .infinity) > prog.start.timeIntervalSince1970 - 60 }
+                .map { Date(timeIntervalSince1970: $0.start)...Date(timeIntervalSince1970: $0.end ?? HLS.startTime(ofIndex: analysedThrough + 1).timeIntervalSince1970) }
+            s.replay = rs
+            if s.muted, let b = detector.blocks.last(where: { !$0.falseStart && $0.start <= heard && ($0.end ?? .infinity) > heard }) {
+                s.muteElapsed = heard - b.start
+            } else if settings.muteNews && !settings.profile.shadowMode,
+                      let b = detector.blocks.last(where: { !$0.falseStart && $0.start > heard }) {
+                s.muteStartsIn = max(0, floor(b.start / segmentDuration) * segmentDuration - heard)
+            }
+            s.nowPlaying = NowPlaying(artist: prog.subtitle ?? settings.station.name, title: prog.title, imageURL: prog.imageURL)
+            s.recentBlocks = Array(detector.blocks.filter { $0.start >= prog.start.timeIntervalSince1970 - 60 && $0.start <= heard }.suffix(8).reversed())
+            s.notices = notices
+            return s
+        }
         if let p = playout {
             let playing = p.next - 1 - Playout.headStart
             s.muted = p.window.first(where: { $0.index == playing })?.source == .silence
@@ -565,6 +719,10 @@ public actor PlayerSession {
 
     /// Answers a request from the local server. `relative` is the path after the token.
     public func respond(to relative: String) async -> HTTPResponse {
+        if relative == "live.m3u8", let r = replay {
+            let text = HLS.write(mediaSequence: r.mediaSequence, segments: r.window.map(\.out)) { "seg/\($0).ts" }
+            return HTTPResponse(contentType: "application/vnd.apple.mpegurl", body: Data(text.utf8), noCache: true)
+        }
         if relative == "live.m3u8" {
             guard let p = playout else { return .notFound }
             let text = HLS.write(mediaSequence: p.mediaSequence, segments: p.window.map(\.index)) { "seg/\($0).ts" }
@@ -585,7 +743,8 @@ public actor PlayerSession {
             lastServed = max(lastServed, i)
             let listed = playout?.window.first(where: { $0.index == i })
             var body: Data?
-            if listed?.source == .silence, let d = mutedSegment(i) { body = d }
+            if replay != nil { body = await replaySegmentData(i) }
+            else if listed?.source == .silence, let d = mutedSegment(i) { body = d }
             else if let d = await store?.cached(i) { body = d }
             else if let d = replacementSegment(i, frames: silentFrame.map { Array(repeating: $0, count: 300) }) { body = d }
             if let body {

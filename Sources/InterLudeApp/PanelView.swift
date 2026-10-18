@@ -12,11 +12,19 @@ struct PanelView: View {
             if model.showWelcome && !model.demoHidesWelcome { WelcomeCard(dismiss: { model.showWelcome = false }) }
             if let e = model.errorText { ErrorBanner(model: model, text: e) }
             NowPlayingHeader(model: model)
+            if model.isReplay, let r = model.status.replay { ReplayProgress(replay: r) }
             TransportRow(model: model)
             VStack(spacing: 8) {
+                Picker("Listen", selection: $model.mode) {
+                    Text("Live").tag(AppModel.Mode.live)
+                    Text("Earlier").tag(AppModel.Mode.earlier)
+                }
+                .pickerStyle(.segmented).labelsHidden()
+                .help("Live plays a minute behind the broadcast. Earlier plays a programme from the last 11 hours from its start.")
                 StationMenu(model: model)
                 OutputMenu(model: model)
             }
+            if model.mode == .earlier && !model.isReplay { ProgrammeList(model: model) }
             NewsCard(model: model)
             if model.isPlaying && !model.status.recentBlocks.isEmpty { RecentBlocks(model: model) }
             FooterRow(model: model, openSettings: {
@@ -35,6 +43,8 @@ struct PanelView: View {
         .animation(.snappy(duration: 0.25), value: model.isPlaying)
         .animation(.snappy(duration: 0.25), value: model.errorText)
         .animation(.snappy(duration: 0.25), value: model.showWelcome)
+        .animation(.snappy(duration: 0.25), value: model.mode)
+        .animation(.snappy(duration: 0.25), value: model.status.replay?.justSkipped != nil)
     }
 }
 
@@ -45,7 +55,7 @@ private struct NowPlayingHeader: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Artwork(url: model.isPlaying ? model.status.nowPlaying?.imageURL : nil,
+            Artwork(url: model.isPlaying ? model.status.nowPlaying?.imageURL : (model.mode == .earlier ? model.replaying?.imageURL : nil),
                     station: model.selectedStation,
                     muted: model.isPlaying && model.status.muted)
             VStack(alignment: .leading, spacing: 3) {
@@ -64,20 +74,27 @@ private struct NowPlayingHeader: View {
 
     private var badgeState: StatusBadge.State {
         if model.isStarting { return .starting }
-        if model.isPlaying { return model.status.muted ? .muted : .live }
+        if model.isPlaying { return model.status.muted ? .muted : (model.isReplay ? .earlier : .live) }
         if model.errorText != nil { return .error }
         return .off
     }
 
     private var title: String {
+        if model.isStarting, model.mode == .earlier, let p = model.replaying { return p.title }
         guard model.isPlaying else { return model.selectedStation?.name ?? "InterLude" }
         if model.status.muted { return "News muted" }
         return model.status.nowPlaying?.title ?? model.status.nowPlaying?.artist ?? model.selectedStation?.name ?? "Playing"
     }
 
     private var subtitle: String {
+        if model.isStarting, model.mode == .earlier, let p = model.replaying {
+            return "Starting from \(p.start.formatted(date: .omitted, time: .shortened))…"
+        }
         if model.isStarting { return "Starting about a minute behind live…" }
-        guard model.isPlaying else { return "Ready to play on \(model.selectedOutput.label)" }
+        guard model.isPlaying else {
+            if model.mode == .earlier { return "Pick a programme below" }
+            return "Ready to play on \(model.selectedOutput.label)"
+        }
         if model.status.muted { return "Sound returns when the music does" }
         if let np = model.status.nowPlaying, np.title != nil { return np.artist }
         return "On \(model.selectedOutput.label)"
@@ -130,7 +147,7 @@ struct StationBadge: View {
 }
 
 private struct StatusBadge: View {
-    enum State { case off, starting, live, muted, error }
+    enum State { case off, starting, live, earlier, muted, error }
     let state: State
     @SwiftUI.State private var pulse = false
 
@@ -144,8 +161,134 @@ private struct StatusBadge: View {
         .background(label == nil ? Color.clear : color.opacity(0.14), in: Capsule())
         .onAppear { withAnimation(.easeInOut(duration: 0.7).repeatForever()) { pulse = true } }
     }
-    private var color: Color { switch state { case .off: .secondary; case .starting: .yellow; case .live: .green; case .muted: .orange; case .error: .red } }
-    private var label: String? { switch state { case .live: "LIVE"; case .muted: "MUTED"; case .starting: "STARTING"; default: nil } }
+    private var color: Color { switch state { case .off: .secondary; case .starting: .yellow; case .live: .green; case .earlier: .blue; case .muted: .orange; case .error: .red } }
+    private var label: String? { switch state { case .live: "LIVE"; case .earlier: "EARLIER"; case .muted: "MUTED"; case .starting: "STARTING"; default: nil } }
+}
+
+// MARK: Earlier programmes
+
+/// The station's programmes from the last day, newest first. Those that began more than about 11 hours ago are
+/// shown but can't be played.
+private struct ProgrammeList: View {
+    let model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            switch model.scheduleState {
+            case .loading where model.programmes.isEmpty:
+                HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Getting the schedule…").font(.caption).foregroundStyle(.secondary) }
+                    .padding(12)
+            case .failed(let m) where model.programmes.isEmpty:
+                HStack(alignment: .top, spacing: 8) {
+                    Text(m).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Try again") { model.loadSchedule(force: true) }.controlSize(.small)
+                }
+                .padding(12)
+            default:
+                if model.programmes.isEmpty {
+                    Text("No programmes found").font(.caption).foregroundStyle(.secondary).padding(12)
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(model.programmes) { p in ProgrammeRow(model: model, programme: p) }
+                        }
+                    }
+                    .frame(height: 236)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .onAppear { model.loadSchedule() }
+    }
+}
+
+private struct ProgrammeRow: View {
+    let model: AppModel
+    let programme: Programme
+    @State private var hover = false
+
+    var body: some View {
+        let playable = Schedule.isPlayable(programme)
+        let onNow = programme.end > Date()
+        let chosen = model.replaying?.id == programme.id
+        Button { model.play(programme) } label: {
+            HStack(alignment: .top, spacing: 10) {
+                Text(programme.start.formatted(date: .omitted, time: .shortened))
+                    .font(.caption.monospacedDigit().weight(.semibold)).frame(width: 44, alignment: .leading)
+                    .foregroundStyle(playable ? .primary : .tertiary)
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 5) {
+                        Text(programme.title).font(.callout).lineLimit(1)
+                        if onNow { Text("ON NOW").font(.system(size: 8, weight: .bold)).foregroundStyle(.green)
+                            .padding(.horizontal, 4).padding(.vertical, 1).background(Color.green.opacity(0.14), in: Capsule()) }
+                    }
+                    Text(playable ? (programme.subtitle ?? length) : "No longer available")
+                        .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                .foregroundStyle(playable ? .primary : .tertiary)
+                Spacer(minLength: 0)
+                if playable {
+                    Image(systemName: chosen ? "checkmark" : "play.fill").font(.caption2).foregroundStyle(.secondary)
+                        .opacity(hover || chosen ? 1 : 0)
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(hover && playable ? Color.primary.opacity(0.06) : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!playable)
+        .onHover { hover = $0 }
+        .help(playable ? "Play from \(programme.start.formatted(date: .omitted, time: .shortened)), skipping the news" : "The BBC keeps about the last 11 hours")
+        .accessibilityLabel("\(programme.title), \(programme.start.formatted(date: .omitted, time: .shortened))\(playable ? "" : ", no longer available")")
+    }
+
+    private var length: String { AppModel.duration(programme.end.timeIntervalSince(programme.start)) }
+}
+
+/// How far into the programme the listener is, with the bulletins found so far marked on it.
+private struct ReplayProgress: View {
+    let replay: ReplayStatus
+
+    var body: some View {
+        let p = replay.programme
+        let total = max(1, p.end.timeIntervalSince(p.start))
+        VStack(spacing: 4) {
+            GeometryReader { g in
+                let w = g.size.width
+                ZStack(alignment: .leading) {
+                    Capsule().fill(.quaternary)
+                    Capsule().fill(Color.primary.opacity(0.12)).frame(width: x(replay.analysedThrough, w))
+                    Capsule().fill(Color.accentColor).frame(width: max(4, x(replay.heard, w)))
+                    ForEach(Array(replay.news.enumerated()), id: \.offset) { _, r in
+                        Rectangle().fill(Color.orange).frame(width: max(2, x(r.upperBound, w) - x(r.lowerBound, w)))
+                            .offset(x: x(r.lowerBound, w))
+                    }
+                }
+                .clipShape(Capsule())
+            }
+            .frame(height: 5)
+            HStack {
+                Text("\(clock(replay.heard.timeIntervalSince(p.start))) of \(AppModel.duration(total))").monospacedDigit()
+                Spacer()
+                if replay.skipCount > 0 {
+                    Text("\(replay.skipCount) bulletin\(replay.skipCount == 1 ? "" : "s") skipped · \(clock(replay.skippedSeconds))").monospacedDigit()
+                }
+            }
+            .font(.caption2).foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Position in programme")
+    }
+
+    /// Horizontal position of a broadcast time on a bar `w` points wide.
+    private func x(_ d: Date, _ w: CGFloat) -> CGFloat {
+        let p = replay.programme
+        return CGFloat(min(1, max(0, d.timeIntervalSince(p.start) / max(1, p.end.timeIntervalSince(p.start))))) * w
+    }
 }
 
 // MARK: Transport
@@ -302,7 +445,7 @@ private struct NewsCard: View {
                 Image(systemName: p.muteNews && !speech ? "newspaper.fill" : "newspaper")
                     .font(.title3).foregroundStyle(p.muteNews && !speech ? Color.accentColor : .secondary).frame(width: 24)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("Mute news").font(.callout.weight(.medium))
+                    Text(model.mode == .earlier ? "Skip news" : "Mute news").font(.callout.weight(.medium))
                     Text(model.muteSubtitle).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
@@ -314,7 +457,16 @@ private struct NewsCard: View {
             .padding(12)
 
             if model.isPlaying && !speech {
-                if model.status.muted {
+                if let k = model.status.replay?.justSkipped {
+                    HStack(spacing: 8) {
+                        Image(systemName: "forward.end.fill").foregroundStyle(.blue)
+                        Text("Skipped \(clock(k)) of news").font(.caption.weight(.medium)).monospacedDigit()
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+                    .background(Color.blue.opacity(0.1))
+                    .transition(.opacity)
+                } else if model.status.muted {
                     HStack(spacing: 10) {
                         Image(systemName: "speaker.slash.fill").foregroundStyle(.orange).symbolEffect(.pulse)
                         VStack(alignment: .leading, spacing: 0) {
@@ -332,7 +484,7 @@ private struct NewsCard: View {
                 } else if let t = model.status.muteStartsIn {
                     HStack(spacing: 8) {
                         Image(systemName: "timer").foregroundStyle(.orange)
-                        Text("Bulletin coming up · muting in \(clock(t))").font(.caption.weight(.medium)).monospacedDigit()
+                        Text("Bulletin coming up · \(model.isReplay ? "skipping" : "muting") in \(clock(t))").font(.caption.weight(.medium)).monospacedDigit()
                         Spacer()
                     }
                     .padding(.horizontal, 12).padding(.vertical, 8)
@@ -371,7 +523,7 @@ private struct RecentBlocks: View {
             Button { withAnimation(.snappy) { model.showRecent.toggle() } } label: {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.right").font(.caption2.weight(.bold)).rotationEffect(.degrees(model.showRecent ? 90 : 0))
-                    Text("Recent mutes").font(.caption.weight(.semibold))
+                    Text(model.isReplay ? "News in this programme" : "Recent mutes").font(.caption.weight(.semibold))
                     Text("\(blocks.filter { !$0.falseStart }.count)").font(.caption2.monospacedDigit())
                         .padding(.horizontal, 5).background(.quaternary, in: Capsule())
                     Spacer()
@@ -424,7 +576,7 @@ private struct FooterRow: View {
                 .accessibilityLabel("Settings")
             Spacer()
             if model.isPlaying {
-                Text("\(model.delayDescription) behind live").font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
+                Text(model.footerText).font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
             }
             Spacer()
             Button { NSApplication.shared.terminate(nil) } label: { Image(systemName: "power") }
