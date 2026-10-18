@@ -159,6 +159,14 @@ Rule: any "Music News" or "next update" wording 45 s or more into the block is t
 
 Replay test (a local stand-in for the BBC serving 20:24 to 20:37 in real time to the headless session): the block's start moved to the theme, the sign-off was found at 19:33:38, and the captured output was silent for 192 s (30 segments). The same bulletin was muted for 275 s live, before this change.
 
+## Playing earlier programmes (18 October 2026)
+
+To decide how far back InterLude can play an earlier programme with the news skipped.
+
+**Live pool rewind.** At 09:08 UTC the oldest 6 Music segment that downloads is 39,635 s (11.0 h) old; the next one back and every older index tried (12 h to 30 days) return 404. The cut is sharp, so the origin keeps about 11 hours although the playlist lists only 6. Any programme that started in the last 11 hours can be played from the live pool by index, with the same segments, clock and detector as live.
+
+**Schedule.** `https://rms.api.bbc.co.uk/v2/experience/inline/schedules/{serviceId}/{yyyy-mm-dd}` returns the day's `broadcast_summary` items: start, end, titles, synopses and image.
+
 ## Spec amendments made
 
 1. Wall-clock mapping of a segment uses `(index − 1) × 6.4` (the index is the end time). The stream clock runs about 29 s ahead of the system clock.
