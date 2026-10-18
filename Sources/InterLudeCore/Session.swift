@@ -113,6 +113,10 @@ public actor PlayerSession {
     private var signedOff: Set<UUID> = []
     private var listenedTo: Set<UUID> = []
     private var lastMono: [Float] = []
+    // Earlier programmes: the last few minutes of audio, to listen for the newsreader at every slot.
+    private var slotAudio: [Float] = []
+    private var slotAudioEnd: Double = 0
+    private var checkedSlots: Set<Int> = []
 
     private var tracks: [(observedAt: Date, track: NowPlaying)] = []     // metadata as seen live, shown after the delay
     private var notices: [String] = []
@@ -386,6 +390,7 @@ public actor PlayerSession {
                 let newMono = updateIdents(chunkStart: chunkStart, buffers: buffers)
                 logBlocks()
                 rejudgePending()
+                if replay != nil { await listenAtSlots(chunkStart: chunkStart, newMono: newMono) }
                 await listenForNewsreader(chunkStart: chunkStart, newMono: newMono)
             }
             analysedThrough = chunkEnd
@@ -463,6 +468,43 @@ public actor PlayerSession {
         }
         logBlocks()
         rejudgePending()
+    }
+
+    /// In an earlier programme the analysis is minutes ahead of the listener, so it can afford to transcribe around
+    /// every bulletin slot, from a minute before to two minutes after, and open a block where the newsreader's opening
+    /// is heard. Live, there is not that much time in hand.
+    private func listenAtSlots(chunkStart: Double, newMono: [Float]) async {
+        let rate = 48000.0, before = 60.0, after = 120.0
+        if abs(chunkStart - slotAudioEnd) > 1 { slotAudio = [] }       // a gap: start again
+        slotAudio += newMono
+        slotAudioEnd = chunkStart + Double(newMono.count) / rate
+        let keep = Int((before + after + 20) * rate)
+        if slotAudio.count > keep { slotAudio.removeFirst(slotAudio.count - keep) }
+        guard let stt = transcriber, speechState == "ready" else { return }
+        let audioStart = slotAudioEnd - Double(slotAudio.count) / rate
+        var hour = ((audioStart - after) / 3600).rounded(.down) * 3600
+        while hour <= slotAudioEnd {
+            for m in settings.profile.detector.slotMinutes {
+                let t = hour + Double(m) * 60
+                guard t + after <= slotAudioEnd, t - before >= audioStart - 1, !checkedSlots.contains(Int(t)) else { continue }
+                checkedSlots.insert(Int(t))
+                let from = max(audioStart, t - before)
+                let samples = Array(slotAudio.dropFirst(Int((from - audioStart) * rate)).prefix(Int((t + after - from) * rate)))
+                guard let phrases = try? await stt.transcribe(samples: samples, sampleRate: rate),
+                      let o = NewsPhrases.opening(in: phrases) else { continue }
+                detector.newsreaderOpening(at: from + o - 3)
+                write(["event": "slotOpening", "slot": t, "at": from + o])
+                // A short bulletin can be over within the window: then its sign-off is in this transcript too.
+                if let e = NewsPhrases.signOff(in: phrases, after: o + 45),
+                   let b = detector.blocks.last(where: { !$0.falseStart && abs($0.start - (from + o - 3)) < 1 }) {
+                    detector.endBlock(at: from + e + 0.3, why: "newsreader signed off")
+                    signedOff.insert(b.id)
+                    write(["event": "signOff", "block": b.id.uuidString, "at": from + e])
+                }
+                logBlocks()
+            }
+            hour += 3600
+        }
     }
 
     /// Segments already listed but not yet fetched follow the latest view of the timeline
