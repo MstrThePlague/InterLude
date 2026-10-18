@@ -1,6 +1,6 @@
-# Listen Again (private)
+# Earlier programmes on demand
 
-Personal use only. This branch is never pushed to the public `origin`; the `pre-push` hook refuses it.
+How InterLude plays programmes older than the live origin keeps, from BBC Sounds' on-demand episodes. For personal listening.
 
 ## Sounds on-demand probe (18 October 2026)
 
