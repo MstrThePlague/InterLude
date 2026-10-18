@@ -66,7 +66,22 @@ final class AppModel {
     var scheduleState: ScheduleState = .idle
     /// The earlier programme chosen to play, and playing once `isPlaying`.
     var replaying: Programme?
-    private var scheduleFor: (station: String, at: Date)?
+    private var scheduleFor: (station: String, day: Int, at: Date)?
+    /// Which day's schedule the list shows: 0 is today, up to `OnDemand.days - 1` days back.
+    var scheduleDay = 0 {
+        didSet { if scheduleDay != oldValue { programmes = []; loadSchedule() } }
+    }
+    /// Within the last 11 hours a programme plays from the live origin; before that, on demand.
+    static func canPlay(_ p: Programme) -> Bool { Schedule.isPlayable(p) || OnDemand.isAvailable(p) }
+    var scheduleDayTitle: String {
+        switch scheduleDay {
+        case 0: return "Today"
+        case 1: return "Yesterday"
+        default:
+            let d = Calendar.current.date(byAdding: .day, value: -scheduleDay, to: Date()) ?? Date()
+            return d.formatted(.dateTime.weekday(.wide).day().month(.abbreviated))
+        }
+    }
     var isReplay: Bool { mode == .earlier && (isPlaying || isStarting) }
 
     // Settings
@@ -233,6 +248,7 @@ final class AppModel {
             demoHidesWelcome = false; showWelcome = true
             Task { try? await Task.sleep(for: .seconds(3)); demoHidesWelcome = true }
         case "earlier": mode = .earlier
+        case "earlier-past": mode = .earlier; scheduleDay = 3
         case "replay":
             mode = .earlier; isPlaying = true
             let start = Date(timeIntervalSince1970: (now / 3600).rounded(.down) * 3600 - 3600)
@@ -326,7 +342,7 @@ final class AppModel {
     func start() {
         guard let catalogue, let station = selectedStation, !isStarting else { return }
         if mode == .earlier && replaying == nil {
-            guard let p = programmes.first(where: { Schedule.isPlayable($0) }) else { loadSchedule(); return }
+            guard let p = programmes.first(where: { Self.canPlay($0) }) else { loadSchedule(); return }
             replaying = p
         }
         errorText = nil; stationFailed = false; castFailed = false; notifiedFailure = false
@@ -339,7 +355,10 @@ final class AppModel {
         var settings = SessionSettings(station: station, profile: profile(station.serviceId))
         settings.bitrate = bitrate
         settings.ambience = ambienceURL
-        if mode == .earlier { settings.replay = replaying }
+        if mode == .earlier, let p = replaying {
+            settings.replay = p
+            settings.onDemand = !Schedule.isPlayable(p)
+        }
         Task {
             do {
                 let cacheRoot = try AppPaths.cacheDirectory()
@@ -429,18 +448,18 @@ final class AppModel {
 
     // MARK: Earlier programmes
 
-    /// Reads the selected station's schedule for the last day. Kept for five minutes per station.
+    /// Reads the selected station's schedule for the chosen day. Kept for five minutes per station and day.
     func loadSchedule(force: Bool = false) {
-        let id = selectedStationID
-        if !force, let f = scheduleFor, f.station == id, Date().timeIntervalSince(f.at) < 300, !programmes.isEmpty { return }
+        let id = selectedStationID, day = scheduleDay
+        if !force, let f = scheduleFor, f.station == id, f.day == day, Date().timeIntervalSince(f.at) < 300, !programmes.isEmpty { return }
         scheduleState = .loading
         Task {
             do {
-                let list = try await Schedule.playable(serviceId: id)
-                guard id == selectedStationID else { return }
-                programmes = list; scheduleFor = (id, Date()); scheduleState = .idle
+                let list = try await OnDemand.day(serviceId: id, daysAgo: day)
+                guard id == selectedStationID, day == scheduleDay else { return }
+                programmes = list; scheduleFor = (id, day, Date()); scheduleState = .idle
             } catch {
-                guard id == selectedStationID else { return }
+                guard id == selectedStationID, day == scheduleDay else { return }
                 scheduleState = .failed("Couldn't get the schedule: \(error.localizedDescription)")
             }
         }
@@ -448,7 +467,7 @@ final class AppModel {
 
     /// Plays an earlier programme from its start, stopping whatever is playing.
     func play(_ p: Programme) {
-        guard Schedule.isPlayable(p) else { return }
+        guard Self.canPlay(p) else { return }
         replaying = p
         if isPlaying || isStarting { Task { await tearDown(); isPlaying = false; isStarting = false; start() } } else { start() }
     }
@@ -564,6 +583,10 @@ final class AppModel {
                 if st.notices.count > self.shownNotices {
                     for n in st.notices[self.shownNotices...] where n.contains("longest mute") || n.contains("failed") { self.notify("InterLude", n) }
                     self.shownNotices = st.notices.count
+                }
+                if st.finished {
+                    self.notify("InterLude", "\(st.replay?.programme.title ?? "The programme") has finished.")
+                    self.stop(); return
                 }
                 if st.needsRestart {
                     self.notify("InterLude", "Playback was interrupted, so it is starting again.")

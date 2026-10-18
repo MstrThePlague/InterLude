@@ -7,6 +7,8 @@ public actor SegmentStore {
     public let directory: URL
     private let base: URL
     private let prefix: String
+    /// Subtracted from an index to get the file's number, when the store's indices are on another clock.
+    private let offset: Int
     private let maxInFlight: Int
     private var inFlight = 0
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -14,8 +16,8 @@ public actor SegmentStore {
     private let session: URLSession
 
     /// `base` is the playlist's directory; `prefix` the file name before the index, e.g. "bbc_6music-audio=320000-".
-    public init(directory: URL, base: URL, prefix: String, maxInFlight: Int = 4) {
-        self.directory = directory; self.base = base; self.prefix = prefix; self.maxInFlight = maxInFlight
+    public init(directory: URL, base: URL, prefix: String, offset: Int = 0, maxInFlight: Int = 4) {
+        self.directory = directory; self.base = base; self.prefix = prefix; self.offset = offset; self.maxInFlight = maxInFlight
         let c = URLSessionConfiguration.ephemeral; c.timeoutIntervalForRequest = 15
         session = URLSession(configuration: c)
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -46,7 +48,7 @@ public actor SegmentStore {
     /// Three attempts with a doubling pause, so a segment that is briefly unavailable is not lost.
     private func download(_ i: Int) async throws -> Data {
         await acquire(); defer { release() }
-        guard let url = URL(string: base.absoluteString + prefix + "\(i).ts") else { throw FetchError.badURL }
+        guard let url = URL(string: base.absoluteString + prefix + "\(i - offset).ts") else { throw FetchError.badURL }
         var delay = 0.5
         var lastError: Error = FetchError.notHTTP
         for _ in 0..<3 {

@@ -15,6 +15,10 @@ public struct SessionSettings: Sendable {
     public var profile: StationProfile
     /// An earlier programme to play from its start, with bulletins skipped. Nil plays live.
     public var replay: Programme?
+    /// Play `replay` from BBC Sounds rather than the live origin (which keeps only about 11 hours).
+    public var onDemand = false
+    /// Seconds into `replay` to start from.
+    public var startOffset = 0.0
     public init(station: Station, profile: StationProfile = StationProfile()) {
         self.station = station; self.profile = profile
         delaySeconds = profile.delaySeconds; muteNews = profile.muteNews
@@ -46,6 +50,8 @@ public struct SessionStatus: Sendable {
     /// The playout clock fell badly behind (for example after the Mac slept). The caller should start a new session.
     public var needsRestart = false
     public var learningJingle = false
+    /// An on-demand programme has played to its end.
+    public var finished = false
     /// On-device speech model for finding the newsreader's sign-off: checking, installing, ready or unavailable.
     public var speechModel = "unavailable"
     /// Set while an earlier programme is playing.
@@ -83,6 +89,7 @@ public actor PlayerSession {
     private var replay: ReplayPlayout?
     private var replayServed: [Int: ReplaySegment] = [:]     // output index to what it carries, for recent requests
     private var replayCache: [Int: Data] = [:]
+    private var endServedAt: Date?                          // when the player fetched an episode's last segment
     private var detector: NewsDetector
     private var liveEdge = 0
     private var analysedThrough = 0
@@ -133,14 +140,24 @@ public actor PlayerSession {
     // MARK: Lifecycle
 
     public func start() async throws {
-        let client = PlaylistClient()
-        let (pl, base) = try await client.fetch(catalogue: catalogue, station: settings.station, bitrate: settings.bitrate)
-        guard let name = pl.names.first, let (prefix, _) = HLS.splitName(name) else { throw FetchError.unhealthy("Unreadable playlist") }
-        self.base = base; self.segmentPrefix = prefix
-        loadAmbience()
-        liveEdge = pl.lastSequence
         let dir = cacheRoot.appendingPathComponent(settings.station.serviceId, isDirectory: true)
-        let store = SegmentStore(directory: dir, base: base, prefix: prefix)
+        let store: SegmentStore
+        if settings.onDemand, let prog = settings.replay {
+            // The episode's segments are put on the broadcast clock (segment 1 at the programme's first segment), so
+            // the detector's slot times, the playout and the log all work as they do for the live origin.
+            guard let vid = prog.versionId else { throw FetchError.unhealthy("\(prog.title) isn't available on demand.") }
+            let od = try await OnDemand.resolve(versionId: vid, bitrate: settings.bitrate)
+            liveEdge = prog.firstSegment + od.count - 1
+            store = SegmentStore(directory: dir, base: od.base, prefix: od.prefix, offset: prog.firstSegment - od.first)
+        } else {
+            let client = PlaylistClient()
+            let (pl, base) = try await client.fetch(catalogue: catalogue, station: settings.station, bitrate: settings.bitrate)
+            guard let name = pl.names.first, let (prefix, _) = HLS.splitName(name) else { throw FetchError.unhealthy("Unreadable playlist") }
+            self.base = base; self.segmentPrefix = prefix
+            liveEdge = pl.lastSequence
+            store = SegmentStore(directory: dir, base: base, prefix: prefix)
+        }
+        loadAmbience()
         await store.clear()
         self.store = store
         if let prog = settings.replay {
@@ -148,10 +165,10 @@ public actor PlayerSession {
         } else {
             try await startLive(store: store)
         }
-        tasks.append(Task { await self.pollLoop() })
+        if !settings.onDemand { tasks.append(Task { await self.pollLoop() }) }
         tasks.append(Task { await self.emitLoop() })
         if settings.replay == nil { tasks.append(Task { await self.metadataLoop() }) } else { tasks.append(Task { await self.aheadLoop() }) }
-        if settings.muteNews && settings.profile.idents.isEmpty { tasks.append(Task(priority: .utility) { await self.learnJingleFromRewind() }) }
+        if settings.muteNews && settings.profile.idents.isEmpty && !settings.onDemand { tasks.append(Task(priority: .utility) { await self.learnJingleFromRewind() }) }
         if settings.station.kind == .music, transcriber == nil {
             let stt = NewsTranscriber()
             transcriber = stt
@@ -192,11 +209,15 @@ public actor PlayerSession {
     /// Plays `prog` from its start. The analysis starts two minutes earlier, as live, and gets about four minutes
     /// ahead before the first segment is listed, so a bulletin at the top of the programme is skipped from the start.
     private func startReplay(_ prog: Programme, store: SegmentStore) async throws {
-        let first = prog.firstSegment
+        let first = prog.firstSegment + max(0, Int(settings.startOffset / segmentDuration))
         guard first <= liveEdge else { throw FetchError.unhealthy("\(prog.title) hasn't started yet.") }
-        let from = first - 20, to = min(liveEdge, first + 40)
+        // An episode has no audio before its start, so its analysis starts there.
+        let from = settings.onDemand ? max(prog.firstSegment, first - 20) : first - 20, to = min(liveEdge, first + 40)
         do { _ = try await store.segment(from); _ = try await store.segment(first) }
-        catch { throw FetchError.unhealthy("\(prog.title) is no longer available. The BBC keeps about the last 11 hours.") }
+        catch {
+            throw FetchError.unhealthy(settings.onDemand ? "\(prog.title) couldn't be fetched on demand."
+                                                         : "\(prog.title) is no longer available. The BBC keeps about the last 11 hours.")
+        }
         analysedThrough = from - 1
         await withTaskGroup(of: Void.self) { g in
             for i in from...to { g.addTask { _ = try? await store.segment(i) } }
@@ -231,10 +252,16 @@ public actor PlayerSession {
         }
     }
 
+    /// An on-demand episode has nothing after its last segment.
+    private func reachedEnd(_ p: ReplayPlayout) -> Bool { settings.onDemand && p.source > liveEdge }
+
     private func tickReplay(_ p: inout ReplayPlayout) async {
+        if reachedEnd(p) { return }
         let det = detector
         let skip = settings.muteNews && !settings.profile.shadowMode
-        let frontier = min(analysedThrough - Self.replaySettle, liveEdge - Self.replaySettle)
+        // At the end of an episode there is nothing more to analyse, so every verdict is final.
+        let frontier = settings.onDemand && analysedThrough >= liveEdge ? liveEdge
+                     : min(analysedThrough - Self.replaySettle, liveEdge - Self.replaySettle)
         let seg = p.tick(skipNews: skip, frontier: frontier) { det.isNews(segmentStart: HLS.startTime(ofIndex: $0).timeIntervalSince1970) }
         if let store, !seg.silent, !(await store.has(seg.source)) { _ = try? await store.segment(seg.source) }
         if let k = p.skips.last, k.out == seg.out {
@@ -715,7 +742,9 @@ public actor PlayerSession {
             let playing = seg?.source ?? prog.firstSegment
             let heard = HLS.startTime(ofIndex: playing).timeIntervalSince1970
             s.muted = seg?.silent ?? false
-            s.delaySeconds = Double(liveEdge - playing) * segmentDuration
+            s.delaySeconds = settings.onDemand ? Date().timeIntervalSince1970 - heard : Double(liveEdge - playing) * segmentDuration
+            // The player starts on a segment about three behind the newest it has fetched, so it plays on that long.
+            s.finished = endServedAt.map { Date().timeIntervalSince($0) > Double(Playout.headStart) * segmentDuration + 2 } ?? false
             var rs = ReplayStatus(programme: prog, heard: Date(timeIntervalSince1970: heard),
                                   analysedThrough: HLS.startTime(ofIndex: analysedThrough + 1))
             let passed = r.skips.filter { $0.out <= out }
@@ -762,7 +791,8 @@ public actor PlayerSession {
     /// Answers a request from the local server. `relative` is the path after the token.
     public func respond(to relative: String) async -> HTTPResponse {
         if relative == "live.m3u8", let r = replay {
-            let text = HLS.write(mediaSequence: r.mediaSequence, segments: r.window.map(\.out)) { "seg/\($0).ts" }
+            var text = HLS.write(mediaSequence: r.mediaSequence, segments: r.window.map(\.out)) { "seg/\($0).ts" }
+            if reachedEnd(r) { text += "#EXT-X-ENDLIST\n" }
             return HTTPResponse(contentType: "application/vnd.apple.mpegurl", body: Data(text.utf8), noCache: true)
         }
         if relative == "live.m3u8" {
@@ -785,7 +815,10 @@ public actor PlayerSession {
             lastServed = max(lastServed, i)
             let listed = playout?.window.first(where: { $0.index == i })
             var body: Data?
-            if replay != nil { body = await replaySegmentData(i) }
+            if let r = replay {
+                body = await replaySegmentData(i)
+                if reachedEnd(r), i == r.window.last?.out, endServedAt == nil { endServedAt = Date() }
+            }
             else if listed?.source == .silence, let d = mutedSegment(i) { body = d }
             else if let d = await store?.cached(i) { body = d }
             else if let d = replacementSegment(i, frames: silentFrame.map { Array(repeating: $0, count: 300) }) { body = d }

@@ -11,7 +11,12 @@ if a.count >= 3, let d = Double(a[2]) { settings.delaySeconds = d }
 if let name = ProcessInfo.processInfo.environment["AMBIENCE"] { settings.ambience = URL(fileURLWithPath: "Resources/Ambience/\(name).m4a") }
 // REPLAY=2026-10-18T08:28:00Z plays from that broadcast time instead of live, skipping bulletins.
 if let r = ProcessInfo.processInfo.environment["REPLAY"], let t = ISO8601DateFormatter().date(from: r) {
-    settings.replay = Programme(id: "serve", title: "Replay from \(r)", subtitle: nil, start: t, end: t.addingTimeInterval(3600), imageURL: nil)
+    // VERSION=m0032tkh plays that BBC Sounds version, broadcast at REPLAY, on demand. OFFSET=1680 starts 28 minutes in.
+    let env = ProcessInfo.processInfo.environment
+    settings.replay = Programme(id: "serve", title: "Replay from \(r)", subtitle: nil, start: t, end: t.addingTimeInterval(3600), imageURL: nil,
+                                versionId: env["VERSION"])
+    settings.onDemand = env["VERSION"] != nil
+    settings.startOffset = env["OFFSET"].flatMap(Double.init) ?? 0
 }
 let port = a.count >= 4 ? UInt16(a[3]) ?? 8642 : 8642
 let token = "test"
