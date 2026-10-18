@@ -11,6 +11,7 @@ I wanted 6 Music in the background all day without the hourly news, so it is tun
 - Plays any of 64 BBC stations (national, nations and local) a fixed time behind live (60 seconds by default).
 - Recognises each bulletin as it arrives and replaces it with silence, or with ocean waves, a woodland stream or birdsong if you prefer. When the bulletin ends, the station comes back.
 - Plays on the Mac, on a Chromecast, or on a Cast group, and you can switch speaker while it plays.
+- **Earlier** plays any programme that began in the last 11 hours from its start, with the bulletins cut out rather than muted.
 - Learns a station's news theme from the last few hours of broadcast, the first time you play it (so far proven on 6 Music).
 - Keeps a log of every decision, so a wrong mute can be explained and the rules improved.
 
@@ -68,7 +69,7 @@ To run the tests:
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --scratch-path ~/Library/Caches/InterLudeBuild
 ```
 
-To see the panel's states without playing anything, launch with `--demo=playing`, `--demo=muted`, `--demo=upcoming`, `--demo=error` or `--demo=settings`.
+To see the panel's states without playing anything, launch with `--demo=playing`, `--demo=muted`, `--demo=upcoming`, `--demo=error`, `--demo=earlier`, `--demo=replay` or `--demo=settings`.
 
 ## Where things are kept
 

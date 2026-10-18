@@ -58,3 +58,69 @@ public struct Playout: Sendable {
     /// Returns and clears anything worth telling the user about.
     public mutating func takeLog() -> [String] { defer { log = [] }; return log }
 }
+
+/// One segment of an earlier programme as listed to the player: an output index with continuous timestamps,
+/// and the station segment it stands for, played or (when the news could not be skipped yet) replaced with silence.
+public struct ReplaySegment: Sendable, Equatable {
+    public var out: Int
+    public var source: Int
+    public var silent: Bool
+}
+
+/// A stretch of news cut out of an earlier programme: where the listener meets it, and how much was left out.
+public struct Skip: Sendable, Equatable {
+    public var out: Int
+    public var from: Int
+    public var segments: Int
+    public var seconds: Double { Double(segments) * segmentDuration }
+}
+
+/// The playlist for an earlier programme. It looks like a live stream to the player, ticking in real time, but
+/// segments the detector calls news are left out rather than replaced, so the bulletin is skipped.
+///
+/// A segment can only be skipped once the analysis has passed it (`frontier`), so the detector's verdict is final.
+/// If the frontier is in the way (or the programme has caught up with live), news is replaced with silence instead.
+public struct ReplayPlayout: Sendable {
+    public let windowSize: Int
+    public let maxSkipSegments: Int
+    public private(set) var window: [ReplaySegment] = []
+    public private(set) var mediaSequence = 1
+    public private(set) var nextOut = 1
+    /// The next station segment to list.
+    public private(set) var source: Int
+    public private(set) var skips: [Skip] = []
+    private var mutedRun = 0
+    public private(set) var log: [String] = []
+
+    public init(start: Int, windowSize: Int = 6, maxSkipSeconds: Double = 480) {
+        source = start; self.windowSize = windowSize
+        maxSkipSegments = Int((maxSkipSeconds / segmentDuration).rounded(.up))
+    }
+
+    /// Lists the next segment. `isNews` is the detector's verdict on a station segment; `frontier` the newest one
+    /// whose verdict is final.
+    public mutating func tick(skipNews: Bool, frontier: Int, isNews: (Int) -> Bool) -> ReplaySegment {
+        var silent = false
+        if skipNews && isNews(source) {
+            var s = source
+            while s <= frontier && s - source < maxSkipSegments && isNews(s) { s += 1 }
+            if s - source >= maxSkipSegments {
+                // A safety net in case the end of a bulletin is never recognised: play it.
+                log.append("longest skip reached at \(source)"); mutedRun = 0
+            } else if s > frontier {
+                // The analysis has not reached the end of the news yet: hold the timeline with silence.
+                if mutedRun >= maxSkipSegments { log.append("longest mute reached at \(source)") } else { silent = true; mutedRun += 1 }
+            } else {
+                skips.append(Skip(out: nextOut, from: source, segments: s - source))
+                source = s; mutedRun = 0
+            }
+        } else { mutedRun = 0 }
+        let seg = ReplaySegment(out: nextOut, source: source, silent: silent)
+        window.append(seg)
+        if window.count > windowSize { window.removeFirst(); mediaSequence += 1 }
+        nextOut += 1; source += 1
+        return seg
+    }
+
+    public mutating func takeLog() -> [String] { defer { log = [] }; return log }
+}
