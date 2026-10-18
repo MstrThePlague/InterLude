@@ -11,7 +11,7 @@ I wanted 6 Music in the background all day without the hourly news, so it is tun
 - Plays any of 64 BBC stations (national, nations and local) a fixed time behind live (60 seconds by default).
 - Recognises each bulletin as it arrives and replaces it with silence, or with ocean waves, a woodland stream or birdsong if you prefer. When the bulletin ends, the station comes back.
 - Plays on the Mac, on a Chromecast, or on a Cast group, and you can switch speaker while it plays.
-- **Earlier** plays any programme that began in the last 11 hours from its start, with the bulletins cut out rather than muted.
+- **Earlier** plays a programme from the last 30 days from its start, with the bulletins cut out rather than muted. The last 11 hours come from the live stream; anything older comes from the programme's BBC Sounds episode.
 - Learns a station's news theme from the last few hours of broadcast, the first time you play it (so far proven on 6 Music).
 - Keeps a log of every decision, so a wrong mute can be explained and the rules improved.
 
@@ -26,6 +26,17 @@ A bulletin is found in a few ways, all running on the Mac:
 3. **The newsreader's words.** While a bulletin is muted, on-device speech recognition listens for the sign-off ("…your next update's at six thirty", "That's 6 Music News for tonight") and ends the mute there, so trails and the presenter's chat afterwards are not lost. If no sign-off is heard, the mute ends when music returns.
 
 Muted segments are replaced one for one with segments carrying the same timestamps, so the player sees one continuous stream and the delay never drifts. If a mute is wrong, **Not news** brings the sound back within a few seconds, and **News got through** teaches it from a bulletin it missed.
+
+### Earlier programmes
+
+Switch the panel from **Live** to **Earlier**, step back through the days, and pick a programme. It plays from its start:
+
+- **From the live stream** if it began in the last 11 hours or so. The BBC's live origin lists six hours of segments but keeps about eleven, so InterLude fetches them by index.
+- **On demand** if it is older (up to 30 days) and has finished. InterLude asks the BBC's media selector for the episode, opens the HLS stream it offers, and lines the episode's segments up with the time they were broadcast, so the detector works exactly as it does live.
+
+Because the whole programme already exists, the analysis runs about ten minutes ahead of you, faster than real time. That leaves time for one more check: InterLude transcribes from a minute before to two minutes after every :00 and :30, and the newsreader's opening starts a bulletin there even when the presenter talked straight into the news. A bulletin is then **left out** rather than silenced, and the segments after it are given timestamps that carry straight on, so the programme simply continues. The panel shows how far through you are, where the news was, and how much has been skipped. Seeking within a programme isn't supported yet.
+
+The details are in [docs/on-demand.md](docs/on-demand.md).
 
 The design, the measurements behind each rule and the mistakes along the way are written up in [docs/findings.md](docs/findings.md).
 
@@ -69,7 +80,7 @@ To run the tests:
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --scratch-path ~/Library/Caches/InterLudeBuild
 ```
 
-To see the panel's states without playing anything, launch with `--demo=playing`, `--demo=muted`, `--demo=upcoming`, `--demo=error`, `--demo=earlier`, `--demo=replay` or `--demo=settings`.
+To see the panel's states without playing anything, launch with `--demo=playing`, `--demo=muted`, `--demo=upcoming`, `--demo=error`, `--demo=earlier`, `--demo=earlier-past`, `--demo=replay` or `--demo=settings`.
 
 ## Where things are kept
 
@@ -89,7 +100,7 @@ Inside the App Sandbox, `Application Support` is the app's own container under `
 | `Sources/InterLudeApp` | The SwiftUI menu bar app. |
 | `Tests` | Unit tests for the parts that can be tested without a network or speakers. |
 | `Tools` | Command-line programs used to measure and tune detection (below). |
-| `docs` | Findings from testing, and checklists for the tests that need ears or hardware. |
+| `docs` | Findings from testing, notes on on-demand playback, and checklists for the tests that need ears or hardware. |
 
 ### Tools
 
@@ -103,7 +114,7 @@ Run with `swift run --scratch-path ~/Library/Caches/InterLudeBuild <name>`. Reco
 | `ident-check` | Find and test a station's news theme in recordings. |
 | `signoff-check` | Transcribe bulletins and report where the newsreader opens and signs off. |
 | `voice-changes`, `presenter-check` | Experiments in telling voices apart (they didn't work; see the findings). |
-| `serve <serviceId> [delay] [port]` | A session without the app, for testing with ffmpeg or curl. |
+| `serve <serviceId> [delay] [port]` | A session without the app, for testing with ffmpeg or curl. `REPLAY=<ISO time>` plays from that broadcast time instead; add `VERSION=<pid>` to play that BBC Sounds version on demand and `OFFSET=<seconds>` to start part way in. |
 | `cast-spike list` / `play <device> <url>` | List Cast speakers and groups, or play a stream on one. |
 | `rms-poll`, `spike01-stream` | Early experiments with the track metadata and stream format. |
 

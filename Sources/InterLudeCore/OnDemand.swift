@@ -1,7 +1,7 @@
 import Foundation
 
-// Private (listen-again branch only; see docs/private/listen-again.md). Plays BBC Sounds on-demand episodes for
-// programmes older than the live origin keeps. The stream URLs are used as the media selector issues them.
+// Plays BBC Sounds on-demand episodes for programmes older than the live origin keeps (docs/on-demand.md).
+// The stream URLs are used as the media selector issues them.
 
 /// An episode's HLS stream: where its segments are and how many there are. Segments are 6.4 s MPEG-TS, the same as
 /// the live stream, numbered from `first` at the start of the programme.
