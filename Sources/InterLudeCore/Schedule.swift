@@ -12,8 +12,11 @@ public struct Programme: Sendable, Equatable, Identifiable, Hashable {
     public var start: Date
     public var end: Date
     public var imageURL: URL?
-    public init(id: String, title: String, subtitle: String?, start: Date, end: Date, imageURL: URL?) {
+    /// The version to ask the media selector for, to play the programme on demand.
+    public var versionId: String?
+    public init(id: String, title: String, subtitle: String?, start: Date, end: Date, imageURL: URL?, versionId: String? = nil) {
         self.id = id; self.title = title; self.subtitle = subtitle; self.start = start; self.end = end; self.imageURL = imageURL
+        self.versionId = versionId
     }
 
     /// First segment of the programme on the stream clock.
@@ -38,7 +41,8 @@ public enum Schedule {
                     let t = d["titles"] as? [String: Any]
                     let sub = (t?["secondary"] as? String).flatMap { $0.isEmpty ? nil : $0 }
                     let img = (d["image_url"] as? String).flatMap { URL(string: $0.replacingOccurrences(of: "{recipe}", with: "480x480")) }
-                    out.append(Programme(id: id, title: t?["primary"] as? String ?? "Programme", subtitle: sub, start: s, end: e, imageURL: img))
+                    let version = (d["playable_item"] as? [String: Any])?["id"] as? String
+                    out.append(Programme(id: id, title: t?["primary"] as? String ?? "Programme", subtitle: sub, start: s, end: e, imageURL: img, versionId: version))
                     return
                 }
                 d.values.forEach(walk)

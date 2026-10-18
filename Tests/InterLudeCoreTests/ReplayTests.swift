@@ -85,3 +85,36 @@ import Foundation
     d.newsreaderOpening(at: hour + 15 * 60)
     #expect(d.blocks.isEmpty)
 }
+
+@Test func onDemandPicksTheHLSMasterAndVariant() throws {
+    let sel = """
+    {"media":[{"kind":"audio","connection":[
+      {"transferFormat":"dash","protocol":"https","supplier":"mf_akamai","href":"https://a/x.mpd"},
+      {"transferFormat":"hls","protocol":"http","supplier":"mf_akamai","href":"http://a/m.m3u8"},
+      {"transferFormat":"hls","protocol":"https","supplier":"mf_cloudfront","href":"https://c/m.m3u8"},
+      {"transferFormat":"hls","protocol":"https","supplier":"mf_akamai","href":"https://a/m.m3u8?t=1"}]}]}
+    """
+    #expect(OnDemand.masterURLs(selectorJSON: Data(sel.utf8)).map(\.absoluteString) == ["https://a/m.m3u8?t=1", "https://c/m.m3u8", "http://a/m.m3u8"])
+    let master = """
+    #EXTM3U
+    #EXT-X-STREAM-INF:BANDWIDTH=136000,CODECS="mp4a.40.2"
+    v-audio_eng=128000.m3u8
+    #EXT-X-STREAM-INF:BANDWIDTH=340000,CODECS="mp4a.40.2"
+    v-audio_eng=320000.m3u8
+    """
+    let base = URL(string: "https://a/dir/m.m3u8?t=1")!
+    #expect(OnDemand.chooseVariant(master: Data(master.utf8), base: base, bitrate: 320_000)?.absoluteString == "https://a/dir/v-audio_eng=320000.m3u8")
+    #expect(OnDemand.chooseVariant(master: Data(master.utf8), base: base, bitrate: 128_000)?.absoluteString == "https://a/dir/v-audio_eng=128000.m3u8")
+}
+
+@Test func onDemandAvailability() {
+    let now = Date()
+    var p = Programme(id: "x", title: "T", subtitle: nil, start: now.addingTimeInterval(-5 * 86_400), end: now.addingTimeInterval(-5 * 86_400 + 3600), imageURL: nil, versionId: "m1")
+    #expect(OnDemand.isAvailable(p, now: now))
+    p.versionId = nil
+    #expect(!OnDemand.isAvailable(p, now: now))
+    p.versionId = "m1"; p.end = now.addingTimeInterval(60)
+    #expect(!OnDemand.isAvailable(p, now: now))                    // still on air
+    p.start = now.addingTimeInterval(-31 * 86_400); p.end = p.start.addingTimeInterval(3600)
+    #expect(!OnDemand.isAvailable(p, now: now))
+}

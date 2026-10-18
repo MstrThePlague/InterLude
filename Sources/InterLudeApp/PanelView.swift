@@ -20,7 +20,7 @@ struct PanelView: View {
                     Text("Earlier").tag(AppModel.Mode.earlier)
                 }
                 .pickerStyle(.segmented).labelsHidden()
-                .help("Live plays a minute behind the broadcast. Earlier plays a programme from the last 11 hours from its start.")
+                .help("Live plays a minute behind the broadcast. Earlier plays a programme from the last 30 days from its start.")
                 StationMenu(model: model)
                 OutputMenu(model: model)
             }
@@ -174,6 +174,8 @@ private struct ProgrammeList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            DayPicker(model: model)
+            Divider()
             switch model.scheduleState {
             case .loading where model.programmes.isEmpty:
                 HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Getting the schedule…").font(.caption).foregroundStyle(.secondary) }
@@ -205,13 +207,30 @@ private struct ProgrammeList: View {
     }
 }
 
+/// Steps back through the last 30 days of the schedule.
+private struct DayPicker: View {
+    let model: AppModel
+    var body: some View {
+        HStack {
+            Button { model.scheduleDay += 1 } label: { Image(systemName: "chevron.left") }
+                .disabled(model.scheduleDay >= OnDemand.days - 1).help("Earlier day")
+            Spacer()
+            Text(model.scheduleDayTitle).font(.caption.weight(.semibold))
+            Spacer()
+            Button { model.scheduleDay -= 1 } label: { Image(systemName: "chevron.right") }
+                .disabled(model.scheduleDay == 0).help("Later day")
+        }
+        .buttonStyle(.borderless).padding(.horizontal, 12).padding(.vertical, 6)
+    }
+}
+
 private struct ProgrammeRow: View {
     let model: AppModel
     let programme: Programme
     @State private var hover = false
 
     var body: some View {
-        let playable = Schedule.isPlayable(programme)
+        let playable = AppModel.canPlay(programme)
         let onNow = programme.end > Date()
         let chosen = model.replaying?.id == programme.id
         Button { model.play(programme) } label: {
@@ -225,7 +244,7 @@ private struct ProgrammeRow: View {
                         if onNow { Text("ON NOW").font(.system(size: 8, weight: .bold)).foregroundStyle(.green)
                             .padding(.horizontal, 4).padding(.vertical, 1).background(Color.green.opacity(0.14), in: Capsule()) }
                     }
-                    Text(playable ? (programme.subtitle ?? length) : "No longer available")
+                    Text(playable ? (programme.subtitle ?? length) : (onNow ? "On now" : "Not available"))
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 .foregroundStyle(playable ? .primary : .tertiary)
@@ -242,8 +261,8 @@ private struct ProgrammeRow: View {
         .buttonStyle(.plain)
         .disabled(!playable)
         .onHover { hover = $0 }
-        .help(playable ? "Play from \(programme.start.formatted(date: .omitted, time: .shortened)), skipping the news" : "The BBC keeps about the last 11 hours")
-        .accessibilityLabel("\(programme.title), \(programme.start.formatted(date: .omitted, time: .shortened))\(playable ? "" : ", no longer available")")
+        .help(playable ? "Play from \(programme.start.formatted(date: .omitted, time: .shortened)), skipping the news" : "Not available to play")
+        .accessibilityLabel("\(programme.title), \(programme.start.formatted(date: .omitted, time: .shortened))\(playable ? "" : ", not available")")
     }
 
     private var length: String { AppModel.duration(programme.end.timeIntervalSince(programme.start)) }
