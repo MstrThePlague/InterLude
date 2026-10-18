@@ -175,6 +175,20 @@ public struct NewsDetector: Sendable {
         blocks[i].anchoredOnIdent = true
     }
 
+    /// The newsreader's opening was heard at `t`. Inside a block it anchors the start; otherwise, near a slot, it opens
+    /// one, as the theme does. This catches a bulletin the presenter talked straight into, where the speech began
+    /// before the slot and so never counted as starting near one.
+    public mutating func newsreaderOpening(at t: Double) {
+        if blocks.contains(where: { !$0.falseStart && abs($0.start - t) <= 120 && ($0.end.map { t < $0 } ?? true) }) {
+            anchorStart(at: t, why: "newsreader's opening heard"); return
+        }
+        guard inSlot(t), openBlock == nil, !config.identOnly else { return }
+        var b = NewsBlock(start: t, evidence: "newsreader's opening heard near a slot")
+        b.anchoredOnIdent = true
+        blocks.append(b)
+        runStart = nil
+    }
+
     /// The newsreader signed off at `t`: the bulletin ends there, even if the presenter talks on.
     /// Talk for the next four minutes does not start another block.
     public mutating func endBlock(at t: Double, why: String) {

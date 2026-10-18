@@ -67,3 +67,21 @@ import Foundation
     #expect(Schedule.isPlayable(a, now: now))
     #expect(!Schedule.isPlayable(a, now: now.addingTimeInterval(11 * 3600)))
 }
+
+@Test func newsreaderOpeningOpensABlockAfterTalkThatBeganOutsideTheSlot() {
+    var d = NewsDetector()
+    // The presenter talks from 07:27 straight into the 07:30 bulletin: the run began outside the slot.
+    for s in samples(from: hour + 27 * 60, speech: true, seconds: 300) { d.ingest(s) }
+    #expect(d.blocks.isEmpty)
+    d.newsreaderOpening(at: hour + 30 * 60 + 2)
+    let b = try! #require(d.openBlock)
+    #expect(b.start == hour + 30 * 60 + 2 && b.anchoredOnIdent)
+    d.endBlock(at: hour + 32 * 60 + 54, why: "newsreader signed off")
+    #expect(d.isNews(segmentStart: hour + 31 * 60) && !d.isNews(segmentStart: hour + 33 * 60))
+}
+
+@Test func newsreaderOpeningAwayFromASlotIsIgnored() {
+    var d = NewsDetector()
+    d.newsreaderOpening(at: hour + 15 * 60)
+    #expect(d.blocks.isEmpty)
+}
