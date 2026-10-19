@@ -75,6 +75,13 @@ struct SettingsView: View {
             }
 
             Section {
+                Toggle("Control InterLude from a phone", isOn: $model.remoteEnabled)
+                if model.remoteEnabled { RemoteLink(model: model) }
+            } header: { Text("Phone remote") } footer: {
+                FooterText("The phone needs to be on the same Wi-Fi as this Mac, and the Mac awake with InterLude open. Anyone on your network with the link can control playback. Reset link stops old links working.")
+            }
+
+            Section {
                 Picker("Bitrate", selection: $model.bitrate) { Text("128 kbps").tag(128_000); Text("320 kbps").tag(320_000) }
                 TextField("Server port", value: $model.port, format: .number.grouping(.never))
                 Toggle("Keep this Mac awake while playing", isOn: $model.keepAwake)
@@ -114,6 +121,47 @@ struct SettingsView: View {
         NSFileCoordinator().coordinate(readingItemAt: folder, options: .forUploading, error: &err) { zip in
             try? FileManager.default.removeItem(at: dest)
             try? FileManager.default.copyItem(at: zip, to: dest)
+        }
+    }
+}
+
+/// The QR code and link for the phone remote.
+private struct RemoteLink: View {
+    let model: AppModel
+    @State private var copied = false
+
+    var body: some View {
+        if let e = model.remoteError {
+            Text(e).font(.callout).foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+        } else if let url = model.remoteURL {
+            HStack(alignment: .top, spacing: 16) {
+                if let qr = qrImage(for: url.absoluteString) {
+                    Image(nsImage: qr).interpolation(.none).resizable().frame(width: 128, height: 128)
+                        .padding(8).background(.white, in: RoundedRectangle(cornerRadius: 8))
+                        .accessibilityLabel("QR code for the phone remote")
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Scan with your phone's camera").font(.callout.weight(.semibold))
+                    Text("Then tap the link that appears. To keep the remote, add it to the phone's home screen: on iPhone, tap Share then Add to Home Screen.")
+                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Text(url.absoluteString).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Button(copied ? "Copied" : "Copy link") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                            copied = true
+                            Task { try? await Task.sleep(for: .seconds(2)); copied = false }
+                        }
+                        Button("Reset link") { model.resetRemoteLink() }
+                            .help("Makes a new link. Phones with the old one will need to scan again.")
+                    }
+                    .controlSize(.small).padding(.top, 2)
+                }
+            }
+            .padding(.vertical, 4)
+        } else {
+            Text("Connect this Mac to Wi-Fi or Ethernet to use the remote.").font(.callout).foregroundStyle(.secondary)
         }
     }
 }

@@ -112,6 +112,25 @@ final class AppModel {
     }
     var startAtLogin: Bool = false
 
+    // Phone remote
+    /// Serves a remote-control page to phones on the same network, at an address carrying `remoteToken`.
+    var remoteEnabled: Bool {
+        didSet {
+            guard remoteEnabled != oldValue else { return }
+            UserDefaults.standard.set(remoteEnabled, forKey: "remoteEnabled")
+            if remoteEnabled { enableRemote() } else { disableRemote() }
+        }
+    }
+    /// Kept between launches, so a phone's bookmark keeps working until the link is reset.
+    private(set) var remoteToken: String
+    /// The Mac's address on the network, followed while the remote is on.
+    private(set) var remoteAddress: String?
+    private(set) var remoteError: String?
+    var remoteURL: URL? {
+        guard remoteEnabled, let ip = remoteAddress, let p = server?.port else { return nil }
+        return URL(string: "http://\(ip):\(p)\(RemoteRoutes.pagePath(token: remoteToken))")
+    }
+
     // State
     var isPlaying = false
     var isStarting = false
@@ -171,6 +190,37 @@ final class AppModel {
         return m >= 60 ? "\(m / 60) h \(m % 60) min" : "\(m) min"
     }
 
+    enum PlayState: String { case off, starting, live, earlier, muted, error }
+    var playState: PlayState {
+        if isStarting { return .starting }
+        if isPlaying { return status.muted ? .muted : (isReplay ? .earlier : .live) }
+        return errorText != nil ? .error : .off
+    }
+    /// The small line above the headline: the station while playing, otherwise whether it stopped.
+    var statusCaption: String {
+        isPlaying || isStarting ? (selectedStation?.name ?? "") : (errorText != nil ? "Stopped" : "Not playing")
+    }
+    var headline: String {
+        if isStarting, mode == .earlier, let p = replaying { return p.title }
+        guard isPlaying else { return selectedStation?.name ?? "InterLude" }
+        if status.muted { return "News muted" }
+        return status.nowPlaying?.title ?? status.nowPlaying?.artist ?? selectedStation?.name ?? "Playing"
+    }
+    var subheadline: String {
+        if isStarting, mode == .earlier, let p = replaying {
+            return "Starting from \(p.start.formatted(date: .omitted, time: .shortened))…"
+        }
+        if isStarting { return "Starting about a minute behind live…" }
+        guard isPlaying else {
+            if mode == .earlier { return "Pick a programme below" }
+            return "Ready to play on \(selectedOutput.label)"
+        }
+        if status.muted { return "Sound returns when the music does" }
+        if let np = status.nowPlaying, np.title != nil { return np.artist }
+        return "On \(selectedOutput.label)"
+    }
+    var artworkURL: URL? { isPlaying ? status.nowPlaying?.imageURL : (mode == .earlier ? replaying?.imageURL : nil) }
+
     var menuIcon: String {
         if isPlaying && status.muted { return "speaker.slash.fill" }
         if isPlaying || isStarting { return "dot.radiowaves.left.and.right" }
@@ -194,6 +244,7 @@ final class AppModel {
     private var notifiedFailure = false
     private var askedForNotifications = false
     private var volumeTask: Task<Void, Never>?
+    private var remoteMonitor: NWPathMonitor?
     private let token: String
 
     var selectedStation: Station? { stations.first { $0.serviceId == selectedStationID } }
@@ -211,6 +262,9 @@ final class AppModel {
         ambience = d.string(forKey: "ambience") ?? "silence"
         showWelcome = !d.bool(forKey: "welcomeDismissed")
         showRecent = d.bool(forKey: "showRecent")
+        remoteEnabled = d.bool(forKey: "remoteEnabled")
+        let rt = d.string(forKey: "remoteToken") ?? RemoteRoutes.newToken()
+        d.set(rt, forKey: "remoteToken"); remoteToken = rt
         let args = CommandLine.arguments
         // The token prefixes every URL the local server answers. `--token` fixes it for scripted tests.
         if let i = args.firstIndex(of: "--token"), i + 1 < args.count { token = args[i + 1] }
@@ -222,6 +276,7 @@ final class AppModel {
         loadCatalogue()
         startDiscovery()
         if mode == .earlier { loadSchedule() }
+        if remoteEnabled { enableRemote() }
         if CommandLine.arguments.contains("--autoplay") { start() }
         if let d = CommandLine.arguments.first(where: { $0.hasPrefix("--demo=") }) { demo(String(d.dropFirst(7))) }
     }
@@ -436,6 +491,19 @@ final class AppModel {
         pathMonitor?.cancel(); pathMonitor = nil
     }
 
+    /// Plays a station live from wherever things stand: stopped, playing another station, or playing an earlier
+    /// programme. The phone remote's station list and Play button use it.
+    func playLive(_ id: String) {
+        guard stations.contains(where: { $0.serviceId == id }) else { return }
+        let active = isPlaying || isStarting
+        if mode == .live && id == selectedStationID && active { return }
+        if mode == .live && !active { selectedStationID = id; start(); return }
+        Task {
+            if active { await tearDown(); isPlaying = false; isStarting = false }
+            mode = .live; selectedStationID = id; start()
+        }
+    }
+
     func switchStation(to id: String) {
         selectedStationID = id
         if mode == .earlier {
@@ -475,10 +543,10 @@ final class AppModel {
     private func ensureServer() throws {
         if server != nil { return }
         let t = token, h = holder
-        let s = LocalServer(port: UInt16(port)) { path in
+        let s = LocalServer(port: UInt16(port)) { [weak self] req in
             let prefix = "/\(t)/"
-            guard path.hasPrefix(prefix) else { return .notFound }
-            return await h.respond(String(path.dropFirst(prefix.count)))
+            if req.path.hasPrefix(prefix) { return await h.respond(String(req.path.dropFirst(prefix.count))) }
+            return await self?.respondToRemote(req) ?? .notFound
         }
         try s.start()
         server = s
@@ -622,6 +690,44 @@ final class AppModel {
     private func notify(_ title: String, _ body: String) {
         let c = UNMutableNotificationContent(); c.title = title; c.body = body
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
+    }
+
+    // MARK: Phone remote
+
+    private func enableRemote() {
+        remoteError = nil
+        do { try ensureServer() } catch {
+            remoteError = "Couldn't start the remote on port \(port): \(error.localizedDescription). Try another server port below, then quit and reopen InterLude."
+            return
+        }
+        remoteAddress = LocalServer.lanAddress()
+        let m = NWPathMonitor()
+        m.pathUpdateHandler = { [weak self] _ in
+            Task { @MainActor in self?.remoteAddress = LocalServer.lanAddress() }
+        }
+        m.start(queue: .main); remoteMonitor = m
+    }
+
+    private func disableRemote() {
+        remoteMonitor?.cancel(); remoteMonitor = nil
+        remoteError = nil
+    }
+
+    /// A new address for the remote. Phones with the old one see that it has stopped working.
+    func resetRemoteLink() {
+        remoteToken = RemoteRoutes.newToken()
+        UserDefaults.standard.set(remoteToken, forKey: "remoteToken")
+    }
+
+    private func respondToRemote(_ req: HTTPRequest) -> HTTPResponse {
+        guard remoteEnabled, let route = RemoteRoutes.route(req, token: remoteToken) else { return .notFound }
+        switch route {
+        case .page: return RemoteRoutes.page(token: remoteToken)
+        case .manifest: return RemoteRoutes.manifest
+        case .icon: return HTTPResponse(contentType: "image/png", body: Self.remoteIcon)
+        case .state: return RemoteRoutes.json(remoteState())
+        case .command(let c): perform(c); return RemoteRoutes.json(remoteState())
+        }
     }
 
     // MARK: Settings actions

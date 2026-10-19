@@ -55,49 +55,19 @@ private struct NowPlayingHeader: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Artwork(url: model.isPlaying ? model.status.nowPlaying?.imageURL : (model.mode == .earlier ? model.replaying?.imageURL : nil),
-                    station: model.selectedStation,
-                    muted: model.isPlaying && model.status.muted)
+            Artwork(url: model.artworkURL, station: model.selectedStation, muted: model.isPlaying && model.status.muted)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
-                    StatusBadge(state: badgeState)
-                    Text(model.isPlaying || model.isStarting ? (model.selectedStation?.name ?? "") : (model.errorText != nil ? "Stopped" : "Not playing"))
+                    StatusBadge(state: model.playState)
+                    Text(model.statusCaption)
                         .font(.caption.weight(.semibold)).foregroundStyle(.secondary).lineLimit(1)
                 }
-                Text(title).font(.headline).lineLimit(1)
-                Text(subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                Text(model.headline).font(.headline).lineLimit(1)
+                Text(model.subheadline).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
-    }
-
-    private var badgeState: StatusBadge.State {
-        if model.isStarting { return .starting }
-        if model.isPlaying { return model.status.muted ? .muted : (model.isReplay ? .earlier : .live) }
-        if model.errorText != nil { return .error }
-        return .off
-    }
-
-    private var title: String {
-        if model.isStarting, model.mode == .earlier, let p = model.replaying { return p.title }
-        guard model.isPlaying else { return model.selectedStation?.name ?? "InterLude" }
-        if model.status.muted { return "News muted" }
-        return model.status.nowPlaying?.title ?? model.status.nowPlaying?.artist ?? model.selectedStation?.name ?? "Playing"
-    }
-
-    private var subtitle: String {
-        if model.isStarting, model.mode == .earlier, let p = model.replaying {
-            return "Starting from \(p.start.formatted(date: .omitted, time: .shortened))…"
-        }
-        if model.isStarting { return "Starting about a minute behind live…" }
-        guard model.isPlaying else {
-            if model.mode == .earlier { return "Pick a programme below" }
-            return "Ready to play on \(model.selectedOutput.label)"
-        }
-        if model.status.muted { return "Sound returns when the music does" }
-        if let np = model.status.nowPlaying, np.title != nil { return np.artist }
-        return "On \(model.selectedOutput.label)"
     }
 }
 
@@ -147,8 +117,7 @@ struct StationBadge: View {
 }
 
 private struct StatusBadge: View {
-    enum State { case off, starting, live, earlier, muted, error }
-    let state: State
+    let state: AppModel.PlayState
     @SwiftUI.State private var pulse = false
 
     var body: some View {
