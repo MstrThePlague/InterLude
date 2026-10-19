@@ -4,7 +4,7 @@ InterLude is a small macOS menu bar app that plays BBC radio about a minute behi
 
 I wanted 6 Music in the background all day without the hourly news, so it is tuned for music stations. Speech stations play normally.
 
-> **Unofficial.** InterLude is not affiliated with the BBC. It relies on stream addresses the BBC does not document and can change at any time. It sends no telemetry: its only network traffic is to BBC servers and to speakers on your own network.
+> **Unofficial.** InterLude is not affiliated with the BBC. It relies on stream addresses the BBC does not document and can change at any time. It sends no telemetry: its only network traffic is to BBC servers, and to speakers and the phone remote on your own network.
 
 ## What it does
 
