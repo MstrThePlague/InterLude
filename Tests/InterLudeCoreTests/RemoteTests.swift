@@ -52,6 +52,48 @@ import Foundation
         #expect(route("POST", "/remote/abc123/api/volume") == nil)
     }
 
+    @Test func earlierCommands() {
+        #expect(route("POST", "/remote/abc123/api/mode?m=earlier") == .command(.earlier(true)))
+        #expect(route("POST", "/remote/abc123/api/mode?m=live") == .command(.earlier(false)))
+        #expect(route("POST", "/remote/abc123/api/mode?m=later") == nil)
+        #expect(route("POST", "/remote/abc123/api/mode") == nil)
+        #expect(route("GET", "/remote/abc123/api/mode?m=earlier") == nil)
+        #expect(route("POST", "/remote/abc123/api/schedule") == .command(.reloadSchedule))
+        #expect(route("GET", "/remote/abc123/api/schedule") == nil)
+    }
+
+    @Test func daysStayWithinTheLastMonth() {
+        #expect(route("POST", "/remote/abc123/api/day?d=0") == .command(.day(0)))
+        #expect(route("POST", "/remote/abc123/api/day?d=\(OnDemand.days - 1)") == .command(.day(OnDemand.days - 1)))
+        #expect(route("POST", "/remote/abc123/api/day?d=\(OnDemand.days)") == nil)
+        #expect(route("POST", "/remote/abc123/api/day?d=-1") == nil)
+        #expect(route("POST", "/remote/abc123/api/day?d=1.5") == nil)
+        #expect(route("POST", "/remote/abc123/api/day") == nil)
+        #expect(route("GET", "/remote/abc123/api/day?d=1") == nil)
+    }
+
+    @Test func programmesNeedAPlainID() {
+        #expect(route("POST", "/remote/abc123/api/programme?id=p0lxz91z") == .command(.programme("p0lxz91z")))
+        #expect(route("GET", "/remote/abc123/api/programme?id=p0lxz91z") == nil)
+        #expect(route("POST", "/remote/abc123/api/programme") == nil)
+        #expect(route("POST", "/remote/abc123/api/programme?id=") == nil)
+        #expect(route("POST", "/remote/abc123/api/programme?id=a%2Fb") == nil)
+        #expect(route("POST", "/remote/abc123/api/programme?id=%3Cb%3E") == nil)
+        #expect(route("POST", "/remote/abc123/api/programme?id=\(String(repeating: "a", count: 33))") == nil)
+    }
+
+    @Test func stateCarriesEarlier() throws {
+        var s = RemoteState()
+        s.mode = "earlier"
+        var e = RemoteState.EarlierItem()
+        e.programmes = [.init(id: "p1", title: "T", detail: "2 h 0 min", time: "10:00", image: nil, playable: true, onNow: false, chosen: true, playing: false)]
+        s.earlier = e
+        s.replay = .init(heard: 0.3, analysed: 0.4, news: [[0, 0.02]], position: "36:00 of 2 h 0 min", skipped: nil)
+        let back = try JSONDecoder().decode(RemoteState.self, from: RemoteRoutes.json(s).body)
+        #expect(back == s)
+        #expect(back.earlier?.lastDay == OnDemand.days - 1)
+    }
+
     @Test func pageCarriesItsBase() {
         let html = String(decoding: RemoteRoutes.page(token: token).body, as: UTF8.self)
         #expect(html.contains(#"<base href="/remote/abc123/">"#))
