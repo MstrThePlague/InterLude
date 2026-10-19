@@ -41,9 +41,9 @@ The details are in [docs/on-demand.md](docs/on-demand.md).
 
 ### Phone remote
 
-Turn on **Settings › Phone remote** and point a phone's camera at the QR code. The remote opens in the phone's browser, with nothing to install: play and stop, volume, station, speaker, whether a bulletin is muted, and the **Not news** and **News got through** buttons. On an iPhone, Share › Add to Home Screen keeps it as an icon.
+Turn on **Settings › Phone remote** and point a phone's camera at the QR code. The remote opens in the phone's browser, with nothing to install: play and stop, volume, station, speaker, whether a bulletin is muted, and the **Not news** and **News got through** buttons. Its **Earlier** switch lists each day's programmes from the last 30 days; tap one to play it from the start, and the phone shows how far in you are and how much news was skipped. On an iPhone, Share › Add to Home Screen keeps it as an icon.
 
-The remote is served by the same small web server the Chromecasts use. Its address carries a long random code, so other people on the network can't guess it; **Reset link** makes a new one and the old link stops working. The Mac has to be awake with InterLude open. Playing from the phone always plays live, so if the Mac was on Earlier it switches to Live. If the Mac's firewall is on, macOS asks once whether InterLude may accept incoming connections.
+The remote is served by the same small web server the Chromecasts use. Its address carries a long random code, so other people on the network can't guess it; **Reset link** makes a new one and the old link stops working. The Mac has to be awake with InterLude open. In Live, Play on the phone plays live; in Earlier it plays the programme last picked from its start, or live if none was. If the Mac's firewall is on, macOS asks once whether InterLude may accept incoming connections.
 
 The design, the measurements behind each rule and the mistakes along the way are written up in [docs/findings.md](docs/findings.md).
 

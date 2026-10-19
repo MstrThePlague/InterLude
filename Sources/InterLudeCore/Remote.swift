@@ -21,6 +21,48 @@ public struct RemoteState: Codable, Sendable, Equatable {
         public var kind: String
         public init(id: String, name: String, detail: String?, kind: String) { self.id = id; self.name = name; self.detail = detail; self.kind = kind }
     }
+    public struct ProgrammeItem: Codable, Sendable, Equatable {
+        public var id: String
+        public var title: String
+        /// The subtitle or length, or why it can't be played.
+        public var detail: String
+        /// Start time as the Mac writes it.
+        public var time: String
+        public var image: String?
+        public var playable: Bool
+        public var onNow: Bool
+        /// The programme last picked; `playing` while it plays.
+        public var chosen: Bool
+        public var playing: Bool
+        public init(id: String, title: String, detail: String, time: String, image: String?, playable: Bool, onNow: Bool, chosen: Bool, playing: Bool) {
+            self.id = id; self.title = title; self.detail = detail; self.time = time; self.image = image
+            self.playable = playable; self.onNow = onNow; self.chosen = chosen; self.playing = playing
+        }
+    }
+    /// The Earlier list: one day of the station's schedule.
+    public struct EarlierItem: Codable, Sendable, Equatable {
+        /// 0 is today, up to `lastDay` days back.
+        public var day = 0
+        public var lastDay = OnDemand.days - 1
+        public var dayTitle = "Today"
+        public var loading = false
+        public var problem: String?
+        public var programmes: [ProgrammeItem] = []
+        public init() {}
+    }
+    /// Progress through the earlier programme playing, as fractions of its length.
+    public struct ReplayItem: Codable, Sendable, Equatable {
+        public var heard: Double
+        public var analysed: Double
+        public var news: [[Double]]
+        /// "12:34 of 2 h 0 min"
+        public var position: String
+        /// "2 bulletins skipped · 6:11", or nil before any.
+        public var skipped: String?
+        public init(heard: Double, analysed: Double, news: [[Double]], position: String, skipped: String?) {
+            self.heard = heard; self.analysed = analysed; self.news = news; self.position = position; self.skipped = skipped
+        }
+    }
 
     /// off, starting, live, earlier, muted or error, as the panel's status badge.
     public var state = "off"
@@ -46,11 +88,20 @@ public struct RemoteState: Codable, Sendable, Equatable {
     public var speakers: [SpeakerItem] = []
     /// Shown under the speaker list: still searching, no speakers, or Local Network permission is off.
     public var speakerNote: String?
+    /// "live" or "earlier", as the panel's Live / Earlier switch.
+    public var mode = "live"
+    /// Set in Earlier.
+    public var earlier: EarlierItem?
+    /// Set while an earlier programme plays.
+    public var replay: ReplayItem?
     public init() {}
 }
 
 public enum RemoteCommand: Equatable, Sendable {
     case toggle, station(String), speaker(String), volume(Double), notNews, newsGotThrough
+    /// Earlier programmes: switch between Live and Earlier, step through the days, read the schedule again, and
+    /// play a programme from its start.
+    case earlier(Bool), day(Int), reloadSchedule, programme(String)
 }
 
 public enum RemoteRoute: Equatable, Sendable {
@@ -93,8 +144,22 @@ public enum RemoteRoutes {
             return .command(.volume(min(max(v, 0), 1)))
         case "notnews": return .command(.notNews)
         case "gotthrough": return .command(.newsGotThrough)
+        case "mode":
+            switch q["m"] { case "live": return .command(.earlier(false)); case "earlier": return .command(.earlier(true)); default: return nil }
+        case "day":
+            guard let d = q["d"].flatMap(Int.init), (0..<OnDemand.days).contains(d) else { return nil }
+            return .command(.day(d))
+        case "schedule": return .command(.reloadSchedule)
+        case "programme":
+            guard let id = q["id"], isProgrammeID(id) else { return nil }
+            return .command(.programme(id))
         default: return nil
         }
+    }
+
+    /// BBC programme IDs are short and alphanumeric, like `p0lxz91z`.
+    static func isProgrammeID(_ id: String) -> Bool {
+        !id.isEmpty && id.count <= 32 && id.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "_" || $0 == "-") }
     }
 
     public static func json(_ s: RemoteState) -> HTTPResponse {
@@ -138,13 +203,13 @@ enum RemotePage {
   color-scheme: light dark;
   --bg: #f2f2f7; --card: #ffffff; --text: #1c1c1e; --muted: #6e6e73; --line: rgba(60,60,67,.14);
   --accent: #007aff; --green: #248a3d; --orange: #c93400; --orange-bg: rgba(255,149,0,.16); --blue: #0064d1; --red: #d70015;
-  --press: rgba(0,0,0,.06);
+  --press: rgba(0,0,0,.06); --track: rgba(118,118,128,.12); --seg-on: #ffffff;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #000000; --card: #1c1c1e; --text: #f2f2f7; --muted: #98989f; --line: rgba(84,84,88,.6);
     --accent: #0a84ff; --green: #30d158; --orange: #ff9f0a; --orange-bg: rgba(255,159,10,.18); --blue: #409cff; --red: #ff6961;
-    --press: rgba(255,255,255,.08);
+    --press: rgba(255,255,255,.08); --track: rgba(118,118,128,.24); --seg-on: #636366;
   }
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
@@ -224,6 +289,45 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .group-title { color: var(--muted); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin: 16px 4px 6px; }
 .check { width: 20px; height: 20px; color: var(--accent); flex: none; }
 .hint { color: var(--muted); font-size: 14px; margin: 12px 4px; }
+.progress { width: 100%; margin-top: 12px; }
+.bar { position: relative; height: 6px; border-radius: 99px; overflow: hidden; background: var(--track); }
+.bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; }
+.bar .analysed { background: var(--press); }
+.bar .heard { background: var(--accent); min-width: 6px; }
+.bar .cut { position: absolute; top: 0; bottom: 0; min-width: 2px; background: var(--orange); }
+.progress-text { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 13px;
+  font-variant-numeric: tabular-nums; }
+
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; border-radius: 10px; background: var(--track); }
+.seg button { padding: 7px 0; border-radius: 8px; font-size: 15px; font-weight: 600; color: var(--text); }
+.seg button[aria-pressed="true"] { background: var(--seg-on); box-shadow: 0 1px 4px rgba(0,0,0,.14); }
+
+.earlier { overflow: hidden; }
+.days { display: flex; align-items: center; justify-content: space-between; padding: 4px; border-bottom: 1px solid var(--line); }
+.days b { font-size: 16px; }
+.step { width: 48px; height: 44px; display: grid; place-items: center; color: var(--accent); border-radius: 10px; }
+.step:active { background: var(--press); }
+.step:disabled { color: var(--muted); opacity: .4; }
+.step svg { width: 18px; height: 18px; }
+.prog { width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 14px; text-align: left; }
+.prog + .prog { border-top: 1px solid var(--line); }
+.prog:active:not(:disabled) { background: var(--press); }
+.prog:disabled { cursor: default; }
+.prog:disabled .thumb, .prog:disabled .label { opacity: .45; }
+.thumb { position: relative; width: 52px; height: 52px; border-radius: 9px; overflow: hidden; flex: none; display: grid; place-items: center;
+  color: #fff; font-weight: 800; font-size: 15px; background: var(--accent); }
+.thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .25s; }
+.thumb img.ready { opacity: 1; }
+.prog .label { flex: 1; min-width: 0; }
+.prog .when { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.prog .title { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prog .detail { display: block; color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prog .end { width: 22px; height: 22px; flex: none; color: var(--muted); }
+.prog .end.on { color: var(--accent); }
+.pill.now { color: var(--green); background: color-mix(in srgb, var(--green) 16%, transparent); font-size: 10px; padding: 1px 6px; }
+.empty { padding: 14px; color: var(--muted); font-size: 15px; }
+.empty .link { display: block; padding: 8px 0 0; }
+
 .toast { position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%); background: rgba(40,40,40,.94);
   color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 15px; max-width: calc(100% - 32px); text-align: center; z-index: 10;
   transition: opacity .25s; }
@@ -240,6 +344,10 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
     <div class="meta"><span class="pill" id="pill" hidden></span><span id="stationName"></span></div>
     <h1 id="headline">InterLude</h1>
     <div class="sub" id="subheadline">Connecting to your Mac…</div>
+    <div class="progress" id="progress" hidden aria-label="Position in programme">
+      <div class="bar" id="bar"><i class="analysed" id="analysed"></i><i class="heard" id="heard"></i></div>
+      <div class="progress-text"><span id="position"></span><span id="skipped"></span></div>
+    </div>
   </section>
 
   <section class="transport">
@@ -253,6 +361,11 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
       <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg>
     </label>
   </section>
+
+  <div class="seg" role="group" aria-label="Listen">
+    <button id="modeLive" aria-pressed="true">Live</button>
+    <button id="modeEarlier" aria-pressed="false">Earlier</button>
+  </div>
 
   <section class="card rows">
     <button class="row" id="stationRow">
@@ -278,6 +391,15 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
     </div>
   </section>
 
+  <section class="card earlier" id="earlier" hidden>
+    <div class="days">
+      <button class="step" id="dayBack" aria-label="Earlier day"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
+      <b id="dayTitle" aria-live="polite">Today</b>
+      <button class="step" id="dayNext" aria-label="Later day"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></button>
+    </div>
+    <div id="programmes"></div>
+  </section>
+
   <footer id="footer"></footer>
 </main>
 
@@ -300,9 +422,14 @@ const ICONS = {
   group: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 4h7a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 10 20H3a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 3 4zm3.5 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM14 4h7a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 21 20h-7a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 14 4zm3.5 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>'
 };
 const CHECK = '<svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>';
+const PROG_ICONS = {
+  play: '<svg class="end" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>',
+  chosen: '<svg class="end on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>',
+  playing: '<svg class="end on" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg>'
+};
 const PILLS = { live: "LIVE", muted: "MUTED", earlier: "EARLIER", starting: "STARTING" };
 
-let state = null, timer = null, failures = 0, volumeHeldUntil = 0, volumeTimer = null, toastTimer = null;
+let state = null, shownEarlier = "", dayWanted = null, timer = null, failures = 0, volumeHeldUntil = 0, volumeTimer = null, toastTimer = null;
 
 function clock(seconds) {
   const s = Math.max(0, Math.round(seconds));
@@ -406,7 +533,80 @@ function render(s) {
   $("note").textContent = s.note || "";
   $("footer").textContent = s.footer || "";
 
+  const earlier = s.mode === "earlier";
+  $("modeLive").setAttribute("aria-pressed", earlier ? "false" : "true");
+  $("modeEarlier").setAttribute("aria-pressed", earlier ? "true" : "false");
+  renderReplay(s.replay);
+  $("earlier").hidden = !s.earlier;
+  if (s.earlier) renderEarlier(s.earlier, station);
+
   if ($("speakerSheet").open) renderSpeakers();
+}
+
+function renderReplay(r) {
+  $("progress").hidden = !r;
+  if (!r) return;
+  $("heard").style.width = (r.heard * 100) + "%";
+  $("analysed").style.width = (r.analysed * 100) + "%";
+  const bar = $("bar");
+  for (const c of bar.querySelectorAll(".cut")) c.remove();
+  for (const [a, b] of r.news) {
+    const cut = document.createElement("span"); cut.className = "cut";
+    cut.style.left = (a * 100) + "%"; cut.style.width = ((b - a) * 100) + "%";
+    bar.append(cut);
+  }
+  $("position").textContent = r.position;
+  $("skipped").textContent = r.skipped || "";
+}
+
+// The list is rebuilt only when it changes, so it doesn't flicker or lose a tap while the state refreshes.
+function renderEarlier(e, station) {
+  $("dayTitle").textContent = e.dayTitle;
+  $("dayBack").disabled = e.day >= e.lastDay;
+  $("dayNext").disabled = e.day <= 0;
+  const key = JSON.stringify([e, station && station.id]);
+  if (key === shownEarlier) return;
+  shownEarlier = key;
+  const list = $("programmes");
+  list.replaceChildren();
+  if (e.loading || e.problem || !e.programmes.length) {
+    const p = document.createElement("div"); p.className = "empty";
+    p.textContent = e.loading ? "Getting the schedule…" : (e.problem || "No programmes found");
+    if (e.problem) {
+      const again = document.createElement("button"); again.className = "link"; again.textContent = "Try again";
+      again.addEventListener("click", () => send("schedule"));
+      p.append(again);
+    }
+    list.append(p);
+    return;
+  }
+  for (const pr of e.programmes) {
+    const b = document.createElement("button");
+    b.className = "prog";
+    b.disabled = !pr.playable;
+    b.setAttribute("aria-label", pr.title + ", " + pr.time + (pr.playable ? "" : ", not available") + (pr.playing ? ", playing" : ""));
+    const thumb = document.createElement("div"); thumb.className = "thumb"; paintBadge(thumb, station);
+    const src = pr.image && pr.image.startsWith("https://") ? pr.image : null;
+    if (src) {
+      // Faded in rather than hidden: a lazy image that is hidden never loads.
+      const img = document.createElement("img"); img.alt = ""; img.loading = "lazy";
+      img.onload = () => { img.classList.add("ready"); };
+      img.src = src; thumb.append(img);
+    }
+    const l = document.createElement("div"); l.className = "label";
+    const when = document.createElement("span"); when.className = "when"; when.textContent = pr.time;
+    if (pr.onNow) { const n = document.createElement("span"); n.className = "pill now"; n.textContent = "ON NOW"; when.append(n); }
+    const t = document.createElement("span"); t.className = "title"; t.textContent = pr.title;
+    const d = document.createElement("span"); d.className = "detail"; d.textContent = pr.playing ? "Playing now" : pr.detail;
+    l.append(when, t, d);
+    b.append(thumb, l);
+    if (pr.playable) b.insertAdjacentHTML("beforeend", PROG_ICONS[pr.playing ? "playing" : pr.chosen ? "chosen" : "play"]);
+    b.addEventListener("click", async () => {
+      window.scrollTo({ top: 0, behavior: "smooth" });
+      await send("programme", { id: pr.id });
+    });
+    list.append(b);
+  }
 }
 
 function option(label, detail, selected, lead, onPick) {
@@ -443,7 +643,8 @@ function renderStations() {
       const badge = document.createElement("div"); badge.className = "badge"; paintBadge(badge, st);
       list.append(option(st.name, null, st.id === state.station, badge, async () => {
         $("stationSheet").close();
-        if (st.id !== state.station || !state.playing) await send("station", { id: st.id });
+        // In Earlier a station shows its programmes; in Live it plays.
+        if (st.id !== state.station || (!state.playing && state.mode !== "earlier")) await send("station", { id: st.id });
       }));
     }
   }
@@ -475,6 +676,18 @@ $("speakerRow").addEventListener("click", () => { if (!state) return; renderSpea
 for (const d of document.querySelectorAll("dialog")) {
   d.addEventListener("click", e => { if (e.target === d || e.target.hasAttribute("data-close")) d.close(); });
 }
+$("modeLive").addEventListener("click", () => { if (state && state.mode !== "live") send("mode", { m: "live" }); });
+$("modeEarlier").addEventListener("click", () => { if (state && state.mode !== "earlier") send("mode", { m: "earlier" }); });
+// Counts from the day last asked for, so quick taps each move a day before the Mac has answered.
+async function stepDay(by) {
+  if (!state || !state.earlier) return;
+  const d = Math.min(Math.max((dayWanted ?? state.earlier.day) + by, 0), state.earlier.lastDay);
+  dayWanted = d;
+  await send("day", { d });
+  if (dayWanted === d) dayWanted = null;
+}
+$("dayBack").addEventListener("click", () => stepDay(1));
+$("dayNext").addEventListener("click", () => stepDay(-1));
 $("notNews").addEventListener("click", async () => {
   if (await send("notnews")) toast("Sound comes back in a few seconds.");
 });
