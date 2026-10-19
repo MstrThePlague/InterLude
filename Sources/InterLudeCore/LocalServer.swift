@@ -12,15 +12,33 @@ public struct HTTPResponse: Sendable {
     public static let notFound = HTTPResponse(status: 404, contentType: "text/plain", body: Data("not found".utf8))
 }
 
-/// A small GET-only HTTP server on NWListener. It serves the playlist and segments to AVPlayer (on loopback) and to
-/// Chromecasts (on the LAN). Every path starts with a random token, so other devices cannot guess the URLs.
+public struct HTTPRequest: Sendable {
+    public var method: String
+    public var path: String
+    public var query: [String: String]
+    public init(method: String = "GET", path: String, query: [String: String] = [:]) {
+        self.method = method; self.path = path; self.query = query
+    }
+    /// Parses the request line, such as `POST /a/b?x=1 HTTP/1.1`. Only GET, HEAD and POST are accepted.
+    public init?(requestLine: String) {
+        let parts = requestLine.split(separator: " ")
+        guard parts.count >= 2, ["GET", "HEAD", "POST"].contains(parts[0]),
+              let c = URLComponents(string: String(parts[1])) else { return nil }
+        method = String(parts[0]); path = c.path
+        query = Dictionary((c.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { _, b in b })
+    }
+}
+
+/// A small HTTP server on NWListener. It serves the playlist and segments to AVPlayer (on loopback) and to Chromecasts
+/// (on the LAN), and the phone remote. Every path starts with a random token, so other devices cannot guess the URLs.
+/// POST carries no body: the phone remote's commands put their arguments in the query.
 public final class LocalServer: @unchecked Sendable {
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "interlude.server")
     public let port: UInt16
-    private let handler: @Sendable (String) async -> HTTPResponse
+    private let handler: @Sendable (HTTPRequest) async -> HTTPResponse
 
-    public init(port: UInt16, handler: @escaping @Sendable (String) async -> HTTPResponse) {
+    public init(port: UInt16, handler: @escaping @Sendable (HTTPRequest) async -> HTTPResponse) {
         self.port = port; self.handler = handler
     }
 
@@ -40,15 +58,13 @@ public final class LocalServer: @unchecked Sendable {
         c.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [handler] data, _, _, err in
             guard let data, err == nil, let text = String(data: data, encoding: .utf8) else { c.cancel(); return }
             let first = text.split(separator: "\r\n", maxSplits: 1).first.map(String.init) ?? ""
-            let parts = first.split(separator: " ")
-            guard parts.count >= 2, parts[0] == "GET" || parts[0] == "HEAD" else {
+            guard let req = HTTPRequest(requestLine: first) else {
                 c.send(content: Data("HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8), completion: .contentProcessed { _ in c.cancel() })
                 return
             }
-            let head = parts[0] == "HEAD"
-            let path = String(parts[1]).components(separatedBy: "?")[0]
+            let head = req.method == "HEAD"
             Task {
-                let r = await handler(path)
+                let r = await handler(req)
                 var h = "HTTP/1.1 \(r.status) \(r.status == 200 ? "OK" : "Error")\r\nContent-Type: \(r.contentType)\r\nContent-Length: \(r.body.count)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n"
                 if r.noCache { h += "Cache-Control: no-cache\r\n" }
                 h += "\r\n"

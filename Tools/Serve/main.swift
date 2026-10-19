@@ -23,10 +23,10 @@ let token = "test"
 let session = PlayerSession(catalogue: cat, settings: settings, token: token,
     cacheRoot: URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("InterLudeServe"),
     eventLog: URL(fileURLWithPath: "recordings/serve-events.jsonl"))
-let server = LocalServer(port: port) { path in
+let server = LocalServer(port: port) { req in
     let prefix = "/\(token)/"
-    guard path.hasPrefix(prefix) else { return .notFound }
-    return await session.respond(to: String(path.dropFirst(prefix.count)))
+    guard req.path.hasPrefix(prefix) else { return .notFound }
+    return await session.respond(to: String(req.path.dropFirst(prefix.count)))
 }
 try server.start()
 print("starting session (\(Int(settings.delaySeconds))s delay)...")
