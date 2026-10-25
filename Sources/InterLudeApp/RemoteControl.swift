@@ -100,23 +100,28 @@ extension AppModel {
         }
     }
 
-    /// The app icon as a 512 px PNG for the phone's home screen: the icon's body without the macOS margin, on black
-    /// so the phone's own rounded mask has nothing transparent to fill.
-    static let remoteIcon: Data = {
-        let side = 512
-        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8, samplesPerPixel: 4,
-                                         hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
-              let ctx = NSGraphicsContext(bitmapImageRep: rep) else { return Data() }
+    /// The app icon as a 512 px PNG for the manifest and `icon.png`.
+    static let remoteIcon = remoteIconPNG(side: 512)
+    /// The 180 px Home Screen icon. iOS 27 ignores a fetched apple-touch-icon, so the page carries this one inline.
+    static let remoteTouchIcon = remoteIconPNG(side: 180)
+
+    /// The icon's body without the macOS margin, on black with no alpha channel, so the phone's own rounded mask
+    /// has nothing transparent to fill.
+    private static func remoteIconPNG(side: Int) -> Data {
+        guard let cs = CGColorSpace(name: CGColorSpace.sRGB),
+              let cg = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+                                 bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return Data() }
         NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = ctx
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: cg, flipped: false)
         NSColor.black.setFill()
         NSRect(x: 0, y: 0, width: side, height: side).fill()
         // The macOS icon grid puts an 824 pt body in a 1024 pt canvas.
         let full = CGFloat(side) * 1024 / 824, inset = (full - CGFloat(side)) / 2
         NSApp.applicationIconImage?.draw(in: NSRect(x: -inset, y: -inset, width: full, height: full))
         NSGraphicsContext.restoreGraphicsState()
-        return rep.representation(using: .png, properties: [:]) ?? Data()
-    }()
+        guard let image = cg.makeImage() else { return Data() }
+        return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) ?? Data()
+    }
 }
 
 /// A QR code for a link, drawn crisp at any size.
