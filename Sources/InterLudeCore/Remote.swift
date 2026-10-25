@@ -166,8 +166,11 @@ public enum RemoteRoutes {
         HTTPResponse(contentType: "application/json", body: (try? JSONEncoder().encode(s)) ?? Data("{}".utf8), noCache: true)
     }
 
-    public static func page(token: String) -> HTTPResponse {
+    /// The page, with `touchIcon` (a PNG) inline as its Home Screen icon: iOS 27 shows a letter tile for a fetched one.
+    public static func page(token: String, touchIcon: Data = Data()) -> HTTPResponse {
+        let icon = touchIcon.isEmpty ? "icon.png" : "data:image/png;base64,\(touchIcon.base64EncodedString())"
         let html = RemotePage.html.replacingOccurrences(of: "__BASE__", with: pagePath(token: token))
+            .replacingOccurrences(of: "__TOUCH_ICON__", with: icon)
         return HTTPResponse(contentType: "text/html; charset=utf-8", body: Data(html.utf8), noCache: true)
     }
 
@@ -195,7 +198,7 @@ enum RemotePage {
 <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="icon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="__TOUCH_ICON__">
 <link rel="icon" href="icon.png">
 <title>InterLude</title>
 <style>

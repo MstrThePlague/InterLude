@@ -12,7 +12,7 @@ I wanted 6 Music in the background all day without the hourly news, so it is tun
 - Recognises each bulletin as it arrives and replaces it with silence, or with ocean waves, a woodland stream or birdsong if you prefer. When the bulletin ends, the station comes back.
 - Plays on the Mac, on a Chromecast, or on a Cast group, and you can switch speaker while it plays.
 - **Earlier** plays a programme from the last 30 days from its start, with the bulletins cut out rather than muted. The last 11 hours come from the live stream; anything older comes from the programme's BBC Sounds episode.
-- A phone remote: scan a QR code and control InterLude from a phone on the same Wi-Fi.
+- A phone remote: scan a QR code and control InterLude from a phone on the same Wi-Fi, or from anywhere on your tailnet if the Mac runs Tailscale.
 - Learns a station's news theme from the last few hours of broadcast, the first time you play it (so far proven on 6 Music).
 - Keeps a log of every decision, so a wrong mute can be explained and the rules improved.
 

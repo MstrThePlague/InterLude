@@ -17,6 +17,34 @@ import Foundation
         #expect(HTTPRequest(requestLine: "GET") == nil)
     }
 
+    @Test func recognisesTailscaleAddresses() {
+        #expect(LocalServer.isTailscale("100.70.0.49"))
+        #expect(LocalServer.isTailscale("100.64.0.1"))
+        #expect(LocalServer.isTailscale("100.127.255.254"))
+        #expect(!LocalServer.isTailscale("100.128.0.1"))
+        #expect(!LocalServer.isTailscale("100.63.0.1"))
+        #expect(!LocalServer.isTailscale("192.168.1.20"))
+        #expect(!LocalServer.isTailscale("100.70.0"))
+    }
+
+    @Test func recognisesMagicDNSNames() {
+        #expect(LocalServer.magicDNSName("bb-mba-m3-1.tail896e40.ts.net.") == "bb-mba-m3-1.tail896e40.ts.net")
+        #expect(LocalServer.magicDNSName("Ben-Mac.Tail896e40.TS.NET") == "ben-mac.tail896e40.ts.net")
+        #expect(LocalServer.magicDNSName("49.0.70.100.in-addr.arpa") == nil)
+        #expect(LocalServer.magicDNSName("tail896e40.ts.net") == nil)
+        #expect(LocalServer.magicDNSName("a.b.tail896e40.ts.net") == nil)
+        #expect(LocalServer.magicDNSName("mac..ts.net") == nil)
+        #expect(LocalServer.magicDNSName("mac.local") == nil)
+    }
+
+    @Test func readsTheNameFromTailscaleStatus() {
+        let json = #"{"BackendState":"Running","Self":{"HostName":"bb-mba-m3-1","DNSName":"bb-mba-m3-1.tail896e40.ts.net.","TailscaleIPs":["100.70.0.49"]}}"#
+        #expect(LocalServer.magicDNSName(statusJSON: Data(json.utf8)) == "bb-mba-m3-1.tail896e40.ts.net")
+        #expect(LocalServer.magicDNSName(statusJSON: Data(#"{"BackendState":"Stopped","Self":{"DNSName":""}}"#.utf8)) == nil)
+        #expect(LocalServer.magicDNSName(statusJSON: Data(#"{"BackendState":"NoState"}"#.utf8)) == nil)
+        #expect(LocalServer.magicDNSName(statusJSON: Data("not json".utf8)) == nil)
+    }
+
     @Test func pageAndFiles() {
         #expect(route("GET", "/remote/abc123/") == .page)
         #expect(route("GET", "/remote/abc123") == .page)
@@ -98,6 +126,16 @@ import Foundation
         let html = String(decoding: RemoteRoutes.page(token: token).body, as: UTF8.self)
         #expect(html.contains(#"<base href="/remote/abc123/">"#))
         #expect(!html.contains("__BASE__"))
+    }
+
+    /// iOS 27 shows a letter tile for a fetched apple-touch-icon, so the page carries it inline.
+    @Test func pageCarriesItsTouchIcon() {
+        let html = String(decoding: RemoteRoutes.page(token: token, touchIcon: Data([1, 2, 3])).body, as: UTF8.self)
+        #expect(html.contains(#"<link rel="apple-touch-icon" sizes="180x180" href="data:image/png;base64,AQID">"#))
+        #expect(html.contains(#"<link rel="icon" href="icon.png">"#))
+        #expect(!html.contains("__TOUCH_ICON__"))
+        let plain = String(decoding: RemoteRoutes.page(token: token).body, as: UTF8.self)
+        #expect(plain.contains(#"<link rel="apple-touch-icon" sizes="180x180" href="icon.png">"#))
     }
 
     @Test func tokensAreLongAndFresh() {

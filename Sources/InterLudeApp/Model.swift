@@ -113,7 +113,7 @@ final class AppModel {
     var startAtLogin: Bool = false
 
     // Phone remote
-    /// Serves a remote-control page to phones on the same network, at an address carrying `remoteToken`.
+    /// Serves a remote-control page to phones on the same network or tailnet, at an address carrying `remoteToken`.
     var remoteEnabled: Bool {
         didSet {
             guard remoteEnabled != oldValue else { return }
@@ -123,9 +123,13 @@ final class AppModel {
     }
     /// Kept between launches, so a phone's bookmark keeps working until the link is reset.
     private(set) var remoteToken: String
-    /// The Mac's address on the network, followed while the remote is on.
+    /// The Mac's host for the remote (its Tailscale name if Tailscale is up, else the LAN address), followed while the remote is on.
     private(set) var remoteAddress: String?
     private(set) var remoteError: String?
+    /// Whether the remote's link goes over Tailscale rather than the LAN.
+    var remoteOnTailscale: Bool {
+        remoteAddress.map { $0.hasSuffix(".ts.net") || LocalServer.isTailscale($0) } ?? false
+    }
     var remoteURL: URL? {
         guard remoteEnabled, let ip = remoteAddress, let p = server?.port else { return nil }
         return URL(string: "http://\(ip):\(p)\(RemoteRoutes.pagePath(token: remoteToken))")
@@ -700,12 +704,27 @@ final class AppModel {
             remoteError = "Couldn't start the remote on port \(port): \(error.localizedDescription). Try another server port below, then quit and reopen InterLude."
             return
         }
-        remoteAddress = LocalServer.lanAddress()
+        remoteAddress = LocalServer.tailscaleAddress() ?? LocalServer.lanAddress()
+        refreshRemoteAddress()
         let m = NWPathMonitor()
         m.pathUpdateHandler = { [weak self] _ in
-            Task { @MainActor in self?.remoteAddress = LocalServer.lanAddress() }
+            Task { @MainActor in self?.refreshRemoteAddress() }
         }
         m.start(queue: .main); remoteMonitor = m
+    }
+
+    /// Finds the remote's host off the main thread, since the Tailscale name needs a DNS lookup.
+    private func refreshRemoteAddress() {
+        Task.detached { [weak self] in
+            let host = Self.remoteHost()
+            await MainActor.run { self?.remoteAddress = host }
+        }
+    }
+
+    /// The Tailscale name, or failing that the Tailscale address, so the remote works anywhere on the tailnet;
+    /// otherwise the LAN address.
+    nonisolated private static func remoteHost() -> String? {
+        LocalServer.tailscaleName() ?? LocalServer.tailscaleAddress() ?? LocalServer.lanAddress()
     }
 
     private func disableRemote() {
@@ -722,7 +741,7 @@ final class AppModel {
     private func respondToRemote(_ req: HTTPRequest) -> HTTPResponse {
         guard remoteEnabled, let route = RemoteRoutes.route(req, token: remoteToken) else { return .notFound }
         switch route {
-        case .page: return RemoteRoutes.page(token: remoteToken)
+        case .page: return RemoteRoutes.page(token: remoteToken, touchIcon: Self.remoteTouchIcon)
         case .manifest: return RemoteRoutes.manifest
         case .icon: return HTTPResponse(contentType: "image/png", body: Self.remoteIcon)
         case .state: return RemoteRoutes.json(remoteState())
