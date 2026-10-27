@@ -255,6 +255,7 @@ actor Controller {
     private func stop(_ reason: String? = nil) async {
         await stopCast()
         generation += 1
+        starting?.cancel()          // a session still starting stops its analysis rather than finishing unheard
         starting = nil
         watcher?.cancel(); watcher = nil
         let s = session
