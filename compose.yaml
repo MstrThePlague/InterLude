@@ -1,0 +1,15 @@
+# Runs interlude-server on a Linux host: docker compose up -d --build
+# Host networking, so Chromecasts and mDNS reach it without NAT. The app is on http://<host>:8642/.
+services:
+  interlude:
+    build: .
+    image: interlude-server:local
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - data:/var/lib/interlude
+    environment:
+      TZ: Europe/London
+
+volumes:
+  data:

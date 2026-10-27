@@ -1,11 +1,16 @@
 // swift-tools-version: 6.2
 import PackageDescription
 
-// InterLudeCore is portable Swift and builds on macOS, Linux and Windows. Everything that needs Apple's frameworks
-// (the platform implementations, the menu bar app and the measuring tools) is declared only when building on macOS.
+// InterLudeCore is portable Swift and builds on macOS, Linux and Windows. InterLudePortable holds the platform
+// implementations that work away from the Mac, and interlude-server runs on them. Everything that needs Apple's
+// frameworks (their implementations, the menu bar app and the measuring tools) is declared only when building on macOS.
 var targets: [Target] = [
     .target(name: "InterLudeCore", path: "Sources/InterLudeCore"),
+    .target(name: "InterLudePortable", dependencies: ["InterLudeCore", .product(name: "Hummingbird", package: "hummingbird")],
+            path: "Sources/InterLudePortable"),
+    .executableTarget(name: "interlude-server", dependencies: ["InterLudeCore", "InterLudePortable"], path: "Sources/InterLudeServer"),
     .testTarget(name: "InterLudeCoreTests", dependencies: ["InterLudeCore"], path: "Tests/InterLudeCoreTests"),
+    .testTarget(name: "InterLudePortableTests", dependencies: ["InterLudeCore", "InterLudePortable"], path: "Tests/InterLudePortableTests"),
 ]
 
 #if os(macOS)
@@ -31,5 +36,6 @@ targets += [
 let package = Package(
     name: "InterLude",
     platforms: [.macOS(.v26)],
+    dependencies: [.package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.28.0")],
     targets: targets
 )
