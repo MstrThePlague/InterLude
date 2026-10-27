@@ -11,7 +11,7 @@ I wanted 6 Music in the background all day without the hourly news, so it is tun
 </p>
 <p align="center"><sub>On the Mac: playing live, muting a bulletin, and an earlier programme with the news cut out.</sub></p>
 
-> **Unofficial.** InterLude is not affiliated with the BBC. It relies on stream addresses the BBC does not document and can change at any time. It sends no telemetry: its only network traffic is to BBC servers, and to speakers and the phone remote on your own network.
+> **Unofficial.** InterLude is not affiliated with the BBC. It relies on stream addresses the BBC does not document and can change at any time. It sends no telemetry: its only network traffic is to BBC servers, and to speakers and browsers on your own network.
 
 ## What it does
 
@@ -22,16 +22,19 @@ I wanted 6 Music in the background all day without the hourly news, so it is tun
 - A phone remote: scan a QR code and control InterLude from a phone on the same Wi-Fi, or from anywhere on your tailnet if the Mac runs Tailscale.
 - Learns a station's news theme from the last few hours of broadcast, the first time you play it (so far proven on 6 Music).
 - Keeps a log of every decision, so a wrong mute can be explained and the rules improved.
+- Runs as a server too: a Docker image for Linux that does all of the above with no Mac, played and controlled from any browser, and casting to Chromecasts itself.
 
 ## How it works
 
 The BBC's live streams are HLS: a playlist of 6.4 second audio segments. InterLude downloads the segments itself, analyses them, and serves its own playlist from the Mac to the player. Because it runs about a minute behind live, it has heard each bulletin begin before you do.
 
-A bulletin is found in a few ways, all running on the Mac:
+A bulletin is found in a few ways, all running on the machine itself:
 
 1. **Speech near the hour or half hour.** Apple's built-in sound classifier scores speech and music every 1.5 seconds. Twenty seconds of sustained speech close to a bulletin slot starts a mute.
 2. **The news theme.** InterLude learns the station's news jingle from recent bulletins and starts the mute when it hears it, so the presenter's handover still plays.
 3. **The newsreader's words.** While a bulletin is muted, on-device speech recognition listens for the sign-off ("…your next update's at six thirty", "That's 6 Music News for tonight") and ends the mute there, so trails and the presenter's chat afterwards are not lost. If no sign-off is heard, the mute ends when music returns.
+
+The server version does the same with open models in place of Apple's: YAMNet for speech and music, and whisper.cpp for the newsreader. YAMNet's scores are mapped onto Apple's, so the same rules apply to both.
 
 Muted segments are replaced one for one with segments carrying the same timestamps, so the player sees one continuous stream and the delay never drifts. If a mute is wrong, **Not news** brings the sound back within a few seconds, and **News got through** teaches it from a bulletin it missed.
 
@@ -56,7 +59,8 @@ The design, the measurements behind each rule and the mistakes along the way are
 
 ## Requirements
 
-- macOS 26 or later on Apple silicon
+- For the Mac app, macOS 26 or later on Apple silicon
+- For the server, an x86-64 Linux machine with Docker and about 1 GB of memory free
 - The BBC's UK stream addresses, which may not play outside the UK
 
 ## Download
@@ -72,6 +76,8 @@ InterLude is signed but not notarised by Apple (that needs a paid developer acco
 You only need to do this once. The first time you look for speakers, macOS also asks to let InterLude find devices on your local network; allow it, or Chromecasts won't appear.
 
 If you'd rather not run an app downloaded from the internet, build it yourself instead.
+
+For the server, see [Running the server](#running-the-server).
 
 ## Build from source
 
@@ -153,7 +159,7 @@ The volume is named after the folder `compose.yaml` is in, so for a folder calle
 **Comparing with the Mac.** To check the server against the Mac app, turn on `INTERLUDE_KEEP_RUNNING` in `compose.yaml`; the server then runs the live session all the time. Leave the Mac app playing the same station, and after a few days compare the two event logs:
 
 ```
-scripts/compare-events.py "~/Library/Containers/org.benbull.InterLude/Data/Library/Application Support/InterLude/events.jsonl" server-events.jsonl
+scripts/compare-events.py ~/"Library/Containers/org.benbull.InterLude/Data/Library/Application Support/InterLude/events.jsonl" server-events.jsonl
 ```
 
 To get `server-events.jsonl`, run `docker compose cp interlude:/var/lib/interlude/events.jsonl server-events.jsonl`.
@@ -168,21 +174,26 @@ To get `server-events.jsonl`, run `docker compose cp interlude:/var/lib/interlud
 
 Inside the App Sandbox, `Application Support` is the app's own container under `~/Library/Containers`.
 
+The server keeps the same files in its `data` volume (`/var/lib/interlude` in the container), plus `settings.json`, which holds its settings and the code in the app's link.
+
 ## Project layout
 
 | Folder | Contents |
 |---|---|
 | `Sources/InterLudeCore` | Everything that isn't user interface or tied to Apple's frameworks: stream handling, MPEG-TS, detection, playout, the phone remote's page and the Cast protocol. Builds and tests on Linux too. |
 | `Sources/InterLudeApple` | The Mac's implementations of what the core asks the platform for: AAC decoding and encoding, the sound classifier, speech recognition, signal maths, the local server and Cast discovery. |
-| `Sources/InterLudePortable` | Implementations that work away from the Mac, on Linux and Windows: audio decoding with ffmpeg. |
+| `Sources/InterLudePortable` | Implementations that work away from the Mac, on Linux and Windows: decoding and encoding audio with ffmpeg. |
 | `Sources/InterLudeHTTP` | The web server for macOS and Linux, on Hummingbird. |
 | `Sources/InterLudeML` | The server's speech models: YAMNet on ONNX Runtime for speech and music, whisper.cpp for the newsreader. `scripts/yamnet` converts and calibrates YAMNet. |
-| `Sources/InterLudeServer` | `interlude-server`, InterLude as a web app on a Linux host, in progress. `Dockerfile` and `compose.yaml` build and run it. |
+| `Sources/InterLudeCast` | Casting from Linux: a Chromecast client on SwiftNIO and a multicast DNS browser for finding speakers. |
+| `Sources/COnnxRuntime`, `CWhisper`, `CGGML` | Module maps that let Swift call the ONNX Runtime, whisper.cpp and ggml C libraries. |
+| `Sources/InterLudeServer` | `interlude-server`, InterLude as a web app on a Linux host. `Dockerfile` and `compose.yaml` build and run it; `interlude-server --check <audio>` runs its models on a file. |
 | `Sources/InterLudeApp` | The SwiftUI menu bar app. |
 | `Web` | The server's app icons. Its page is the phone remote's, in `Sources/InterLudeCore/Remote.swift`. |
 | `Tests` | Unit tests for the parts that can be tested without a network or speakers. |
 | `Tools` | Command-line programs used to measure and tune detection (below). |
-| `docs` | Findings from testing, notes on on-demand playback, and checklists for the tests that need ears or hardware. |
+| `docs` | Findings from testing, notes on on-demand playback, checklists for the tests that need ears or hardware, release notes and screenshots. |
+| `scripts` | Building and packaging the Mac app, installing the server's native libraries on Linux, preparing YAMNet, and comparing two event logs. |
 
 ### Tools
 
@@ -191,10 +202,10 @@ Run with `swift run --scratch-path ~/Library/Caches/InterLudeBuild <name>`. Reco
 | Tool | Use |
 |---|---|
 | `record <serviceId> <hoursAgo> <minutes> <dir>` | Save segments from the BBC's six hour rewind window. |
-| `classify <dir> <csv>` | Speech and music scores for a recording. |
+| `classify <dir> <csv>` | Speech and music scores for a recording. `CLASSIFIER=yamnet:<models dir>` scores with the server's YAMNet instead (`YAMNET_RAW=1` before calibration). |
 | `evaluate <csv> [labels.json] [profile.json]` | Replay the speech rule over scores and report accuracy against labelled bulletins. |
-| `ident-check` | Find and test a station's news theme in recordings. |
-| `signoff-check` | Transcribe bulletins and report where the newsreader opens and signs off. |
+| `ident-check` | Find and test a station's news theme in recordings. `PLATFORM=portable` decodes with ffmpeg and uses the server's signal maths. |
+| `signoff-check` | Transcribe bulletins and report where the newsreader opens and signs off. `WHISPER=<model file>` uses whisper.cpp, as the server does. |
 | `voice-changes`, `presenter-check` | Experiments in telling voices apart (they didn't work; see the findings). |
 | `serve <serviceId> [delay] [port]` | A session without the app, for testing with ffmpeg or curl. `REPLAY=<ISO time>` plays from that broadcast time instead; add `VERSION=<pid>` to play that BBC Sounds version on demand and `OFFSET=<seconds>` to start part way in. |
 | `cast-spike list` / `play <device> <url>` | List Cast speakers and groups, or play a stream on one. |
@@ -204,8 +215,18 @@ Run with `swift run --scratch-path ~/Library/Caches/InterLudeBuild <name>`. Reco
 
 The sounds offered in place of bulletins are trimmed from recordings by Joseph Sardin at [BigSoundBank](https://bigsoundbank.com), released into the public domain (CC0): sea waves #0698, forest and stream #2 #2714, and forest #3 #2715.
 
+## Third-party software
+
+The server is built with Hummingbird and SwiftNIO (Apache 2.0). Its image also includes:
+
+- YAMNet, Google's AudioSet classifier, converted to ONNX (Apache 2.0)
+- whisper.cpp and its base.en model (MIT)
+- ONNX Runtime (MIT)
+- ffmpeg, from Ubuntu (LGPL and GPL)
+- hls.js (Apache 2.0) and qrcode-generator (MIT), for the web page
+
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
 
-BBC audio, artwork and logos are the BBC's and are never stored in this repository. Album art and track names shown in the panel are fetched from the BBC while the app runs.
+BBC audio, artwork and logos are the BBC's and are never stored in this repository. Album art and track names shown in the panel and the web app are fetched from the BBC while they run.
