@@ -39,4 +39,9 @@ Use an iPhone and, if you have one, an Android phone, both on the Mac's Wi-Fi.
 4. Pick another station, then a Cast speaker, from the phone. Both should change on the Mac's panel too.
 5. During a muted bulletin, the phone should say "Bulletin muted"; press Not news and the sound should return.
 6. Add the remote to the home screen and open it from there. It should open full screen with the InterLude icon.
-7. Press Reset link on the Mac. The phone should say the link has stopped working.
+7. Tap Earlier on the phone. The Mac's panel should switch to Earlier too, and the phone should list today's programmes for the station, with times and pictures.
+8. Step back a few days with the arrows, tapping quickly. The day and the list should follow each tap, and the back arrow should stop at 30 days.
+9. Tap a programme. It should start from its beginning on the Mac or speaker, and the phone should show the progress bar, how far in it is, and, once a bulletin has passed, how many were skipped and for how long.
+10. Press Stop, then Play. The same programme should start again from its beginning. Tap Live, then Play: the station should play live.
+11. In Earlier, pick another station from the phone. Its programmes should appear without anything starting.
+12. Press Reset link on the Mac. The phone should say the link has stopped working.

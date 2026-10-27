@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 public enum FetchError: Error { case status(Int), notHTTP, badURL, unhealthy(String) }
 

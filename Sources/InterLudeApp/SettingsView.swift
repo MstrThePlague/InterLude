@@ -78,7 +78,11 @@ struct SettingsView: View {
                 Toggle("Control InterLude from a phone", isOn: $model.remoteEnabled)
                 if model.remoteEnabled { RemoteLink(model: model) }
             } header: { Text("Phone remote") } footer: {
-                FooterText("The phone needs to be on the same Wi-Fi as this Mac, and the Mac awake with InterLude open. Anyone on your network with the link can control playback. Reset link stops old links working.")
+                if model.remoteOnTailscale {
+                    FooterText("The link uses Tailscale, so the phone needs Tailscale on. The Mac must be awake with InterLude open. Anyone on your tailnet with the link can control playback. Reset link stops old links working.")
+                } else {
+                    FooterText("The phone needs to be on the same Wi-Fi as this Mac, and the Mac awake with InterLude open. Anyone on your network with the link can control playback. Reset link stops old links working.")
+                }
             }
 
             Section {

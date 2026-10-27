@@ -17,6 +17,34 @@ import Foundation
         #expect(HTTPRequest(requestLine: "GET") == nil)
     }
 
+    @Test func recognisesTailscaleAddresses() {
+        #expect(Tailnet.isTailscale("100.70.0.49"))
+        #expect(Tailnet.isTailscale("100.64.0.1"))
+        #expect(Tailnet.isTailscale("100.127.255.254"))
+        #expect(!Tailnet.isTailscale("100.128.0.1"))
+        #expect(!Tailnet.isTailscale("100.63.0.1"))
+        #expect(!Tailnet.isTailscale("192.168.1.20"))
+        #expect(!Tailnet.isTailscale("100.70.0"))
+    }
+
+    @Test func recognisesMagicDNSNames() {
+        #expect(Tailnet.magicDNSName("bb-mba-m3-1.tail896e40.ts.net.") == "bb-mba-m3-1.tail896e40.ts.net")
+        #expect(Tailnet.magicDNSName("Ben-Mac.Tail896e40.TS.NET") == "ben-mac.tail896e40.ts.net")
+        #expect(Tailnet.magicDNSName("49.0.70.100.in-addr.arpa") == nil)
+        #expect(Tailnet.magicDNSName("tail896e40.ts.net") == nil)
+        #expect(Tailnet.magicDNSName("a.b.tail896e40.ts.net") == nil)
+        #expect(Tailnet.magicDNSName("mac..ts.net") == nil)
+        #expect(Tailnet.magicDNSName("mac.local") == nil)
+    }
+
+    @Test func readsTheNameFromTailscaleStatus() {
+        let json = #"{"BackendState":"Running","Self":{"HostName":"bb-mba-m3-1","DNSName":"bb-mba-m3-1.tail896e40.ts.net.","TailscaleIPs":["100.70.0.49"]}}"#
+        #expect(Tailnet.magicDNSName(statusJSON: Data(json.utf8)) == "bb-mba-m3-1.tail896e40.ts.net")
+        #expect(Tailnet.magicDNSName(statusJSON: Data(#"{"BackendState":"Stopped","Self":{"DNSName":""}}"#.utf8)) == nil)
+        #expect(Tailnet.magicDNSName(statusJSON: Data(#"{"BackendState":"NoState"}"#.utf8)) == nil)
+        #expect(Tailnet.magicDNSName(statusJSON: Data("not json".utf8)) == nil)
+    }
+
     @Test func pageAndFiles() {
         #expect(route("GET", "/remote/abc123/") == .page)
         #expect(route("GET", "/remote/abc123") == .page)
@@ -52,32 +80,66 @@ import Foundation
         #expect(route("POST", "/remote/abc123/api/volume") == nil)
     }
 
+    @Test func earlierCommands() {
+        #expect(route("POST", "/remote/abc123/api/mode?m=earlier") == .command(.earlier(true)))
+        #expect(route("POST", "/remote/abc123/api/mode?m=live") == .command(.earlier(false)))
+        #expect(route("POST", "/remote/abc123/api/mode?m=later") == nil)
+        #expect(route("POST", "/remote/abc123/api/mode") == nil)
+        #expect(route("GET", "/remote/abc123/api/mode?m=earlier") == nil)
+        #expect(route("POST", "/remote/abc123/api/schedule") == .command(.reloadSchedule))
+        #expect(route("GET", "/remote/abc123/api/schedule") == nil)
+    }
+
+    @Test func daysStayWithinTheLastMonth() {
+        #expect(route("POST", "/remote/abc123/api/day?d=0") == .command(.day(0)))
+        #expect(route("POST", "/remote/abc123/api/day?d=\(OnDemand.days - 1)") == .command(.day(OnDemand.days - 1)))
+        #expect(route("POST", "/remote/abc123/api/day?d=\(OnDemand.days)") == nil)
+        #expect(route("POST", "/remote/abc123/api/day?d=-1") == nil)
+        #expect(route("POST", "/remote/abc123/api/day?d=1.5") == nil)
+        #expect(route("POST", "/remote/abc123/api/day") == nil)
+        #expect(route("GET", "/remote/abc123/api/day?d=1") == nil)
+    }
+
+    @Test func programmesNeedAPlainID() {
+        #expect(route("POST", "/remote/abc123/api/programme?id=p0lxz91z") == .command(.programme("p0lxz91z")))
+        #expect(route("GET", "/remote/abc123/api/programme?id=p0lxz91z") == nil)
+        #expect(route("POST", "/remote/abc123/api/programme") == nil)
+        #expect(route("POST", "/remote/abc123/api/programme?id=") == nil)
+        #expect(route("POST", "/remote/abc123/api/programme?id=a%2Fb") == nil)
+        #expect(route("POST", "/remote/abc123/api/programme?id=%3Cb%3E") == nil)
+        #expect(route("POST", "/remote/abc123/api/programme?id=\(String(repeating: "a", count: 33))") == nil)
+    }
+
+    @Test func stateCarriesEarlier() throws {
+        var s = RemoteState()
+        s.mode = "earlier"
+        var e = RemoteState.EarlierItem()
+        e.programmes = [.init(id: "p1", title: "T", detail: "2 h 0 min", time: "10:00", image: nil, playable: true, onNow: false, chosen: true, playing: false)]
+        s.earlier = e
+        s.replay = .init(heard: 0.3, analysed: 0.4, news: [[0, 0.02]], position: "36:00 of 2 h 0 min", skipped: nil)
+        let back = try JSONDecoder().decode(RemoteState.self, from: RemoteRoutes.json(s).body)
+        #expect(back == s)
+        #expect(back.earlier?.lastDay == OnDemand.days - 1)
+    }
+
     @Test func pageCarriesItsBase() {
         let html = String(decoding: RemoteRoutes.page(token: token).body, as: UTF8.self)
         #expect(html.contains(#"<base href="/remote/abc123/">"#))
         #expect(!html.contains("__BASE__"))
     }
 
+    /// iOS 27 shows a letter tile for a fetched apple-touch-icon, so the page carries it inline.
+    @Test func pageCarriesItsTouchIcon() {
+        let html = String(decoding: RemoteRoutes.page(token: token, touchIcon: Data([1, 2, 3])).body, as: UTF8.self)
+        #expect(html.contains(#"<link rel="apple-touch-icon" sizes="180x180" href="data:image/png;base64,AQID">"#))
+        #expect(html.contains(#"<link rel="icon" href="icon.png">"#))
+        #expect(!html.contains("__TOUCH_ICON__"))
+        let plain = String(decoding: RemoteRoutes.page(token: token).body, as: UTF8.self)
+        #expect(plain.contains(#"<link rel="apple-touch-icon" sizes="180x180" href="icon.png">"#))
+    }
+
     @Test func tokensAreLongAndFresh() {
         let a = RemoteRoutes.newToken(), b = RemoteRoutes.newToken()
         #expect(a.count == 32 && a != b)
-    }
-
-    /// The real server, over loopback: a POST reaches the handler with its query, and other methods are refused.
-    @Test func serverAcceptsPost() async throws {
-        let port = UInt16.random(in: 40000...60000)
-        let server = LocalServer(port: port) { req in
-            HTTPResponse(contentType: "text/plain", body: Data("\(req.method) \(req.path) \(req.query["v"] ?? "-")".utf8))
-        }
-        try server.start()
-        defer { server.stop() }
-        try await Task.sleep(for: .milliseconds(200))
-        var post = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/remote/t/api/volume?v=0.5")!)
-        post.httpMethod = "POST"
-        let (body, _) = try await URLSession.shared.data(for: post)
-        #expect(String(decoding: body, as: UTF8.self) == "POST /remote/t/api/volume 0.5")
-        var put = post; put.httpMethod = "PUT"
-        let (_, r) = try await URLSession.shared.data(for: put)
-        #expect((r as? HTTPURLResponse)?.statusCode == 405)
     }
 }

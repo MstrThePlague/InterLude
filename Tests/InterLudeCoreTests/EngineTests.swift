@@ -128,25 +128,6 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     #expect(p.tick(muteNews: false) { _ in true }.source == .station)
 }
 
-@Test func silentSegmentsJoinRealOnesWithoutTimestampBreaks() throws {
-    let dir = "/Users/ben/Documents/GitHub/InterLude/recordings/6music-a"
-    guard let idx = try? String(contentsOfFile: dir + "/index.txt", encoding: .utf8) else { return }
-    let first = Int(idx.split(separator: " ")[0])! + 200
-    var out = Data()
-    var proto: TSSegmentInfo?
-    var frame: Data?
-    for i in first..<(first + 12) {
-        let d = try Data(contentsOf: URL(fileURLWithPath: "\(dir)/\(i).ts"))
-        let info = try #require(TS.parse(d))
-        if proto == nil { proto = info; frame = Silence.adts(raw: try Silence.rawFrame(), like: info.frames[0]) }
-        if (first + 4..<first + 8).contains(i) {
-            let cc = (info.patPacket![3] & 0xF, info.pmtPacket![3] & 0xF)
-            out.append(TS.build(frames: Array(repeating: frame!, count: 300), startPTS: info.firstPTS!, prototype: proto!, patCC: cc.0, pmtCC: cc.1))
-        } else { out.append(d) }
-    }
-    try out.write(to: URL(fileURLWithPath: "/tmp/mix.ts"))
-}
-
 @Test func identMatcherFindsEmbeddedClip() {
     // A tone sweep embedded in noise should be found at the right offset.
     func sweep(_ n: Int) -> [Float] { (0..<n).map { i in sin(Float(i) * (0.02 + 0.00002 * Float(i)).truncatingRemainder(dividingBy: 1.5)) } }

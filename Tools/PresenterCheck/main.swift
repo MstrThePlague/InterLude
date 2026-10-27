@@ -1,5 +1,8 @@
 import Foundation
 import InterLudeCore
+import InterLudeApple
+
+Platform.install(.apple)
 
 // presenter-check <recordingDir> <scores.csv> <start,end> [<start,end> ...]
 // Learns the presenter's voice from speech away from bulletin slots, then shows how presenter-like each part of

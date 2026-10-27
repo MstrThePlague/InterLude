@@ -1,33 +1,6 @@
 import Foundation
 import Network
-
-public struct HTTPResponse: Sendable {
-    public var status: Int
-    public var contentType: String
-    public var body: Data
-    public var noCache = false
-    public init(status: Int = 200, contentType: String, body: Data, noCache: Bool = false) {
-        self.status = status; self.contentType = contentType; self.body = body; self.noCache = noCache
-    }
-    public static let notFound = HTTPResponse(status: 404, contentType: "text/plain", body: Data("not found".utf8))
-}
-
-public struct HTTPRequest: Sendable {
-    public var method: String
-    public var path: String
-    public var query: [String: String]
-    public init(method: String = "GET", path: String, query: [String: String] = [:]) {
-        self.method = method; self.path = path; self.query = query
-    }
-    /// Parses the request line, such as `POST /a/b?x=1 HTTP/1.1`. Only GET, HEAD and POST are accepted.
-    public init?(requestLine: String) {
-        let parts = requestLine.split(separator: " ")
-        guard parts.count >= 2, ["GET", "HEAD", "POST"].contains(parts[0]),
-              let c = URLComponents(string: String(parts[1])) else { return nil }
-        method = String(parts[0]); path = c.path
-        query = Dictionary((c.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { _, b in b })
-    }
-}
+import InterLudeCore
 
 /// A small HTTP server on NWListener. It serves the playlist and segments to AVPlayer (on loopback) and to Chromecasts
 /// (on the LAN), and the phone remote. Every path starts with a random token, so other devices cannot guess the URLs.
@@ -76,22 +49,70 @@ public final class LocalServer: @unchecked Sendable {
 
     /// The Mac's LAN IPv4 address (en0, en1, ...), never loopback. A Chromecast cannot reach `localhost`.
     public static func lanAddress() -> String? {
-        var ifap: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifap) == 0, let first = ifap else { return nil }
-        defer { freeifaddrs(ifap) }
         var best: String?
-        for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
-            let i = p.pointee
-            guard let sa = i.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET), (i.ifa_flags & UInt32(IFF_UP)) != 0, (i.ifa_flags & UInt32(IFF_LOOPBACK)) == 0 else { continue }
-            let name = String(cString: i.ifa_name)
-            guard name.hasPrefix("en") else { continue }
-            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
-            let addr = String(cString: host)
-            if addr.hasPrefix("169.254") { continue }
+        for (name, addr) in ipv4Addresses() where name.hasPrefix("en") && !addr.hasPrefix("169.254") {
             if name == "en0" { return addr }
             best = best ?? addr
         }
         return best
+    }
+
+    /// The Mac's Tailscale IPv4 address, so a phone on the tailnet can reach it away from home. Nil when Tailscale is not up.
+    public static func tailscaleAddress() -> String? {
+        ipv4Addresses().first { Tailnet.isTailscale($0.addr) }?.addr
+    }
+
+    /// The Mac's MagicDNS name, such as `mac.tailnet.ts.net`. Nil when Tailscale is not up or the name can't be found.
+    /// It asks DNS for the name of the Tailscale address, then the Tailscale CLI, which also covers a Mac set not to
+    /// use Tailscale's DNS. Both work in the App Sandbox. This can wait on DNS or the CLI, so call it off the main thread.
+    public static func tailscaleName() -> String? {
+        guard let ip = tailscaleAddress() else { return nil }
+        return reverseLookup(ip).flatMap(Tailnet.magicDNSName) ?? tailscaleStatus().flatMap(Tailnet.magicDNSName(statusJSON:))
+    }
+
+    private static func reverseLookup(_ ip: String) -> String? {
+        var sa = sockaddr_in()
+        sa.sin_len = UInt8(MemoryLayout<sockaddr_in>.size); sa.sin_family = sa_family_t(AF_INET)
+        guard inet_pton(AF_INET, ip, &sa.sin_addr) == 1 else { return nil }
+        var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+        let r = withUnsafePointer(to: &sa) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getnameinfo($0, socklen_t(MemoryLayout<sockaddr_in>.size), &host, socklen_t(host.count), nil, 0, NI_NAMEREQD)
+            }
+        }
+        return r == 0 ? String(cString: host) : nil
+    }
+
+    /// The Mac App Store and standalone builds keep the CLI in the app; Homebrew puts it on the path.
+    private static let tailscaleCLIs = ["/Applications/Tailscale.app/Contents/MacOS/Tailscale", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"]
+
+    /// `tailscale status --json` for this Mac alone, given up after 3 seconds.
+    private static func tailscaleStatus() -> Data? {
+        guard let path = tailscaleCLIs.first(where: FileManager.default.isExecutableFile(atPath:)) else { return nil }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: path)
+        p.arguments = ["status", "--json", "--peers=false"]
+        let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
+        let done = DispatchSemaphore(value: 0)
+        p.terminationHandler = { _ in done.signal() }
+        guard (try? p.run()) != nil else { return nil }
+        if done.wait(timeout: .now() + 3) == .timedOut { p.terminate(); return nil }
+        return p.terminationStatus == 0 ? out.fileHandleForReading.readDataToEndOfFile() : nil
+    }
+
+    /// Every up, non-loopback IPv4 address, with its interface name.
+    private static func ipv4Addresses() -> [(name: String, addr: String)] {
+        var ifap: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifap) == 0, let first = ifap else { return [] }
+        defer { freeifaddrs(ifap) }
+        var out: [(name: String, addr: String)] = []
+        for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let i = p.pointee
+            guard let sa = i.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET), (i.ifa_flags & UInt32(IFF_UP)) != 0, (i.ifa_flags & UInt32(IFF_LOOPBACK)) == 0 else { continue }
+            var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+            out.append((String(cString: i.ifa_name), String(cString: host)))
+        }
+        return out
     }
 }
