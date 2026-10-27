@@ -107,9 +107,9 @@ Inside the App Sandbox, `Application Support` is the app's own container under `
 | `Sources/InterLudeApple` | The Mac's implementations of what the core asks the platform for: AAC decoding and encoding, the sound classifier, speech recognition, signal maths, the local server and Cast discovery. |
 | `Sources/InterLudePortable` | Implementations that work away from the Mac, on Linux and Windows: audio decoding with ffmpeg. |
 | `Sources/InterLudeHTTP` | The web server for macOS and Linux, on Hummingbird. |
-| `Sources/InterLudeServer` | `interlude-server`, InterLude for a Linux host, in progress. `Dockerfile` and `compose.yaml` build and run it. |
+| `Sources/InterLudeServer` | `interlude-server`, InterLude as a web app on a Linux host, in progress: it plays and is configured from any browser, but doesn't mute news yet. `Dockerfile` and `compose.yaml` build and run it. |
 | `Sources/InterLudeApp` | The SwiftUI menu bar app. |
-| `Web` | The server's web page. |
+| `Web` | The server's app icons. Its page is the phone remote's, in `Sources/InterLudeCore/Remote.swift`. |
 | `Tests` | Unit tests for the parts that can be tested without a network or speakers. |
 | `Tools` | Command-line programs used to measure and tune detection (below). |
 | `docs` | Findings from testing, notes on on-demand playback, and checklists for the tests that need ears or hardware. |

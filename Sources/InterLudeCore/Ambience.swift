@@ -3,6 +3,10 @@ import Foundation
 /// A looping background sound, such as waves or birdsong, played in place of a muted bulletin.
 /// The loop runs on the stream's own clock, so consecutive muted segments join up without a seam.
 public struct Ambience: Sendable {
+    /// What can play during a muted bulletin: silence, or one of the sounds in Resources/Ambience by file name.
+    public static let choices: [(id: String, name: String)] = [
+        ("silence", "Silence"), ("ocean", "Ocean waves"), ("stream", "Woodland stream"), ("birds", "Woodland birds"),
+    ]
     /// Interleaved 48 kHz stereo samples of one seamless loop.
     let loop: [Float]
     public static let fadeInSeconds = 3.0

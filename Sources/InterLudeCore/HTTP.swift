@@ -15,8 +15,10 @@ public struct HTTPRequest: Sendable {
     public var method: String
     public var path: String
     public var query: [String: String]
-    public init(method: String = "GET", path: String, query: [String: String] = [:]) {
-        self.method = method; self.path = path; self.query = query
+    /// Header fields with lowercased names. The Mac's server leaves them empty.
+    public var headers: [String: String] = [:]
+    public init(method: String = "GET", path: String, query: [String: String] = [:], headers: [String: String] = [:]) {
+        self.method = method; self.path = path; self.query = query; self.headers = headers
     }
     /// Parses the request line, such as `POST /a/b?x=1 HTTP/1.1`. Only GET, HEAD and POST are accepted.
     public init?(requestLine: String) {

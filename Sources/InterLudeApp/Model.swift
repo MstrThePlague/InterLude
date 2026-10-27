@@ -103,9 +103,7 @@ final class AppModel {
             Task { await session?.setAmbience(url) }
         }
     }
-    static let ambienceChoices: [(id: String, name: String)] = [
-        ("silence", "Silence"), ("ocean", "Ocean waves"), ("stream", "Woodland stream"), ("birds", "Woodland birds"),
-    ]
+    static let ambienceChoices = Ambience.choices
     var ambienceURL: URL? {
         guard ambience != "silence" else { return nil }
         return Bundle.main.url(forResource: ambience, withExtension: "m4a", subdirectory: "Ambience")
@@ -746,6 +744,7 @@ final class AppModel {
         case .manifest: return RemoteRoutes.manifest
         case .icon: return HTTPResponse(contentType: "image/png", body: Self.remoteIcon)
         case .state: return RemoteRoutes.json(remoteState())
+        case .events: return .notFound      // the page polls the Mac instead
         case .command(let c): perform(c); return RemoteRoutes.json(remoteState())
         }
     }

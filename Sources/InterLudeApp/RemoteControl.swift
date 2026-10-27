@@ -86,6 +86,7 @@ extension AppModel {
             if isPlaying || isStarting { stop() }
             else if mode == .earlier, let p = replaying, Self.canPlay(p) { play(p) }
             else { playLive(selectedStationID) }
+        case .play: if !isPlaying && !isStarting { perform(.toggle) }
         case .station(let id):
             // In Earlier a station shows its schedule, as on the Mac; in Live it plays.
             if mode == .earlier { if id != selectedStationID, stations.contains(where: { $0.serviceId == id }) { switchStation(to: id) } }
@@ -98,6 +99,7 @@ extension AppModel {
         case .day(let d): if mode == .earlier { scheduleDay = d }
         case .reloadSchedule: if mode == .earlier { loadSchedule(force: true) }
         case .programme(let id): if mode == .earlier, let p = programmes.first(where: { $0.id == id }) { play(p) }
+        case .setting, .resetLink: break       // the Mac's own Settings window has these
         }
     }
 
