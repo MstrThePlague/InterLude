@@ -1,5 +1,6 @@
 import Foundation
 import InterLudeCore
+import InterLudeCast
 
 /// What the server remembers between runs, in `settings.json` in the data directory. Per-station options live in
 /// the station profiles, as on the Mac.
@@ -10,6 +11,10 @@ struct ServerSettings: Codable {
     var mode = "live"
     var bitrate = 320_000
     var ambience = "silence"
+    /// "browser", or "cast:" and a speaker's ID.
+    var speaker = "browser"
+    /// The volume for Cast speakers. Each browser keeps its own.
+    var volume = 0.7
 
     init() {}
 
@@ -21,6 +26,8 @@ struct ServerSettings: Codable {
         if let m = try? c.decode(String.self, forKey: .mode), m == "live" || m == "earlier" { mode = m }
         if let b = try? c.decode(Int.self, forKey: .bitrate), b == 128_000 || b == 320_000 { bitrate = b }
         if let a = try? c.decode(String.self, forKey: .ambience), Ambience.choices.contains(where: { $0.id == a }) { ambience = a }
+        if let s = try? c.decode(String.self, forKey: .speaker), s == "browser" || s.hasPrefix("cast:") { speaker = s }
+        if let v = try? c.decode(Double.self, forKey: .volume), (0...1).contains(v) { volume = v }
     }
 
     static func load(_ url: URL) -> ServerSettings {
@@ -44,6 +51,14 @@ actor Controller {
     private let detects: Bool
     /// Where the sounds for muted bulletins are, named by their IDs in `Ambience.choices`.
     private let ambienceDirectory: URL
+    /// Keeps the live session running whether or not anyone listens, for a shadow week beside the Mac.
+    private let keepRunning: Bool
+    /// How a Cast device reaches the stream: this machine's LAN address and port.
+    private let castBase: String?
+    private var speakers: [CastSpeaker] = []
+    private var searched = false
+    private var cast: CastClient?
+    private var castEvents: Task<Void, Never>?
 
     private var session: PlayerSession?
     private var starting: Task<PlayerSession, Error>?
@@ -67,14 +82,92 @@ actor Controller {
     static let idleLimit: TimeInterval = 600
     static let newsNote = "This server has no speech model, so it can't recognise bulletins and news plays. These settings are kept for when it does."
 
-    init(catalogue: Catalogue, settingsURL: URL, detects: Bool, ambienceDirectory: URL) {
+    init(catalogue: Catalogue, settingsURL: URL, detects: Bool, ambienceDirectory: URL, keepRunning: Bool = false, castBase: String?) {
         self.catalogue = catalogue; self.settingsURL = settingsURL; self.detects = detects; self.ambienceDirectory = ambienceDirectory
+        self.keepRunning = keepRunning; self.castBase = castBase
         var s = ServerSettings.load(settingsURL)
         if catalogue.station(s.station) == nil { s.station = catalogue.stations.first?.serviceId ?? s.station }
         settings = s
         s.save(settingsURL)
         for st in catalogue.stations { profiles[st.serviceId] = StationProfile.load(st) }
         if s.mode == "earlier" { Task { await self.loadSchedule() } }
+        if keepRunning { Task { await self.keepAlive() } }
+        Task { await self.discover() }
+    }
+
+    // MARK: Speakers
+
+    /// Looks for Cast speakers now and every two minutes.
+    private func discover() async {
+        while !Task.isCancelled {
+            let found = await Task.detached { MDNS.browseCast(timeout: 3) }.value
+            if found != speakers || !searched { log("Cast speakers: \(found.isEmpty ? "none found" : found.map(\.name).joined(separator: ", "))") }
+            speakers = found; searched = true
+            try? await Task.sleep(for: .seconds(120))
+        }
+    }
+
+    private var chosenSpeaker: CastSpeaker? {
+        guard settings.speaker.hasPrefix("cast:") else { return nil }
+        let id = String(settings.speaker.dropFirst(5))
+        return speakers.first { $0.id == id }
+    }
+
+    /// Plays the session's stream on the chosen speaker.
+    private func startCast() async {
+        guard let sp = chosenSpeaker, session != nil else { return }
+        guard let base = castBase, let url = URL(string: "\(base)/stream/live.m3u8") else {
+            errorText = "Can't cast: this server's network address isn't known. Start it with --cast-host."; return
+        }
+        await stopCast()
+        let c = CastClient(speaker: sp)
+        cast = c
+        do {
+            try await c.connect()
+            try await c.load(url: url, title: castTitle)
+            await c.setVolume(settings.volume)
+            log("casting to \(sp.name)")
+        } catch {
+            guard cast === c else { return }
+            castProblem("Couldn't play on \(sp.name): \(error.localizedDescription)")
+            return
+        }
+        castEvents = Task { [weak self] in
+            for await e in c.events {
+                guard let self else { return }
+                switch e {
+                case .lost: await self.castProblem("Cast connection lost: \(sp.name) stopped responding.")
+                case .takenOver: await self.castProblem("Another app took over \(sp.name).")
+                case .loadFailed(let m): await self.castProblem("\(sp.name) refused the stream: \(m)")
+                }
+            }
+        }
+    }
+
+    private func stopCast() async {
+        castEvents?.cancel(); castEvents = nil
+        let c = cast; cast = nil
+        await c?.stop()
+    }
+
+    private func castProblem(_ message: String) {
+        guard cast != nil else { return }
+        errorText = message
+        log(message)
+        Task { await self.stopCast() }
+    }
+
+    private var castTitle: String {
+        if isEarlier, let p = replaying { return "\(p.title) · \(selectedStation?.name ?? "")" }
+        return selectedStation?.name ?? "InterLude"
+    }
+
+    /// With keepRunning, starts the live session and starts it again within a minute whenever it stops.
+    private func keepAlive() async {
+        while !Task.isCancelled {
+            if session == nil && starting == nil && !isEarlier { start() }
+            try? await Task.sleep(for: .seconds(60))
+        }
     }
 
     var token: String { settings.token }
@@ -150,6 +243,7 @@ actor Controller {
             guard gen == generation else { await s.stop(); return }
             session = s; starting = nil; streamID = gen
             watch(s)
+            await startCast()
         } catch {
             guard gen == generation else { return }
             starting = nil
@@ -159,6 +253,7 @@ actor Controller {
     }
 
     private func stop(_ reason: String? = nil) async {
+        await stopCast()
         generation += 1
         starting = nil
         watcher?.cancel(); watcher = nil
@@ -196,7 +291,7 @@ actor Controller {
         if st.finished { await stop("\(st.replay?.programme.title ?? "the programme") finished"); return false }
         if st.needsRestart { log("playback was interrupted, starting again"); await restart(); return false }
         if case .failed(let m) = st.state { errorText = m } else if errorText != nil { errorText = nil }
-        if Date().timeIntervalSince(lastRequest) > Self.idleLimit {
+        if !keepRunning && Date().timeIntervalSince(lastRequest) > Self.idleLimit {
             await stop("no requests for \(Int(Self.idleLimit / 60)) minutes"); return false
         }
         return true
@@ -253,7 +348,14 @@ actor Controller {
                 settings.station = id; saveSettings()
                 await stop(); start()
             }
-        case .speaker, .volume: break       // each browser plays and sets its own volume
+        case .speaker(let id):
+            guard id == "browser" || (id.hasPrefix("cast:") && speakers.contains { "cast:" + $0.id == id }), id != settings.speaker else { return }
+            settings.speaker = id; saveSettings()
+            await stopCast()
+            if session != nil { await startCast() }
+        case .volume(let v):
+            settings.volume = v; saveSettings()
+            await cast?.setVolume(v)
         case .notNews: await session?.notNews()
         case .newsGotThrough:
             await session?.newsGotThrough()
@@ -341,12 +443,24 @@ actor Controller {
                               : "About \(Int((status.delaySeconds / 5).rounded()) * 5) seconds behind live"
         }
         s.station = settings.station
-        s.speaker = "browser"
+        s.speaker = settings.speaker
+        s.volume = settings.volume
         let favourites = catalogue.stations.filter { profile($0.serviceId).favourite }
         s.stations = (favourites + catalogue.stations.filter { !profile($0.serviceId).favourite }).map {
             .init(id: $0.serviceId, name: $0.name, short: $0.short, colour: $0.colour, group: $0.group, favourite: profile($0.serviceId).favourite)
         }
+        let single = speakers.filter { !$0.isGroup }, groups = speakers.filter(\.isGroup)
         s.speakers = [.init(id: "browser", name: "This browser", detail: nil, kind: "browser")]
+            + single.map { .init(id: "cast:" + $0.id, name: $0.name, detail: $0.model.isEmpty ? nil : $0.model, kind: "speaker") }
+            + groups.map { .init(id: "cast:" + $0.id, name: $0.name, detail: "Speaker group", kind: "group") }
+        if settings.speaker.hasPrefix("cast:"), chosenSpeaker == nil {
+            // A speaker chosen before but not seen since: keep showing it, so the choice isn't silently lost.
+            s.speakers.append(.init(id: settings.speaker, name: "Speaker not found", detail: nil, kind: "speaker"))
+        }
+        if !searched { s.speakerNote = "Looking for speakers…" }
+        else if speakers.isEmpty {
+            s.speakerNote = "No Chromecast speakers found. The server needs to see multicast DNS from the speakers' network."
+        }
         s.mode = settings.mode
         if isEarlier { s.earlier = earlier(station) }
         if replay, let r = status.replay { s.replay = replayItem(r) }

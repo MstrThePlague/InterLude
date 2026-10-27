@@ -634,16 +634,18 @@ function render(s) {
   document.title = s.playing ? s.headline + " · InterLude" : "InterLude";
 
   if (s.stream) followStream(s);
-  // With a server, the button plays and stops this browser; the server stops by itself when nobody listens.
-  const on = s.stream ? here : s.playing;
+  // With a server playing in this browser, the button plays and stops this browser, and the server stops by itself
+  // when nobody listens. With a speaker chosen, it starts and stops the server, as the Mac's remote does.
+  const local = !!s.stream && s.speaker === "browser";
+  const on = local ? here : s.playing;
   const play = $("play");
   play.setAttribute("aria-label", on ? "Stop" : "Play");
-  play.setAttribute("aria-busy", s.state === "starting" && (!s.stream || here) ? "true" : "false");
+  play.setAttribute("aria-busy", s.state === "starting" && (!local || here) ? "true" : "false");
   // SVG elements have no hidden property, so set the attribute.
   $("iconPlay").toggleAttribute("hidden", on);
   $("iconStop").toggleAttribute("hidden", !on);
 
-  if (s.stream) $("volume").value = Math.round(player.volume * 100);
+  if (local) $("volume").value = Math.round(player.volume * 100);
   else if (Date.now() > volumeHeldUntil) $("volume").value = Math.round(s.volume * 100);
 
   paintBadge($("stationBadge"), station);
@@ -747,7 +749,7 @@ function renderEarlier(e, station) {
     if (pr.playable) b.insertAdjacentHTML("beforeend", PROG_ICONS[pr.playing ? "playing" : pr.chosen ? "chosen" : "play"]);
     b.addEventListener("click", async () => {
       window.scrollTo({ top: 0, behavior: "smooth" });
-      if (state.stream && !here) playHere();
+      if (playsHere() && !here) playHere();
       await send("programme", { id: pr.id });
     });
     list.append(b);
@@ -788,7 +790,7 @@ function renderStations() {
       const badge = document.createElement("div"); badge.className = "badge"; paintBadge(badge, st);
       list.append(option(st.name, null, st.id === state.station, badge, async () => {
         $("stationSheet").close();
-        if (state.stream && state.mode !== "earlier" && !here) playHere();
+        if (playsHere() && state.mode !== "earlier" && !here) playHere();
         // In Earlier a station shows its programmes; in Live it plays.
         if (st.id !== state.station || (!state.playing && state.mode !== "earlier")) await send("station", { id: st.id });
       }));
@@ -809,7 +811,7 @@ function renderSpeakers() {
 }
 
 $("play").addEventListener("click", async () => {
-  if (state && state.stream) {
+  if (playsHere()) {
     if (here) { stopHere(); render(state); return; }
     playHere(); render(state);
     await send("play");
@@ -819,7 +821,7 @@ $("play").addEventListener("click", async () => {
   await send("toggle");
 });
 $("volume").addEventListener("input", e => {
-  if (state && state.stream) {
+  if (playsHere()) {
     player.volume = e.target.value / 100;
     try { localStorage.setItem("volume", String(player.volume)); } catch {}
     return;
@@ -858,6 +860,8 @@ $("gotThrough").addEventListener("click", async () => {
 const player = $("player");
 let hls = null, here = false, hereStream = null, hereSince = 0, hlsLoading = null, mediaKey = "", switchingUntil = 0;
 try { const v = parseFloat(localStorage.getItem("volume")); if (v >= 0 && v <= 1) player.volume = v; } catch {}
+// Whether this browser is where the sound plays: a server's stream with no speaker chosen.
+function playsHere() { return !!(state && state.stream && state.speaker === "browser"); }
 function nativeHLS() { return player.canPlayType("application/vnd.apple.mpegurl") !== ""; }
 function loadHls() {
   if (window.Hls || nativeHLS()) return;
@@ -896,6 +900,7 @@ function stopHere() {
 function followStream(s) {
   loadHls();
   if (!here) return;
+  if (s.speaker !== "browser") { stopHere(); return; }     // a speaker took over
   if (!s.playing && Date.now() - hereSince > 4000) { stopHere(); return; }
   if (s.streamID == null) return;
   if (hereStream == null) { hereStream = s.streamID; return; }
@@ -907,6 +912,7 @@ player.addEventListener("pause", () => { if (here && Date.now() > switchingUntil
 // The lock screen and headphone controls.
 function updateMediaSession() {
   if (!("mediaSession" in navigator) || !state || !state.stream) return;
+  // The lock screen follows this browser's own playing; a speaker has its own controls.
   const ms = navigator.mediaSession;
   if (!here) { ms.playbackState = "none"; return; }
   const art = state.artwork && state.artwork.startsWith("https://") ? state.artwork : new URL("icon.png", document.baseURI).href;
