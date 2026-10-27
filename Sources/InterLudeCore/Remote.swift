@@ -94,34 +94,98 @@ public struct RemoteState: Codable, Sendable, Equatable {
     public var earlier: EarlierItem?
     /// Set while an earlier programme plays.
     public var replay: ReplayItem?
+    /// Set by a server, which the page then plays itself: the stream's address, and an ID that changes whenever a
+    /// new session starts, so a browser playing along knows to load the stream again.
+    public var stream: String?
+    public var streamID: Int?
+    /// Set by a server: what its Settings sheet shows.
+    public var settings: SettingsItem?
     public init() {}
+
+    public struct SettingsItem: Codable, Sendable, Equatable {
+        /// The station the news options apply to.
+        public var stationName: String
+        public var delay: Double
+        public var muteNews: Bool
+        public var jingleOnly: Bool
+        public var shadowMode: Bool
+        /// Whether the news jingle is learned, as the Mac's Settings words it.
+        public var jingle: String
+        public var canForgetJingle: Bool
+        /// Shown above the news options, such as when they don't take effect yet.
+        public var newsNote: String?
+        /// In kbps.
+        public var bitrate: Int
+        public var ambience: String
+        /// Pairs of ID and name.
+        public var ambienceChoices: [[String]]
+        /// The app's path, such as `/app/<token>/`, for the QR code and the Reset link answer.
+        public var link: String
+        public init(stationName: String, delay: Double, muteNews: Bool, jingleOnly: Bool, shadowMode: Bool, jingle: String,
+                    canForgetJingle: Bool, newsNote: String?, bitrate: Int, ambience: String, ambienceChoices: [[String]], link: String) {
+            self.stationName = stationName; self.delay = delay; self.muteNews = muteNews; self.jingleOnly = jingleOnly
+            self.shadowMode = shadowMode; self.jingle = jingle; self.canForgetJingle = canForgetJingle; self.newsNote = newsNote
+            self.bitrate = bitrate; self.ambience = ambience; self.ambienceChoices = ambienceChoices; self.link = link
+        }
+    }
+}
+
+/// A change made in a server's Settings sheet, checked against the same ranges as the Mac's Settings.
+public enum RemoteSetting: Equatable, Sendable {
+    case delay(Double), muteNews(Bool), jingleOnly(Bool), shadowMode(Bool), forgetJingle, bitrate(Int), ambience(String)
+
+    public init?(key: String?, value: String?) {
+        func flag() -> Bool? { switch value { case "1", "true": true; case "0", "false": false; default: nil } }
+        switch key {
+        case "delay":
+            guard let d = value.flatMap(Double.init), d.isFinite, (30...600).contains(d) else { return nil }
+            self = .delay((d / 5).rounded() * 5)
+        case "muteNews": guard let f = flag() else { return nil }; self = .muteNews(f)
+        case "jingleOnly": guard let f = flag() else { return nil }; self = .jingleOnly(f)
+        case "shadowMode": guard let f = flag() else { return nil }; self = .shadowMode(f)
+        case "forgetJingle": self = .forgetJingle
+        case "bitrate":
+            guard let b = value.flatMap(Int.init), b == 128 || b == 320 else { return nil }
+            self = .bitrate(b * 1000)
+        case "ambience":
+            guard let a = value, Ambience.choices.contains(where: { $0.id == a }) else { return nil }
+            self = .ambience(a)
+        default: return nil
+        }
+    }
 }
 
 public enum RemoteCommand: Equatable, Sendable {
-    case toggle, station(String), speaker(String), volume(Double), notNews, newsGotThrough
+    /// `play` starts if stopped and otherwise does nothing, for a browser about to play along.
+    case toggle, play, station(String), speaker(String), volume(Double), notNews, newsGotThrough
     /// Earlier programmes: switch between Live and Earlier, step through the days, read the schedule again, and
     /// play a programme from its start.
     case earlier(Bool), day(Int), reloadSchedule, programme(String)
+    /// A server's Settings, and a new link that stops the old one working.
+    case setting(RemoteSetting), resetLink
 }
 
 public enum RemoteRoute: Equatable, Sendable {
-    case page, manifest, icon, state, command(RemoteCommand)
+    /// `events` is the state as server-sent events, which only a server offers.
+    case page, manifest, icon, state, events, command(RemoteCommand)
 }
 
-/// Addresses on the local server for the phone remote: `/remote/<token>/` and what sits under it.
+/// Addresses for the phone remote on the Mac, `/remote/<token>/`, and for the web app on a server, `/app/<token>/`,
+/// and what sits under them.
 public enum RemoteRoutes {
     public static let prefix = "/remote/"
+    public static let appPrefix = "/app/"
 
     public static func newToken() -> String {
         UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
     }
 
     /// The page's path for a token, with the trailing slash its relative links need.
-    public static func pagePath(token: String) -> String { "\(prefix)\(token)/" }
+    public static func pagePath(token: String, prefix: String = prefix) -> String { "\(prefix)\(token)/" }
 
     /// What a request asks for, or nil if it isn't for the remote with this token. Commands must be POSTs, so a
     /// browser fetching links ahead of time can never press a button.
-    public static func route(_ req: HTTPRequest, token: String) -> RemoteRoute? {
+    public static func route(_ req: HTTPRequest, token: String, prefix: String = prefix) -> RemoteRoute? {
         let base = prefix + token
         guard !token.isEmpty, req.path == base || req.path.hasPrefix(base + "/") else { return nil }
         let rest = String(req.path.dropFirst(base.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
@@ -131,12 +195,14 @@ public enum RemoteRoutes {
         case "manifest.webmanifest": return post ? nil : .manifest
         case "icon.png": return post ? nil : .icon
         case "api/state": return .state
+        case "api/events": return post ? nil : .events
         default: break
         }
         guard post, rest.hasPrefix("api/") else { return nil }
         let q = req.query
         switch rest.dropFirst(4) {
         case "toggle": return .command(.toggle)
+        case "play": return .command(.play)
         case "station": return q["id"].map { .command(.station($0)) }
         case "speaker": return q["id"].map { .command(.speaker($0)) }
         case "volume":
@@ -153,6 +219,8 @@ public enum RemoteRoutes {
         case "programme":
             guard let id = q["id"], isProgrammeID(id) else { return nil }
             return .command(.programme(id))
+        case "setting": return RemoteSetting(key: q["k"], value: q["v"]).map { .command(.setting($0)) }
+        case "resetlink": return .command(.resetLink)
         default: return nil
         }
     }
@@ -167,9 +235,9 @@ public enum RemoteRoutes {
     }
 
     /// The page, with `touchIcon` (a PNG) inline as its Home Screen icon: iOS 27 shows a letter tile for a fetched one.
-    public static func page(token: String, touchIcon: Data = Data()) -> HTTPResponse {
+    public static func page(token: String, touchIcon: Data = Data(), prefix: String = prefix) -> HTTPResponse {
         let icon = touchIcon.isEmpty ? "icon.png" : "data:image/png;base64,\(touchIcon.base64EncodedString())"
-        let html = RemotePage.html.replacingOccurrences(of: "__BASE__", with: pagePath(token: token))
+        let html = RemotePage.html.replacingOccurrences(of: "__BASE__", with: pagePath(token: token, prefix: prefix))
             .replacingOccurrences(of: "__TOUCH_ICON__", with: icon)
         return HTTPResponse(contentType: "text/html; charset=utf-8", body: Data(html.utf8), noCache: true)
     }
@@ -331,6 +399,33 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .empty { padding: 14px; color: var(--muted); font-size: 15px; }
 .empty .link { display: block; padding: 8px 0 0; }
 
+.col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+@media (min-width: 900px) {
+  main { max-width: 980px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 28px; align-items: start; }
+  main > .banner, main > footer { grid-column: 1 / -1; }
+  main > .col:first-of-type { position: sticky; top: 16px; }      /* the player stays in view beside a long list */
+  dialog { margin: auto; border-radius: 18px; max-height: 80vh; }
+}
+.set { display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 52px; }
+.set + .set { border-top: 1px solid var(--line); }
+.set .label { flex: 1; min-width: 0; }
+.set .label small { display: block; color: var(--muted); font-size: 13px; }
+.set.column { flex-direction: column; align-items: stretch; }
+.set output { color: var(--muted); font-variant-numeric: tabular-nums; }
+.set .seg { min-width: 180px; }
+input.toggle { appearance: none; -webkit-appearance: none; width: 51px; height: 31px; margin: 0; border-radius: 99px; background: var(--track);
+  position: relative; flex: none; cursor: pointer; transition: background .2s; }
+input.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff;
+  box-shadow: 0 2px 4px rgba(0,0,0,.2); transition: transform .2s; }
+input.toggle:checked { background: var(--green); }
+input.toggle:checked::after { transform: translateX(20px); }
+select { font: inherit; color: inherit; background: var(--track); border: 0; border-radius: 8px; padding: 6px 10px; }
+.qr { background: #fff; border-radius: 12px; padding: 10px; width: 180px; align-self: center; }
+.qr svg { display: block; width: 100%; height: auto; }
+.linkbox { font: 14px ui-monospace, Menlo, monospace; width: 100%; color: var(--muted); background: var(--track); border: 0; border-radius: 8px;
+  padding: 8px 10px; -webkit-user-select: text; user-select: text; }
+.actions { display: flex; gap: 24px; justify-content: center; }
+.link.danger { color: var(--red); }
 .toast { position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%); background: rgba(40,40,40,.94);
   color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 15px; max-width: calc(100% - 32px); text-align: center; z-index: 10;
   transition: opacity .25s; }
@@ -338,15 +433,16 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 </head>
 <body>
 <main>
-  <div class="banner offline" id="offline" hidden role="status"><b>Can't reach InterLude</b>Check that the Mac is awake, InterLude is open, and this phone is on the same Wi-Fi.</div>
-  <div class="banner offline" id="gone" hidden role="status"><b>This link has stopped working</b>The remote was turned off or its link was reset. Open InterLude's Settings on the Mac and scan the code again.</div>
+  <div class="banner offline" id="offline" hidden role="status"><b>Can't reach InterLude</b><span id="offlineText">Check that the Mac is awake, InterLude is open, and this phone is on the same Wi-Fi.</span></div>
+  <div class="banner offline" id="gone" hidden role="status"><b>This link has stopped working</b><span id="goneText">The remote was turned off or its link was reset. Open InterLude's Settings on the Mac and scan the code again.</span></div>
   <div class="banner error" id="error" hidden role="alert"></div>
 
+  <div class="col">
   <section class="card now" aria-live="polite">
     <div class="art" id="art"><span id="artText">R</span><img id="artImg" alt="" hidden><div class="shade" id="artShade" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"/></svg></div></div>
     <div class="meta"><span class="pill" id="pill" hidden></span><span id="stationName"></span></div>
     <h1 id="headline">InterLude</h1>
-    <div class="sub" id="subheadline">Connecting to your Mac…</div>
+    <div class="sub" id="subheadline">Connecting…</div>
     <div class="progress" id="progress" hidden aria-label="Position in programme">
       <div class="bar" id="bar"><i class="analysed" id="analysed"></i><i class="heard" id="heard"></i></div>
       <div class="progress-text"><span id="position"></span><span id="skipped"></span></div>
@@ -369,7 +465,9 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
     <button id="modeLive" aria-pressed="true">Live</button>
     <button id="modeEarlier" aria-pressed="false">Earlier</button>
   </div>
+  </div>
 
+  <div class="col">
   <section class="card rows">
     <button class="row" id="stationRow">
       <div class="badge" id="stationBadge">R</div>
@@ -379,6 +477,11 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
     <button class="row" id="speakerRow">
       <div class="icon" id="speakerIcon"></div>
       <div class="label"><small id="speakerCaption">Play on</small><span id="speakerLabel">…</span></div>
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+    </button>
+    <button class="row" id="settingsRow" hidden>
+      <div class="icon"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.7a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg></div>
+      <div class="label"><span>Settings</span></div>
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
     </button>
   </section>
@@ -402,6 +505,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
     </div>
     <div id="programmes"></div>
   </section>
+  </div>
 
   <footer id="footer"></footer>
 </main>
@@ -414,6 +518,11 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
   <div class="sheet-head"><h2 id="speakerSheetTitle">Play on</h2><button class="link" data-close>Done</button></div>
   <div class="sheet-body" id="speakerList"></div>
 </dialog>
+<dialog id="settingsSheet" aria-labelledby="settingsSheetTitle">
+  <div class="sheet-head"><h2 id="settingsSheetTitle">Settings</h2><button class="link" data-close>Done</button></div>
+  <div class="sheet-body" id="settingsList"></div>
+</dialog>
+<audio id="player" preload="none"></audio>
 <div class="toast" id="toast" hidden role="status"></div>
 
 <script>
@@ -422,8 +531,15 @@ const $ = id => document.getElementById(id);
 const ICONS = {
   mac: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5V16H4V5.5zM6 6v8h12V6H6zM1 17h22v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2v-1z"/></svg>',
   speaker: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 2h10a2 2 0 0 1 2 2v16a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2zm5 2.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3zM12 10a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9zm0 2.2a2.3 2.3 0 1 1 0 4.6 2.3 2.3 0 0 1 0-4.6z"/></svg>',
-  group: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 4h7a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 10 20H3a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 3 4zm3.5 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM14 4h7a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 21 20h-7a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 14 4zm3.5 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>'
+  group: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 4h7a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 10 20H3a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 3 4zm3.5 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM14 4h7a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 21 20h-7a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 14 4zm3.5 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>',
+  browser: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 3h16a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm0 5v11h16V8H4zm1.5-3.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>'
 };
+// On a server the page is the whole app, at /app/<token>/; on the Mac it is the phone remote.
+const ON_SERVER = location.pathname.startsWith("/app/");
+if (ON_SERVER) {
+  $("offlineText").textContent = "Check that the server is running and this device is on your network or tailnet.";
+  $("goneText").textContent = "The link was reset. Open the new one from Settings on a device that has it, or from the server's log.";
+}
 const CHECK = '<svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>';
 const PROG_ICONS = {
   play: '<svg class="end" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>',
@@ -432,7 +548,7 @@ const PROG_ICONS = {
 };
 const PILLS = { live: "LIVE", muted: "MUTED", earlier: "EARLIER", starting: "STARTING" };
 
-let state = null, shownEarlier = "", dayWanted = null, timer = null, failures = 0, volumeHeldUntil = 0, volumeTimer = null, toastTimer = null;
+let state = null, shownEarlier = "", shownSettings = "", dayWanted = null, timer = null, failures = 0, volumeHeldUntil = 0, volumeTimer = null, toastTimer = null;
 
 function clock(seconds) {
   const s = Math.max(0, Math.round(seconds));
@@ -460,16 +576,30 @@ function connected(ok, gone) {
 }
 async function refresh() {
   clearTimeout(timer);
-  try { render(await request("state")); failures = 0; connected(true); }
+  try {
+    render(await request("state")); failures = 0; connected(true);
+    // A server sends changes as they happen; the Mac is polled.
+    if (state.stream && window.EventSource) { listen(); return; }
+  }
   catch (e) { failures++; if (e.gone) connected(false, true); else if (failures >= 2) connected(false); }
-  if (!document.hidden) timer = setTimeout(refresh, failures ? 3000 : 1500);
+  if (!document.hidden || here) timer = setTimeout(refresh, failures ? 3000 : 1500);
 }
+let source = null;
+function listen() {
+  if (source) return;
+  source = new EventSource("api/events");
+  source.onmessage = e => { failures = 0; connected(true); render(JSON.parse(e.data)); };
+  // Polling notices a reset link or a server that has gone, then listens again.
+  source.onerror = () => { source.close(); source = null; clearTimeout(timer); timer = setTimeout(refresh, 2000); };
+}
+function quiet() { if (source) { source.close(); source = null; } clearTimeout(timer); }
 async function send(command, params) {
   const q = params ? "?" + new URLSearchParams(params) : "";
   try { render(await request(command + q, true)); failures = 0; connected(true); return true; }
   catch (e) { connected(false, !!e.gone); return false; }
 }
-document.addEventListener("visibilitychange", () => { if (document.hidden) clearTimeout(timer); else refresh(); });
+// Keeps listening in the background while this browser plays, so the lock screen shows the song.
+document.addEventListener("visibilitychange", () => { if (document.hidden) { if (!here) quiet(); } else refresh(); });
 window.addEventListener("pageshow", refresh);
 
 function toast(text) {
@@ -503,21 +633,34 @@ function render(s) {
   $("subheadline").textContent = s.subheadline;
   document.title = s.playing ? s.headline + " · InterLude" : "InterLude";
 
+  if (s.stream) followStream(s);
+  // With a server playing in this browser, the button plays and stops this browser, and the server stops by itself
+  // when nobody listens. With a speaker chosen, it starts and stops the server, as the Mac's remote does.
+  const local = !!s.stream && s.speaker === "browser";
+  const on = local ? here : s.playing;
   const play = $("play");
-  play.setAttribute("aria-label", s.playing ? "Stop" : "Play");
-  play.setAttribute("aria-busy", s.state === "starting" ? "true" : "false");
+  play.setAttribute("aria-label", on ? "Stop" : "Play");
+  play.setAttribute("aria-busy", s.state === "starting" && (!local || here) ? "true" : "false");
   // SVG elements have no hidden property, so set the attribute.
-  $("iconPlay").toggleAttribute("hidden", s.playing);
-  $("iconStop").toggleAttribute("hidden", !s.playing);
+  $("iconPlay").toggleAttribute("hidden", on);
+  $("iconStop").toggleAttribute("hidden", !on);
 
-  if (Date.now() > volumeHeldUntil) $("volume").value = Math.round(s.volume * 100);
+  if (local) $("volume").value = Math.round(player.volume * 100);
+  else if (Date.now() > volumeHeldUntil) $("volume").value = Math.round(s.volume * 100);
 
   paintBadge($("stationBadge"), station);
   $("stationLabel").textContent = station ? station.name : "Choose a station";
   const speaker = s.speakers.find(x => x.id === s.speaker) || s.speakers[0];
   $("speakerIcon").innerHTML = ICONS[speaker ? speaker.kind : "mac"];
   $("speakerLabel").textContent = speaker ? speaker.name : "This Mac";
-  $("speakerCaption").textContent = s.playing ? "Playing on" : "Play on";
+  $("speakerCaption").textContent = on ? "Playing on" : "Play on";
+  $("settingsRow").hidden = !s.settings;
+  if (s.settings && $("settingsSheet").open) {
+    const key = JSON.stringify(s.settings);
+    // Not while the delay slider is held, which a rebuild would drop.
+    if (key !== shownSettings && document.activeElement?.type !== "range") renderSettings();
+  }
+  updateMediaSession();
 
   $("news").hidden = !s.canCorrect;
   const alert = $("alert");
@@ -606,6 +749,7 @@ function renderEarlier(e, station) {
     if (pr.playable) b.insertAdjacentHTML("beforeend", PROG_ICONS[pr.playing ? "playing" : pr.chosen ? "chosen" : "play"]);
     b.addEventListener("click", async () => {
       window.scrollTo({ top: 0, behavior: "smooth" });
+      if (playsHere() && !here) playHere();
       await send("programme", { id: pr.id });
     });
     list.append(b);
@@ -646,6 +790,7 @@ function renderStations() {
       const badge = document.createElement("div"); badge.className = "badge"; paintBadge(badge, st);
       list.append(option(st.name, null, st.id === state.station, badge, async () => {
         $("stationSheet").close();
+        if (playsHere() && state.mode !== "earlier" && !here) playHere();
         // In Earlier a station shows its programmes; in Live it plays.
         if (st.id !== state.station || (!state.playing && state.mode !== "earlier")) await send("station", { id: st.id });
       }));
@@ -666,16 +811,28 @@ function renderSpeakers() {
 }
 
 $("play").addEventListener("click", async () => {
+  if (playsHere()) {
+    if (here) { stopHere(); render(state); return; }
+    playHere(); render(state);
+    await send("play");
+    return;
+  }
   $("play").setAttribute("aria-busy", "true");
   await send("toggle");
 });
 $("volume").addEventListener("input", e => {
+  if (playsHere()) {
+    player.volume = e.target.value / 100;
+    try { localStorage.setItem("volume", String(player.volume)); } catch {}
+    return;
+  }
   volumeHeldUntil = Date.now() + 2000;
   clearTimeout(volumeTimer);
   volumeTimer = setTimeout(() => send("volume", { v: (e.target.value / 100).toFixed(2) }), 150);
 });
 $("stationRow").addEventListener("click", () => { if (!state) return; renderStations(); $("stationSheet").showModal(); });
 $("speakerRow").addEventListener("click", () => { if (!state) return; renderSpeakers(); $("speakerSheet").showModal(); });
+$("settingsRow").addEventListener("click", () => { if (!state || !state.settings) return; renderSettings(); $("settingsSheet").showModal(); });
 for (const d of document.querySelectorAll("dialog")) {
   d.addEventListener("click", e => { if (e.target === d || e.target.hasAttribute("data-close")) d.close(); });
 }
@@ -697,6 +854,183 @@ $("notNews").addEventListener("click", async () => {
 $("gotThrough").addEventListener("click", async () => {
   if (await send("gotthrough")) toast("Thanks. InterLude will learn from that bulletin.");
 });
+
+// Playing in this browser, when a server offers its stream. Safari plays HLS itself; other browsers use hls.js,
+// served by the server and loaded only when needed.
+const player = $("player");
+let hls = null, here = false, hereStream = null, hereSince = 0, hlsLoading = null, mediaKey = "", switchingUntil = 0;
+try { const v = parseFloat(localStorage.getItem("volume")); if (v >= 0 && v <= 1) player.volume = v; } catch {}
+// Whether this browser is where the sound plays: a server's stream with no speaker chosen.
+function playsHere() { return !!(state && state.stream && state.speaker === "browser"); }
+function nativeHLS() { return player.canPlayType("application/vnd.apple.mpegurl") !== ""; }
+function loadHls() {
+  if (window.Hls || nativeHLS()) return;
+  if (!hlsLoading) {
+    hlsLoading = true;
+    const sc = document.createElement("script"); sc.src = "/static/hls.min.js"; document.head.append(sc);
+  }
+}
+function attach() {
+  switchingUntil = Date.now() + 2000;     // swapping streams pauses the element; that isn't the listener stopping
+  if (hls) { hls.destroy(); hls = null; }
+  if (nativeHLS()) player.src = state.stream;
+  else if (window.Hls && Hls.isSupported()) {
+    // The first request starts the session, which takes 20 s or so to fill its delay.
+    hls = new Hls({ manifestLoadingTimeOut: 60000, manifestLoadingMaxRetry: 4, levelLoadingTimeOut: 60000 });
+    hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal && here) { toast("Playback stopped (" + d.details + ")"); stopHere(); render(state); } });
+    hls.loadSource(state.stream); hls.attachMedia(player);
+  } else { toast("This browser can't play the stream."); return false; }
+  hereStream = state.streamID;
+  return true;
+}
+// Called straight from a tap, so the browser lets the sound start.
+function playHere() {
+  here = true; hereSince = Date.now();
+  if (!attach()) { here = false; return; }
+  player.play().catch(e => { if (here && e.name !== "AbortError") toast(e.message); });
+}
+function stopHere() {
+  here = false; hereStream = null;
+  player.pause();
+  if (hls) { hls.destroy(); hls = null; }
+  player.removeAttribute("src"); player.load();
+}
+// Keeps this browser on the server's current session: a new session (another station or programme) means loading
+// the stream again, and a session that has stopped means stopping here too.
+function followStream(s) {
+  loadHls();
+  if (!here) return;
+  if (s.speaker !== "browser") { stopHere(); return; }     // a speaker took over
+  if (!s.playing && Date.now() - hereSince > 4000) { stopHere(); return; }
+  if (s.streamID == null) return;
+  if (hereStream == null) { hereStream = s.streamID; return; }
+  if (s.streamID !== hereStream) { attach(); player.play().catch(() => {}); }
+}
+// Paused from outside the page, such as by the system or a headphone button: stop here.
+player.addEventListener("pause", () => { if (here && Date.now() > switchingUntil) { stopHere(); if (state) render(state); } });
+
+// The lock screen and headphone controls.
+function updateMediaSession() {
+  if (!("mediaSession" in navigator) || !state || !state.stream) return;
+  // The lock screen follows this browser's own playing; a speaker has its own controls.
+  const ms = navigator.mediaSession;
+  if (!here) { ms.playbackState = "none"; return; }
+  const art = state.artwork && state.artwork.startsWith("https://") ? state.artwork : new URL("icon.png", document.baseURI).href;
+  const key = [state.headline, state.subheadline, state.stationName, art].join("|");
+  if (key !== mediaKey && window.MediaMetadata) {
+    mediaKey = key;
+    ms.metadata = new MediaMetadata({ title: state.headline, artist: state.subheadline || state.stationName, album: "InterLude",
+                                      artwork: [{ src: art, sizes: "512x512" }] });
+  }
+  ms.playbackState = "playing";
+}
+if ("mediaSession" in navigator) {
+  const set = (a, f) => { try { navigator.mediaSession.setActionHandler(a, f); } catch {} };
+  set("play", () => { if (!here && state && state.stream) { playHere(); send("play"); } });
+  set("pause", () => { stopHere(); if (state) render(state); });
+  set("stop", () => { stopHere(); if (state) render(state); });
+}
+
+// A server's Settings.
+function settingRow(label, detail, control) {
+  const r = document.createElement("div"); r.className = "set";
+  const l = document.createElement("div"); l.className = "label";
+  const n = document.createElement("span"); n.textContent = label; l.append(n);
+  if (detail) { const d = document.createElement("small"); d.textContent = detail; l.append(d); }
+  r.append(l);
+  if (control) r.append(control);
+  return r;
+}
+function toggle(checked, key) {
+  const t = document.createElement("input"); t.type = "checkbox"; t.className = "toggle"; t.checked = checked;
+  t.setAttribute("role", "switch");
+  t.addEventListener("change", () => change(key, t.checked ? "1" : "0"));
+  return t;
+}
+// Sends a setting; if it doesn't take, shows the server's settings again rather than what was tapped.
+async function change(k, v) {
+  if (!await send("setting", v == null ? { k } : { k, v }) && state.settings) renderSettings();
+}
+function card(...rows) { const c = document.createElement("div"); c.className = "card"; c.append(...rows); return c; }
+function hint(text) { const p = document.createElement("p"); p.className = "hint"; p.textContent = text; return p; }
+function appLink() { return new URL(state.settings.link, location.origin).href; }
+
+function renderSettings() {
+  const st = state.settings, list = $("settingsList");
+  shownSettings = JSON.stringify(st);
+  list.replaceChildren();
+
+  list.append(title("Playback"));
+  const delay = document.createElement("div"); delay.className = "set column";
+  const head = settingRow("Delay behind live", null, document.createElement("output"));
+  head.style.padding = "0"; head.style.minHeight = "0";
+  const out = head.querySelector("output"); out.textContent = st.delay + " s";
+  const range = document.createElement("input"); range.type = "range"; range.min = 30; range.max = 600; range.step = 5; range.value = st.delay;
+  range.setAttribute("aria-label", "Delay behind live");
+  range.addEventListener("input", () => { out.textContent = range.value + " s"; });
+  range.addEventListener("change", () => change("delay", range.value));
+  delay.append(head, range);
+  const rate = document.createElement("div"); rate.className = "seg";
+  for (const kbps of [128, 320]) {
+    const b = document.createElement("button"); b.textContent = kbps + " kbps"; b.setAttribute("aria-pressed", st.bitrate === kbps ? "true" : "false");
+    b.addEventListener("click", () => { if (st.bitrate !== kbps) change("bitrate", String(kbps)); });
+    rate.append(b);
+  }
+  list.append(card(delay, settingRow("Bitrate", null, rate)));
+  list.append(hint("A longer delay gives InterLude more time to recognise a bulletin before you hear it. Changing the delay or bitrate starts the stream again."));
+
+  list.append(title("News detection for " + st.stationName));
+  if (st.newsNote) list.append(hint(st.newsNote));
+  const jingle = settingRow("News jingle", st.jingle, null);
+  if (st.canForgetJingle) {
+    const f = document.createElement("button"); f.className = "link"; f.textContent = "Forget";
+    f.addEventListener("click", () => change("forgetJingle"));
+    jingle.append(f);
+  }
+  list.append(card(
+    settingRow("Mute news bulletins", null, toggle(st.muteNews, "muteNews")),
+    settingRow("Mute only when the news jingle plays", null, toggle(st.jingleOnly, "jingleOnly")),
+    settingRow("Shadow mode", "Note bulletins, never mute", toggle(st.shadowMode, "shadowMode")),
+    jingle));
+
+  list.append(title("Sound"));
+  const pick = document.createElement("select"); pick.setAttribute("aria-label", "During bulletins");
+  for (const [id, name] of st.ambienceChoices) {
+    const o = document.createElement("option"); o.value = id; o.textContent = name; o.selected = id === st.ambience; pick.append(o);
+  }
+  pick.addEventListener("change", () => change("ambience", pick.value));
+  list.append(card(settingRow("During bulletins", null, pick)));
+
+  list.append(title("Open on another device"));
+  const share = document.createElement("div"); share.className = "set column";
+  const qr = document.createElement("div"); qr.className = "qr"; qr.setAttribute("aria-hidden", "true");
+  const box = document.createElement("input"); box.className = "linkbox"; box.readOnly = true; box.value = appLink();
+  box.setAttribute("aria-label", "Link to InterLude");
+  const actions = document.createElement("div"); actions.className = "actions";
+  const copy = document.createElement("button"); copy.className = "link"; copy.textContent = "Copy link";
+  copy.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(box.value); }
+    catch { box.select(); document.execCommand("copy"); }
+    toast("Link copied.");
+  });
+  const reset = document.createElement("button"); reset.className = "link danger"; reset.textContent = "Reset link";
+  reset.addEventListener("click", async () => {
+    if (!confirm("Make a new link? Pages and Home Screen icons with the old link stop working.")) return;
+    if (await send("resetlink")) location.replace(state.settings.link);
+  });
+  actions.append(copy, reset);
+  share.append(qr, box, actions);
+  list.append(card(share));
+  list.append(hint("Scan the code with a phone's camera to open InterLude there; on iPhone, Share › Add to Home Screen keeps it as an app. Anyone on your network or tailnet with the link can control InterLude."));
+  drawQR(qr, box.value);
+}
+function drawQR(el, text) {
+  const draw = () => { const q = qrcode(0, "M"); q.addData(text); q.make(); el.innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); };
+  if (window.qrcode) return draw();
+  const sc = document.createElement("script"); sc.src = "/static/qrcode.js"; sc.onload = draw;
+  sc.onerror = () => { el.hidden = true; };
+  document.head.append(sc);
+}
 
 refresh();
 </script>

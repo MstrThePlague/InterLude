@@ -1,8 +1,14 @@
 import Foundation
 import InterLudeCore
 import InterLudeApple
+import InterLudePortable
 
-Platform.install(.apple)
+// PLATFORM=portable decodes with ffmpeg and uses the portable maths, as interlude-server does on Linux.
+if ProcessInfo.processInfo.environment["PLATFORM"] == "portable", let ffmpeg = FFmpegDecoder.find() {
+    Platform.install(.portable(ffmpeg: ffmpeg))
+} else {
+    Platform.install(.apple)
+}
 
 let env = ProcessInfo.processInfo.environment
 let BANDS = Int(env["BANDS"] ?? "") ?? IdentFeatures.bands

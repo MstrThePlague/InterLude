@@ -68,7 +68,12 @@ public struct Platform: Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var installed = portable
 
+    /// Overrides the installed platform for the current task and its child tasks, so tests can use one platform
+    /// without disturbing others running at the same time in the same process.
+    @TaskLocal public static var scoped: Platform?
+
     public static var current: Platform {
+        if let scoped { return scoped }
         lock.lock(); defer { lock.unlock() }
         return installed
     }
