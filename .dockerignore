@@ -1,0 +1,14 @@
+.git
+.build
+.swiftpm
+build
+dist
+recordings
+Resources/*
+!Resources/Ambience
+Tools
+docs
+scripts/*
+!scripts/install-linux-deps.sh
+!scripts/yamnet
+Models

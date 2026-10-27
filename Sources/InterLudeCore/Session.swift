@@ -193,6 +193,7 @@ public actor PlayerSession {
             try await g.waitForAll()
         }
         await analyse(upTo: liveEdge)
+        try Task.checkCancellation()
         for _ in 0..<6 { await tick(&p) }
         playout = p
         running = true
@@ -231,6 +232,7 @@ public actor PlayerSession {
         }
         replay = ReplayPlayout(start: first, maxSkipSeconds: settings.profile.detector.maxMuteSeconds)
         await analyse(upTo: to)
+        try Task.checkCancellation()
         guard var p = replay else { return }
         for _ in 0..<6 { await tickReplay(&p) }
         replay = p
@@ -398,7 +400,9 @@ public actor PlayerSession {
         guard let store else { return }
         var i = analysedThrough + 1
         let clf = Platform.current.makeClassifier()
-        while i <= end {
+        // A start that has been given up on (another programme chosen) stops analysing here, so it doesn't hold up
+        // the next one.
+        while i <= end && !Task.isCancelled {
             let chunkEnd = min(i + 9, end)
             var buffers: [PCMAudio] = [], indices: [Int] = []
             let ctx = lastAnalysisSegment.map { [$0] } ?? []

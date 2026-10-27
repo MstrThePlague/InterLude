@@ -11,3 +11,4 @@ build/
 # Diagnostics exported from the app contain listening history
 InterLude-diagnostics*
 dist/
+Models/

@@ -56,16 +56,27 @@ public struct Catalogue: Codable, Sendable {
 }
 
 /// Where InterLude keeps its files. Inside the App Sandbox these resolve to the app's container.
+/// A server sets `root` once at launch, and then everything lives under that one directory.
 public enum AppPaths {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var rootOverride: URL?
+
+    /// The data directory chosen at launch, such as `/var/lib/interlude`. Nil means the user's Library folders.
+    public static var root: URL? {
+        get { lock.lock(); defer { lock.unlock() }; return rootOverride }
+        set { lock.lock(); defer { lock.unlock() }; rootOverride = newValue }
+    }
+
     public static func supportDirectory() throws -> URL {
-        let u = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let u = try root ?? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("InterLude", isDirectory: true)
         try FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
         return u
     }
     public static func cacheDirectory() throws -> URL {
-        let u = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-            .appendingPathComponent("InterLude/segments", isDirectory: true)
+        let u = try root?.appendingPathComponent("cache", isDirectory: true)
+            ?? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+                .appendingPathComponent("InterLude/segments", isDirectory: true)
         try FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
         return u
     }

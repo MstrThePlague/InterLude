@@ -1,0 +1,24 @@
+# Runs interlude-server on a Linux host. See "Running the server" in the README.
+#
+#   docker compose pull && docker compose up -d     the released image
+#   docker compose up -d --build                    built from this checkout instead
+#
+# Host networking, so Chromecasts and mDNS reach it without NAT. The app's link is in `docker compose logs`.
+services:
+  interlude:
+    image: ghcr.io/mstrtheplague/interlude-server:latest
+    build: .
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - data:/var/lib/interlude
+    environment:
+      TZ: Europe/London
+      # Run the live session all the time, for a week of comparing with the Mac app. Remove afterwards: it streams
+      # from the BBC (about 3.5 GB a day at 320 kbps) whether or not anyone is listening.
+      # INTERLUDE_KEEP_RUNNING: "1"
+      # The address Cast speakers fetch the stream from, if the server picks the wrong one.
+      # INTERLUDE_CAST_HOST: "10.10.10.238"
+
+volumes:
+  data:

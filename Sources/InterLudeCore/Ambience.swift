@@ -3,15 +3,21 @@ import Foundation
 /// A looping background sound, such as waves or birdsong, played in place of a muted bulletin.
 /// The loop runs on the stream's own clock, so consecutive muted segments join up without a seam.
 public struct Ambience: Sendable {
+    /// What can play during a muted bulletin: silence, or one of the sounds in Resources/Ambience by file name.
+    public static let choices: [(id: String, name: String)] = [
+        ("silence", "Silence"), ("ocean", "Ocean waves"), ("stream", "Woodland stream"), ("birds", "Woodland birds"),
+    ]
     /// Interleaved 48 kHz stereo samples of one seamless loop.
     let loop: [Float]
     public static let fadeInSeconds = 3.0
     public static let fadeOutSeconds = 4.0
-    static let encoderDelay = (try? Silence.encode([Float](repeating: 0, count: 4096)).delay) ?? 2112
+    /// The platform encoder's lead-in, asked when the sound is loaded, since Apple's and ffmpeg's differ.
+    let encoderDelay: Int
     static let framesPerSegment = Int((segmentDuration * 48000 / 1024).rounded())     // 300
 
     /// Loads a 48 kHz audio file, sets it to a gentle level and blends its end into its start.
     public init(url: URL, levelDB: Float = -30) throws {
+        encoderDelay = try Silence.encode([Float](repeating: 0, count: 4096)).delay
         let audio = try Platform.current.decoder.read(contentsOf: url)
         guard audio.sampleRate == 48000, let left = audio.channels.first else { throw AmbienceError.format }
         let right = audio.channels.count > 1 ? audio.channels[1] : left
@@ -49,7 +55,7 @@ public struct Ambience: Sendable {
         let segStart = index * count * 1024                     // in samples on the stream clock
         let segLength = count * 1024
         // The encoder delays its output by `delay` samples. Wanted output frame `lead` starts the segment.
-        let delay = Ambience.encoderDelay
+        let delay = encoderDelay
         let lead = pre + (delay + 1023) / 1024
         let inputStart = segStart - lead * 1024 + delay
         let inputLength = (lead + count + post) * 1024

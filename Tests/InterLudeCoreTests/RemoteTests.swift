@@ -122,6 +122,40 @@ import Foundation
         #expect(back.earlier?.lastDay == OnDemand.days - 1)
     }
 
+    @Test func serverRoutesLiveUnderApp() {
+        let app = { (method: String, target: String) in
+            RemoteRoutes.route(HTTPRequest(requestLine: "\(method) \(target) HTTP/1.1")!, token: self.token, prefix: RemoteRoutes.appPrefix)
+        }
+        #expect(app("GET", "/app/abc123/") == .page)
+        #expect(app("GET", "/app/abc123/api/events") == .events)
+        #expect(app("POST", "/app/abc123/api/events") == nil)
+        #expect(app("POST", "/app/abc123/api/play") == .command(.play))
+        #expect(app("GET", "/remote/abc123/") == nil)
+        #expect(route("GET", "/app/abc123/") == nil)
+        let html = String(decoding: RemoteRoutes.page(token: token, prefix: RemoteRoutes.appPrefix).body, as: UTF8.self)
+        #expect(html.contains(#"<base href="/app/abc123/">"#))
+    }
+
+    @Test func settingsAreChecked() {
+        #expect(route("POST", "/remote/abc123/api/setting?k=delay&v=90") == .command(.setting(.delay(90))))
+        #expect(route("POST", "/remote/abc123/api/setting?k=delay&v=47") == .command(.setting(.delay(45))))
+        #expect(route("POST", "/remote/abc123/api/setting?k=delay&v=20") == nil)
+        #expect(route("POST", "/remote/abc123/api/setting?k=delay&v=601") == nil)
+        #expect(route("POST", "/remote/abc123/api/setting?k=delay&v=nan") == nil)
+        #expect(route("POST", "/remote/abc123/api/setting?k=muteNews&v=0") == .command(.setting(.muteNews(false))))
+        #expect(route("POST", "/remote/abc123/api/setting?k=shadowMode&v=yes") == nil)
+        #expect(route("POST", "/remote/abc123/api/setting?k=jingleOnly&v=1") == .command(.setting(.jingleOnly(true))))
+        #expect(route("POST", "/remote/abc123/api/setting?k=forgetJingle") == .command(.setting(.forgetJingle)))
+        #expect(route("POST", "/remote/abc123/api/setting?k=bitrate&v=128") == .command(.setting(.bitrate(128_000))))
+        #expect(route("POST", "/remote/abc123/api/setting?k=bitrate&v=96") == nil)
+        #expect(route("POST", "/remote/abc123/api/setting?k=ambience&v=ocean") == .command(.setting(.ambience("ocean"))))
+        #expect(route("POST", "/remote/abc123/api/setting?k=ambience&v=..%2Fetc") == nil)
+        #expect(route("POST", "/remote/abc123/api/setting?k=port&v=80") == nil)
+        #expect(route("GET", "/remote/abc123/api/setting?k=muteNews&v=0") == nil)
+        #expect(route("POST", "/remote/abc123/api/resetlink") == .command(.resetLink))
+        #expect(route("GET", "/remote/abc123/api/resetlink") == nil)
+    }
+
     @Test func pageCarriesItsBase() {
         let html = String(decoding: RemoteRoutes.page(token: token).body, as: UTF8.self)
         #expect(html.contains(#"<base href="/remote/abc123/">"#))
