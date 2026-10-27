@@ -1,0 +1,10 @@
+.git
+.build
+.swiftpm
+build
+dist
+recordings
+Resources
+Tools
+docs
+scripts

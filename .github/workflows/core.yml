@@ -1,4 +1,4 @@
-# The portable core must keep building away from the Mac: tests on Linux, a compile on Windows.
+# The portable core and adapters must keep building away from the Mac: tests on Linux, a compile on Windows.
 # The Mac app and its tests need macOS 26 and are built locally with scripts/build-app.sh.
 name: Core
 
@@ -12,6 +12,7 @@ jobs:
     container: swift:6.2
     steps:
       - uses: actions/checkout@v4
+      - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
       - run: swift test
 
   windows:
@@ -23,3 +24,4 @@ jobs:
           branch: swift-6.2-release
           tag: 6.2-RELEASE
       - run: swift build --target InterLudeCore
+      - run: swift build --target InterLudePortable
