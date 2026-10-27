@@ -10,6 +10,7 @@ import InterLudeCast
 //
 //   interlude-server [--port 8642] [--data DIR] [--stations FILE] [--web DIR] [--models DIR] [--ambience DIR] [--ffmpeg PATH]
 //                    [--keep-running] [--cast-host ADDRESS]
+//   interlude-server --check AUDIOFILE [--models DIR]     runs both models on a file, prints what they hear, and exits
 //
 // --keep-running (or INTERLUDE_KEEP_RUNNING=1) runs the live session all the time, for comparing with the Mac.
 // --cast-host is the address Cast speakers fetch the stream from; by default, this machine's LAN address.
@@ -30,6 +31,7 @@ struct Options {
     var ffmpeg: URL?
     var keepRunning = ProcessInfo.processInfo.environment["INTERLUDE_KEEP_RUNNING"] == "1"
     var castHost = ProcessInfo.processInfo.environment["INTERLUDE_CAST_HOST"]
+    var check: URL?
 
     init(_ args: [String]) throws {
         var i = 1
@@ -49,6 +51,7 @@ struct Options {
             case "--ffmpeg": ffmpeg = URL(fileURLWithPath: try value())
             case "--keep-running": keepRunning = true
             case "--cast-host": castHost = try value()
+            case "--check": check = URL(fileURLWithPath: try value())
             default: throw UsageError("unknown option \(args[i])")
             }
             i += 1
@@ -104,6 +107,22 @@ do {
         log("whisper model at \(whisperModel.path)")
     }
     Platform.install(platform)
+    if let file = opt.check {
+        let audio = try platform.decoder.read(contentsOf: file)
+        log(String(format: "%@: %.1f s at %.0f Hz", file.lastPathComponent, audio.duration, audio.sampleRate))
+        if detects {
+            for sc in try platform.makeClassifier().classify([audio]) {
+                log(String(format: "  %5.1f s  speech %.2f  music %.2f", sc.time, sc.speech, sc.music))
+            }
+        }
+        if let stt = platform.makeTranscriber?() {
+            guard await stt.prepare(install: false) else { throw UsageError("the whisper model didn't load") }
+            let phrases = try await stt.transcribe(samples: audio.channels[0], sampleRate: audio.sampleRate)
+            for p in phrases { log(String(format: "  %5.1f s  %@", p.start, p.text)) }
+            log("sign-off: \(NewsPhrases.signOff(in: phrases, after: 0).map { String(format: "at %.1f s", $0) } ?? "not heard")")
+        }
+        exit(0)
+    }
     AppPaths.root = opt.data
     let catalogue = try Catalogue.load(from: Catalogue.editableURL(bundled: opt.stations))
     let controller = Controller(catalogue: catalogue, settingsURL: try AppPaths.supportDirectory().appendingPathComponent("settings.json"),
