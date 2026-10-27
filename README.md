@@ -81,7 +81,13 @@ Builds go to `~/Library/Caches/InterLudeBuild`, because `codesign` rejects files
 
 `./scripts/package-release.sh` builds the app and zips it into `dist/` for a release.
 
-To run the tests:
+To run the tests you also need ffmpeg and the libraries the server's speech models use, from Homebrew:
+
+```
+brew install ffmpeg onnxruntime whisper.cpp
+```
+
+Then:
 
 ```
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --scratch-path ~/Library/Caches/InterLudeBuild
@@ -107,7 +113,8 @@ Inside the App Sandbox, `Application Support` is the app's own container under `
 | `Sources/InterLudeApple` | The Mac's implementations of what the core asks the platform for: AAC decoding and encoding, the sound classifier, speech recognition, signal maths, the local server and Cast discovery. |
 | `Sources/InterLudePortable` | Implementations that work away from the Mac, on Linux and Windows: audio decoding with ffmpeg. |
 | `Sources/InterLudeHTTP` | The web server for macOS and Linux, on Hummingbird. |
-| `Sources/InterLudeServer` | `interlude-server`, InterLude as a web app on a Linux host, in progress: it plays and is configured from any browser, but doesn't mute news yet. `Dockerfile` and `compose.yaml` build and run it. |
+| `Sources/InterLudeML` | The server's speech models: YAMNet on ONNX Runtime for speech and music, whisper.cpp for the newsreader. `scripts/yamnet` converts and calibrates YAMNet. |
+| `Sources/InterLudeServer` | `interlude-server`, InterLude as a web app on a Linux host, in progress. `Dockerfile` and `compose.yaml` build and run it. |
 | `Sources/InterLudeApp` | The SwiftUI menu bar app. |
 | `Web` | The server's app icons. Its page is the phone remote's, in `Sources/InterLudeCore/Remote.swift`. |
 | `Tests` | Unit tests for the parts that can be tested without a network or speakers. |

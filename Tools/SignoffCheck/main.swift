@@ -1,14 +1,17 @@
 import Foundation
 import InterLudeCore
 import InterLudeApple
+import InterLudeML
 
 Platform.install(.apple)
 
 // signoff-check <dir>:<blockStart>,<blockEnd> ...
 // Transcribes each muted block (20 s before to 10 s after) and reports the newsreader's opening and sign-off.
+// WHISPER=<ggml model file> transcribes with whisper.cpp, as interlude-server does, instead of Apple's speech model.
 func run() async throws {
-    let stt = NewsTranscriber()
-    guard await stt.prepare() else { print("speech model unavailable"); return }
+    let stt: any NewsTranscribing = ProcessInfo.processInfo.environment["WHISPER"].map { WhisperTranscriber(model: URL(fileURLWithPath: $0)) }
+        ?? NewsTranscriber()
+    guard await stt.prepare(install: true) else { print("speech model unavailable"); return }
     let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; f.timeZone = TimeZone(identifier: "UTC")
     for arg in CommandLine.arguments.dropFirst() {
         let p = arg.split(separator: ":"); let r = p[1].split(separator: ",").compactMap { Double($0) }
@@ -21,7 +24,7 @@ func run() async throws {
         }
         let clipStart = HLS.startTime(ofIndex: i0).timeIntervalSince1970
         let t = Date()
-        let phrases = try await stt.transcribe(samples: mono)
+        let phrases = try await stt.transcribe(samples: mono, sampleRate: 48000)
         let open = NewsPhrases.opening(in: phrases).map { clipStart + $0 }
         let sign = NewsPhrases.signOff(in: phrases, after: (bs - clipStart) + 45).map { clipStart + $0 }
         print("\nblock \(f.string(from: Date(timeIntervalSince1970: bs)))-\(f.string(from: Date(timeIntervalSince1970: be))) (\(Int(be - bs)) s), transcribed \(Int(to - from)) s in \(String(format: "%.1f", Date().timeIntervalSince(t))) s")

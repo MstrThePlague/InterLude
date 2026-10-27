@@ -40,6 +40,10 @@ actor Controller {
     private var profiles: [String: StationProfile] = [:]
     private var settings: ServerSettings
     private let settingsURL: URL
+    /// Whether a sound classifier is installed, without which no bulletin can be recognised.
+    private let detects: Bool
+    /// Where the sounds for muted bulletins are, named by their IDs in `Ambience.choices`.
+    private let ambienceDirectory: URL
 
     private var session: PlayerSession?
     private var starting: Task<PlayerSession, Error>?
@@ -61,10 +65,10 @@ actor Controller {
 
     /// A session stops after this long with no requests for its stream.
     static let idleLimit: TimeInterval = 600
-    static let newsNote = "The server doesn't recognise bulletins yet, so news plays. These settings are kept for when it does."
+    static let newsNote = "This server has no speech model, so it can't recognise bulletins and news plays. These settings are kept for when it does."
 
-    init(catalogue: Catalogue, settingsURL: URL) {
-        self.catalogue = catalogue; self.settingsURL = settingsURL
+    init(catalogue: Catalogue, settingsURL: URL, detects: Bool, ambienceDirectory: URL) {
+        self.catalogue = catalogue; self.settingsURL = settingsURL; self.detects = detects; self.ambienceDirectory = ambienceDirectory
         var s = ServerSettings.load(settingsURL)
         if catalogue.station(s.station) == nil { s.station = catalogue.stations.first?.serviceId ?? s.station }
         settings = s
@@ -122,8 +126,8 @@ actor Controller {
         errorText = nil
         var s = SessionSettings(station: station, profile: profile(station.serviceId))
         s.bitrate = settings.bitrate
-        // No detection on the server yet: the classifier, encoder and transcriber arrive in later milestones.
-        s.muteNews = false
+        s.ambience = ambienceURL
+        if !detects { s.muteNews = false }
         if isEarlier, let p = replaying { s.replay = p; s.onDemand = !Schedule.isPlayable(p) }
         generation += 1
         let gen = generation, catalogue = catalogue, sessionSettings = s
@@ -283,16 +287,32 @@ actor Controller {
         case .delay(let d):
             updateProfile(id) { $0.delaySeconds = d }
             if active && !isEarlier { await restart() }
-        case .muteNews(let on): updateProfile(id) { $0.muteNews = on }
+        case .muteNews(let on): updateProfile(id) { $0.muteNews = on }; await applyLiveOptions()
         case .jingleOnly(let on): updateProfile(id) { $0.detector.identOnly = on }
-        case .shadowMode(let on): updateProfile(id) { $0.shadowMode = on }
+        case .shadowMode(let on): updateProfile(id) { $0.shadowMode = on }; await applyLiveOptions()
         case .forgetJingle: updateProfile(id) { $0.idents = []; $0.candidates = []; $0.candidateSources = [] }
         case .bitrate(let b):
             guard b != settings.bitrate else { return }
             settings.bitrate = b; saveSettings()
             if active { await restart() }
-        case .ambience(let a): settings.ambience = a; saveSettings()
+        case .ambience(let a):
+            settings.ambience = a; saveSettings()
+            await session?.setAmbience(ambienceURL)
         }
+    }
+
+    /// The chosen sound during muted bulletins, or nil for silence or a missing file.
+    private var ambienceURL: URL? {
+        guard settings.ambience != "silence" else { return nil }
+        let u = ambienceDirectory.appendingPathComponent("\(settings.ambience).m4a")
+        return FileManager.default.fileExists(atPath: u.path) ? u : nil
+    }
+
+    /// Passes the station's mute options to a running session, as the Mac does.
+    private func applyLiveOptions() async {
+        guard detects, let st = selectedStation else { return }
+        let p = profile(st.serviceId)
+        await session?.setLiveOptions(muteNews: p.muteNews, shadowMode: p.shadowMode)
     }
 
     // MARK: State
@@ -315,7 +335,7 @@ actor Controller {
         s.muteElapsed = status.muteElapsed
         s.muteStartsIn = status.muteStartsIn
         s.justSkipped = status.replay?.justSkipped
-        s.canCorrect = false        // nothing to correct until the server detects bulletins
+        s.canCorrect = detects && playing && station?.kind != .speech
         if playing {
             s.footer = replay ? status.replay.map { "Started at \($0.programme.start.formatted(date: .omitted, time: .shortened)) · \(Self.duration(status.delaySeconds)) behind live" }
                               : "About \(Int((status.delaySeconds / 5).rounded()) * 5) seconds behind live"
@@ -395,7 +415,7 @@ actor Controller {
         }
         return .init(stationName: station?.name ?? settings.station, delay: p.delaySeconds, muteNews: p.muteNews,
                      jingleOnly: p.detector.identOnly, shadowMode: p.shadowMode, jingle: jingle,
-                     canForgetJingle: !p.idents.isEmpty || !p.candidates.isEmpty, newsNote: Self.newsNote,
+                     canForgetJingle: !p.idents.isEmpty || !p.candidates.isEmpty, newsNote: detects ? nil : Self.newsNote,
                      bitrate: settings.bitrate / 1000, ambience: settings.ambience,
                      ambienceChoices: Ambience.choices.map { [$0.id, $0.name] },
                      link: RemoteRoutes.pagePath(token: settings.token, prefix: RemoteRoutes.appPrefix))
