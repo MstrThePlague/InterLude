@@ -1,5 +1,8 @@
 import Foundation
 import InterLudeCore
+import InterLudeApple
+
+Platform.install(.apple)
 
 // serve <serviceId> [delaySeconds] [port]  — runs a headless session for testing with ffmpeg, curl or a player.
 let a = CommandLine.arguments

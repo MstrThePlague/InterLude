@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // Plays BBC Sounds on-demand episodes for programmes older than the live origin keeps (docs/on-demand.md).
 // The stream URLs are used as the media selector issues them.

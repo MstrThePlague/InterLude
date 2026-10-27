@@ -18,31 +18,31 @@ import Foundation
     }
 
     @Test func recognisesTailscaleAddresses() {
-        #expect(LocalServer.isTailscale("100.70.0.49"))
-        #expect(LocalServer.isTailscale("100.64.0.1"))
-        #expect(LocalServer.isTailscale("100.127.255.254"))
-        #expect(!LocalServer.isTailscale("100.128.0.1"))
-        #expect(!LocalServer.isTailscale("100.63.0.1"))
-        #expect(!LocalServer.isTailscale("192.168.1.20"))
-        #expect(!LocalServer.isTailscale("100.70.0"))
+        #expect(Tailnet.isTailscale("100.70.0.49"))
+        #expect(Tailnet.isTailscale("100.64.0.1"))
+        #expect(Tailnet.isTailscale("100.127.255.254"))
+        #expect(!Tailnet.isTailscale("100.128.0.1"))
+        #expect(!Tailnet.isTailscale("100.63.0.1"))
+        #expect(!Tailnet.isTailscale("192.168.1.20"))
+        #expect(!Tailnet.isTailscale("100.70.0"))
     }
 
     @Test func recognisesMagicDNSNames() {
-        #expect(LocalServer.magicDNSName("bb-mba-m3-1.tail896e40.ts.net.") == "bb-mba-m3-1.tail896e40.ts.net")
-        #expect(LocalServer.magicDNSName("Ben-Mac.Tail896e40.TS.NET") == "ben-mac.tail896e40.ts.net")
-        #expect(LocalServer.magicDNSName("49.0.70.100.in-addr.arpa") == nil)
-        #expect(LocalServer.magicDNSName("tail896e40.ts.net") == nil)
-        #expect(LocalServer.magicDNSName("a.b.tail896e40.ts.net") == nil)
-        #expect(LocalServer.magicDNSName("mac..ts.net") == nil)
-        #expect(LocalServer.magicDNSName("mac.local") == nil)
+        #expect(Tailnet.magicDNSName("bb-mba-m3-1.tail896e40.ts.net.") == "bb-mba-m3-1.tail896e40.ts.net")
+        #expect(Tailnet.magicDNSName("Ben-Mac.Tail896e40.TS.NET") == "ben-mac.tail896e40.ts.net")
+        #expect(Tailnet.magicDNSName("49.0.70.100.in-addr.arpa") == nil)
+        #expect(Tailnet.magicDNSName("tail896e40.ts.net") == nil)
+        #expect(Tailnet.magicDNSName("a.b.tail896e40.ts.net") == nil)
+        #expect(Tailnet.magicDNSName("mac..ts.net") == nil)
+        #expect(Tailnet.magicDNSName("mac.local") == nil)
     }
 
     @Test func readsTheNameFromTailscaleStatus() {
         let json = #"{"BackendState":"Running","Self":{"HostName":"bb-mba-m3-1","DNSName":"bb-mba-m3-1.tail896e40.ts.net.","TailscaleIPs":["100.70.0.49"]}}"#
-        #expect(LocalServer.magicDNSName(statusJSON: Data(json.utf8)) == "bb-mba-m3-1.tail896e40.ts.net")
-        #expect(LocalServer.magicDNSName(statusJSON: Data(#"{"BackendState":"Stopped","Self":{"DNSName":""}}"#.utf8)) == nil)
-        #expect(LocalServer.magicDNSName(statusJSON: Data(#"{"BackendState":"NoState"}"#.utf8)) == nil)
-        #expect(LocalServer.magicDNSName(statusJSON: Data("not json".utf8)) == nil)
+        #expect(Tailnet.magicDNSName(statusJSON: Data(json.utf8)) == "bb-mba-m3-1.tail896e40.ts.net")
+        #expect(Tailnet.magicDNSName(statusJSON: Data(#"{"BackendState":"Stopped","Self":{"DNSName":""}}"#.utf8)) == nil)
+        #expect(Tailnet.magicDNSName(statusJSON: Data(#"{"BackendState":"NoState"}"#.utf8)) == nil)
+        #expect(Tailnet.magicDNSName(statusJSON: Data("not json".utf8)) == nil)
     }
 
     @Test func pageAndFiles() {
@@ -141,23 +141,5 @@ import Foundation
     @Test func tokensAreLongAndFresh() {
         let a = RemoteRoutes.newToken(), b = RemoteRoutes.newToken()
         #expect(a.count == 32 && a != b)
-    }
-
-    /// The real server, over loopback: a POST reaches the handler with its query, and other methods are refused.
-    @Test func serverAcceptsPost() async throws {
-        let port = UInt16.random(in: 40000...60000)
-        let server = LocalServer(port: port) { req in
-            HTTPResponse(contentType: "text/plain", body: Data("\(req.method) \(req.path) \(req.query["v"] ?? "-")".utf8))
-        }
-        try server.start()
-        defer { server.stop() }
-        try await Task.sleep(for: .milliseconds(200))
-        var post = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/remote/t/api/volume?v=0.5")!)
-        post.httpMethod = "POST"
-        let (body, _) = try await URLSession.shared.data(for: post)
-        #expect(String(decoding: body, as: UTF8.self) == "POST /remote/t/api/volume 0.5")
-        var put = post; put.httpMethod = "PUT"
-        let (_, r) = try await URLSession.shared.data(for: put)
-        #expect((r as? HTTPURLResponse)?.statusCode == 405)
     }
 }

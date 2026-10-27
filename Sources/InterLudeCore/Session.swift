@@ -1,5 +1,7 @@
 import Foundation
-import AVFoundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // A playing session: it follows the station's live playlist, analyses audio about a minute ahead of the listener,
 // keeps the playout clock, and answers the local server's requests with station or replacement segments.
@@ -93,7 +95,7 @@ public actor PlayerSession {
     private var detector: NewsDetector
     private var liveEdge = 0
     private var analysedThrough = 0
-    private var lastAnalysisSegment: AVAudioPCMBuffer?
+    private var lastAnalysisSegment: PCMAudio?
     private var base: URL?
     private var segmentPrefix: String?
     private var tasks: [Task<Void, Never>] = []
@@ -110,7 +112,7 @@ public actor PlayerSession {
     private var lastServed = 0
     private var featureRing: [(time: Double, frame: [Float])] = []
     // Transcription of muted blocks, to find the newsreader's opening and sign-off.
-    private var transcriber: NewsTranscriber?
+    private var transcriber: (any NewsTranscribing)?
     private var speechState = "unavailable"
     private var monoTail: [Float] = []                  // the last 30 s of audio analysed
     private var blockAudio: [Float] = []
@@ -169,13 +171,13 @@ public actor PlayerSession {
         tasks.append(Task { await self.emitLoop() })
         if settings.replay == nil { tasks.append(Task { await self.metadataLoop() }) } else { tasks.append(Task { await self.aheadLoop() }) }
         if settings.muteNews && settings.profile.idents.isEmpty && !settings.onDemand { tasks.append(Task(priority: .utility) { await self.learnJingleFromRewind() }) }
-        if settings.station.kind == .music, transcriber == nil {
-            let stt = NewsTranscriber()
+        if settings.station.kind == .music, transcriber == nil, let make = Platform.current.makeTranscriber {
+            let stt = make()
             transcriber = stt
             speechState = "checking"
             tasks.append(Task(priority: .utility) {
                 let ok = await stt.prepare(install: true)
-                await self.setSpeechState(ok ? "ready" : "unavailable")
+                self.setSpeechState(ok ? "ready" : "unavailable")
             })
         }
     }
@@ -222,9 +224,9 @@ public actor PlayerSession {
         await withTaskGroup(of: Void.self) { g in
             for i in from...to { g.addTask { _ = try? await store.segment(i) } }
         }
-        if settings.station.kind == .music {
+        if settings.station.kind == .music, let make = Platform.current.makeTranscriber {
             // Ready the transcriber first when its model is already installed, so the first bulletin's sign-off is heard.
-            let stt = NewsTranscriber()
+            let stt = make()
             if await stt.prepare(install: false) { transcriber = stt; speechState = "ready" }
         }
         replay = ReplayPlayout(start: first, maxSkipSeconds: settings.profile.detector.maxMuteSeconds)
@@ -395,10 +397,10 @@ public actor PlayerSession {
     private func analyse(upTo end: Int) async {
         guard let store else { return }
         var i = analysedThrough + 1
-        let clf = ClipClassifier()
+        let clf = Platform.current.makeClassifier()
         while i <= end {
             let chunkEnd = min(i + 9, end)
-            var buffers: [AVAudioPCMBuffer] = [], indices: [Int] = []
+            var buffers: [PCMAudio] = [], indices: [Int] = []
             let ctx = lastAnalysisSegment.map { [$0] } ?? []
             for k in i...chunkEnd {
                 guard let d = await store.cached(k), let info = TS.parse(d), !info.frames.isEmpty else { continue }
@@ -407,7 +409,7 @@ public actor PlayerSession {
             }
             if let firstNew = indices.first {
                 let scores = (try? clf.classify(ctx + buffers)) ?? []
-                let ctxSeconds = ctx.first.map { Double($0.frameLength) / $0.format.sampleRate } ?? 0
+                let ctxSeconds = ctx.first?.duration ?? 0
                 let clipStart = HLS.startTime(ofIndex: firstNew).timeIntervalSince1970 - ctxSeconds
                 for s in scores.sorted(by: { $0.time < $1.time }) where s.time >= ctxSeconds - 0.001 {
                     detector.ingest(ScoreSample(time: clipStart + s.time, duration: s.duration, speech: s.speech, music: s.music))
@@ -427,7 +429,7 @@ public actor PlayerSession {
 
     /// Extracts features over the new audio plus a little earlier context, stores them, and looks for known idents.
     @discardableResult
-    private func updateIdents(chunkStart: Double, buffers: [AVAudioPCMBuffer]) -> [Float] {
+    private func updateIdents(chunkStart: Double, buffers: [PCMAudio]) -> [Float] {
         let ctx = lastMono
         var mono = ctx
         for b in buffers { mono += IdentFeatures.mono(b) }
@@ -587,7 +589,7 @@ public actor PlayerSession {
         }
         var o = o; o["loggedAt"] = Date().timeIntervalSince1970
         guard let d = try? JSONSerialization.data(withJSONObject: o) else { return }
-        if !FileManager.default.fileExists(atPath: url.path) { FileManager.default.createFile(atPath: url.path, contents: nil) }
+        if !FileManager.default.fileExists(atPath: url.path) { _ = FileManager.default.createFile(atPath: url.path, contents: nil) }
         if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(d); h.write(Data("\n".utf8)); try? h.close() }
     }
 

@@ -1,6 +1,9 @@
 import Foundation
 import Accelerate
 import InterLudeCore
+import InterLudeApple
+
+Platform.install(.apple)
 
 // voice-changes <recordingDir> <blockStartUnix> <blockEndUnix>
 // Prints, for each second from 30 s before the block to 20 s after, how different the voice character is in the

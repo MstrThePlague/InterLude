@@ -103,7 +103,8 @@ Inside the App Sandbox, `Application Support` is the app's own container under `
 
 | Folder | Contents |
 |---|---|
-| `Sources/InterLudeCore` | Everything that isn't user interface: stream handling, MPEG-TS, detection, playout, the local server, the phone remote's page and Cast. |
+| `Sources/InterLudeCore` | Everything that isn't user interface or tied to Apple's frameworks: stream handling, MPEG-TS, detection, playout, the phone remote's page and the Cast protocol. Builds and tests on Linux too. |
+| `Sources/InterLudeApple` | The Mac's implementations of what the core asks the platform for: AAC decoding and encoding, the sound classifier, speech recognition, signal maths, the local server and Cast discovery. |
 | `Sources/InterLudeApp` | The SwiftUI menu bar app. |
 | `Tests` | Unit tests for the parts that can be tested without a network or speakers. |
 | `Tools` | Command-line programs used to measure and tune detection (below). |

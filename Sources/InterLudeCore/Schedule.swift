@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 // The station's schedule, for playing an earlier programme from its start. The BBC's live origin keeps about
 // 11 hours of segments (docs/findings.md, "Playing earlier programmes"), so only programmes that began within
