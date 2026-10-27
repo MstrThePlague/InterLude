@@ -3,10 +3,10 @@ import InterLudeCore
 import InterLudePortable
 import InterLudeHTTP
 
-// interlude-server: InterLude without a Mac. It plays one station a fixed time behind live to any browser, starting a
-// session on the first request for the stream and stopping it when nobody has asked for 10 minutes.
+// interlude-server: InterLude without a Mac. The web app at /app/<token>/ plays, controls and configures one shared
+// session, which starts when a browser asks for the stream and stops when nobody has for 10 minutes.
 //
-//   interlude-server [--port 8642] [--data DIR] [--stations FILE] [--web DIR] [--station ID] [--delay SECONDS] [--ffmpeg PATH]
+//   interlude-server [--port 8642] [--data DIR] [--stations FILE] [--web DIR] [--ffmpeg PATH]
 
 /// Writes a line straight to stdout, unbuffered, so `docker logs` keeps up.
 func log(_ line: String) { FileHandle.standardOutput.write(Data((line + "\n").utf8)) }
@@ -16,8 +16,6 @@ struct Options {
     var data = URL(fileURLWithPath: "/var/lib/interlude", isDirectory: true)
     var stations = URL(fileURLWithPath: "/usr/share/interlude/stations.json")
     var web = URL(fileURLWithPath: "/usr/share/interlude/web", isDirectory: true)
-    var station = "bbc_6music"
-    var delay = 60.0
     var ffmpeg: URL?
 
     init(_ args: [String]) throws {
@@ -33,8 +31,6 @@ struct Options {
             case "--data": data = URL(fileURLWithPath: try value(), isDirectory: true)
             case "--stations": stations = URL(fileURLWithPath: try value())
             case "--web": web = URL(fileURLWithPath: try value(), isDirectory: true)
-            case "--station": station = try value()
-            case "--delay": guard let d = Double(try value()), (20...600).contains(d) else { throw UsageError("--delay must be 20 to 600 seconds") }; delay = d
             case "--ffmpeg": ffmpeg = URL(fileURLWithPath: try value())
             default: throw UsageError("unknown option \(args[i])")
             }
@@ -48,64 +44,25 @@ struct UsageError: Error, CustomStringConvertible {
     init(_ d: String) { description = d }
 }
 
-/// Owns the one shared session, as the Mac app's Model does.
-actor Controller {
-    private let catalogue: Catalogue
-    private let station: Station
-    private let delay: Double
-    private var session: PlayerSession?
-    private var starting: Task<PlayerSession, Error>?
-    private var lastRequest = Date()
-
-    init(catalogue: Catalogue, station: Station, delay: Double) {
-        self.catalogue = catalogue; self.station = station; self.delay = delay
-    }
-
-    /// Answers a request under /stream/, starting the session if it isn't running.
-    func stream(_ relative: String) async -> HTTPResponse {
-        lastRequest = Date()
-        do { return try await running().respond(to: relative) }
-        catch { return HTTPResponse(status: 503, contentType: "text/plain", body: Data("\(error.localizedDescription)\n".utf8), noCache: true) }
-    }
-
-    private func running() async throws -> PlayerSession {
-        if let session { return session }
-        if let starting { return try await starting.value }
-        let (catalogue, station, delay) = (catalogue, station, delay)
-        let t = Task {
-            var settings = SessionSettings(station: station, profile: StationProfile.load(station))
-            settings.delaySeconds = delay
-            // No detection on the server yet: the classifier, encoder and transcriber arrive in later milestones.
-            settings.muteNews = false
-            let s = PlayerSession(catalogue: catalogue, settings: settings, token: "stream",
-                                  cacheRoot: try AppPaths.cacheDirectory(),
-                                  eventLog: try AppPaths.supportDirectory().appendingPathComponent("events.jsonl"))
-            try await s.start()
-            return s
-        }
-        starting = t
-        defer { starting = nil }
-        log("starting \(station.name), \(Int(delay)) s behind live")
-        let s = try await t.value
-        session = s
-        log("session running")
-        return s
-    }
-
-    func stopIfIdle(after limit: TimeInterval) async {
-        guard let s = session, Date().timeIntervalSince(lastRequest) > limit else { return }
-        await s.stop()
-        session = nil
-        log("stopped \(station.name): no requests for \(Int(limit / 60)) minutes")
-    }
-}
-
-/// Files from the web directory. Only names in it are served, never paths.
+/// Files from the web directory: hls.js, the QR code library and the icons. Only names in it are served, never paths.
 func staticFile(_ name: String, in dir: URL) -> HTTPResponse {
-    let types = ["html": "text/html; charset=utf-8", "js": "text/javascript", "css": "text/css", "png": "image/png", "svg": "image/svg+xml"]
+    let types = ["js": "text/javascript", "png": "image/png", "css": "text/css"]
     guard !name.contains("/"), !name.hasPrefix("."), let type = types[(name as NSString).pathExtension],
           let body = try? Data(contentsOf: dir.appendingPathComponent(name)) else { return .notFound }
     return HTTPResponse(contentType: type, body: body)
+}
+
+/// Whether a command comes from the app's own page. Browsers send Origin with a cross-site POST, so a page elsewhere
+/// can't press the buttons; a client that sends no Origin, like curl, has to know the token anyway.
+func sameOrigin(_ req: HTTPRequest) -> Bool {
+    guard let origin = req.headers["origin"] else { return true }
+    guard let u = URLComponents(string: origin), let host = u.host else { return false }
+    let authority = u.port.map { "\(host):\($0)" } ?? host
+    return [req.headers["host"], req.headers["x-forwarded-host"]].contains(authority)
+}
+
+func text(_ status: Int, _ s: String) -> HTTPResponse {
+    HTTPResponse(status: status, contentType: "text/plain; charset=utf-8", body: Data(s.utf8), noCache: true)
 }
 
 do {
@@ -114,26 +71,39 @@ do {
     Platform.install(.portable(ffmpeg: ffmpeg))
     AppPaths.root = opt.data
     let catalogue = try Catalogue.load(from: Catalogue.editableURL(bundled: opt.stations))
-    guard let station = catalogue.station(opt.station) else { throw UsageError("no station \(opt.station) in stations.json") }
-    let controller = Controller(catalogue: catalogue, station: station, delay: opt.delay)
-
-    Task {
-        while true {
-            try? await Task.sleep(for: .seconds(60))
-            await controller.stopIfIdle(after: 600)
-        }
-    }
-
+    let controller = Controller(catalogue: catalogue, settingsURL: try AppPaths.supportDirectory().appendingPathComponent("settings.json"))
     let web = opt.web
-    let server = HTTPServer(port: opt.port) { req in
-        switch req.path {
-        case "/": return staticFile("index.html", in: web)
-        case "/healthz": return HTTPResponse(contentType: "text/plain", body: Data("ok\n".utf8), noCache: true)
-        case let p where p.hasPrefix("/stream/"): return await controller.stream(String(p.dropFirst("/stream/".count)))
-        default: return staticFile(String(req.path.dropFirst()), in: web)
+    let icon = (try? Data(contentsOf: web.appendingPathComponent("icon.png"))) ?? Data()
+    let touchIcon = (try? Data(contentsOf: web.appendingPathComponent("touch-icon.png"))) ?? Data()
+    let prefix = RemoteRoutes.appPrefix
+
+    let server = HTTPServer(port: opt.port, events: { req in
+        guard RemoteRoutes.route(req, token: await controller.token, prefix: prefix) == .events else { return nil }
+        return controller.events()
+    }) { req in
+        if req.path == "/healthz" { return text(200, "ok\n") }
+        if req.path.hasPrefix("/static/") { return staticFile(String(req.path.dropFirst("/static/".count)), in: web) }
+        if req.path.hasPrefix("/stream/") { return await controller.stream(String(req.path.dropFirst("/stream/".count))) }
+        let token = await controller.token
+        guard let route = RemoteRoutes.route(req, token: token, prefix: prefix) else {
+            return req.path == "/" ? text(404, "InterLude: open the link shown in the server's log.\n") : .notFound
+        }
+        switch route {
+        case .page: return RemoteRoutes.page(token: token, touchIcon: touchIcon, prefix: prefix)
+        case .manifest: return RemoteRoutes.manifest
+        case .icon: return HTTPResponse(contentType: "image/png", body: icon)
+        case .state, .events: return RemoteRoutes.json(await controller.state())
+        case .command(let c):
+            guard sameOrigin(req) else { return text(403, "Commands must come from InterLude's own page.\n") }
+            await controller.perform(c)
+            return RemoteRoutes.json(await controller.state())
         }
     }
-    try await server.run { log("InterLude listening on port \(opt.port), data in \(opt.data.path)") }
+    let link = RemoteRoutes.pagePath(token: await controller.token, prefix: prefix)
+    try await server.run {
+        log("InterLude listening on port \(opt.port), data in \(opt.data.path)")
+        log("Open the app at http://\(ProcessInfo.processInfo.hostName):\(opt.port)\(link) (or this host's address)")
+    }
 } catch let e as UsageError {
     FileHandle.standardError.write(Data("interlude-server: \(e)\n".utf8))
     exit(2)

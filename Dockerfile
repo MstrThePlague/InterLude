@@ -20,9 +20,12 @@ RUN useradd --system --uid 10001 --home-dir /var/lib/interlude interlude \
 COPY --from=build /interlude-server /usr/local/bin/interlude-server
 COPY Data/stations.json /usr/share/interlude/stations.json
 COPY Web /usr/share/interlude/web
+# hls.js plays the stream in browsers without HLS of their own; qrcode-generator draws Settings' QR code. Both MIT.
 ADD --checksum=sha256:d016c1230496ee59f3f5b01c16cce4cc01b5a1d3d357adec200c908b131ebe49 \
     https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js /usr/share/interlude/web/hls.min.js
-RUN chmod 644 /usr/share/interlude/web/hls.min.js
+ADD --checksum=sha256:18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780 \
+    https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js /usr/share/interlude/web/qrcode.js
+RUN chmod 644 /usr/share/interlude/web/*
 USER interlude
 VOLUME /var/lib/interlude
 EXPOSE 8642
