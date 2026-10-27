@@ -2,6 +2,7 @@ import AppKit
 import CoreImage
 import CoreImage.CIFilterBuiltins
 import InterLudeCore
+import InterLudeApple
 
 /// What the phone remote sees and does. The page is served by the local server; see `RemotePage`.
 extension AppModel {

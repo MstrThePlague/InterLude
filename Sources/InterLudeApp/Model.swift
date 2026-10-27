@@ -5,6 +5,7 @@ import Observation
 import ServiceManagement
 import UserNotifications
 import InterLudeCore
+import InterLudeApple
 
 enum Output: Hashable, Identifiable {
     case thisMac
@@ -128,7 +129,7 @@ final class AppModel {
     private(set) var remoteError: String?
     /// Whether the remote's link goes over Tailscale rather than the LAN.
     var remoteOnTailscale: Bool {
-        remoteAddress.map { $0.hasSuffix(".ts.net") || LocalServer.isTailscale($0) } ?? false
+        remoteAddress.map { $0.hasSuffix(".ts.net") || Tailnet.isTailscale($0) } ?? false
     }
     var remoteURL: URL? {
         guard remoteEnabled, let ip = remoteAddress, let p = server?.port else { return nil }

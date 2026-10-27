@@ -1,33 +1,6 @@
 import Foundation
 import Network
-
-public struct HTTPResponse: Sendable {
-    public var status: Int
-    public var contentType: String
-    public var body: Data
-    public var noCache = false
-    public init(status: Int = 200, contentType: String, body: Data, noCache: Bool = false) {
-        self.status = status; self.contentType = contentType; self.body = body; self.noCache = noCache
-    }
-    public static let notFound = HTTPResponse(status: 404, contentType: "text/plain", body: Data("not found".utf8))
-}
-
-public struct HTTPRequest: Sendable {
-    public var method: String
-    public var path: String
-    public var query: [String: String]
-    public init(method: String = "GET", path: String, query: [String: String] = [:]) {
-        self.method = method; self.path = path; self.query = query
-    }
-    /// Parses the request line, such as `POST /a/b?x=1 HTTP/1.1`. Only GET, HEAD and POST are accepted.
-    public init?(requestLine: String) {
-        let parts = requestLine.split(separator: " ")
-        guard parts.count >= 2, ["GET", "HEAD", "POST"].contains(parts[0]),
-              let c = URLComponents(string: String(parts[1])) else { return nil }
-        method = String(parts[0]); path = c.path
-        query = Dictionary((c.queryItems ?? []).map { ($0.name, $0.value ?? "") }, uniquingKeysWith: { _, b in b })
-    }
-}
+import InterLudeCore
 
 /// A small HTTP server on NWListener. It serves the playlist and segments to AVPlayer (on loopback) and to Chromecasts
 /// (on the LAN), and the phone remote. Every path starts with a random token, so other devices cannot guess the URLs.
@@ -86,7 +59,7 @@ public final class LocalServer: @unchecked Sendable {
 
     /// The Mac's Tailscale IPv4 address, so a phone on the tailnet can reach it away from home. Nil when Tailscale is not up.
     public static func tailscaleAddress() -> String? {
-        ipv4Addresses().first { isTailscale($0.addr) }?.addr
+        ipv4Addresses().first { Tailnet.isTailscale($0.addr) }?.addr
     }
 
     /// The Mac's MagicDNS name, such as `mac.tailnet.ts.net`. Nil when Tailscale is not up or the name can't be found.
@@ -94,24 +67,7 @@ public final class LocalServer: @unchecked Sendable {
     /// use Tailscale's DNS. Both work in the App Sandbox. This can wait on DNS or the CLI, so call it off the main thread.
     public static func tailscaleName() -> String? {
         guard let ip = tailscaleAddress() else { return nil }
-        return reverseLookup(ip).flatMap(magicDNSName) ?? tailscaleStatus().flatMap(magicDNSName(statusJSON:))
-    }
-
-    /// `name` as a MagicDNS name without its trailing dot, or nil if it isn't one.
-    static func magicDNSName(_ name: String) -> String? {
-        let n = (name.hasSuffix(".") ? String(name.dropLast()) : name).lowercased()
-        let labels = n.split(separator: ".", omittingEmptySubsequences: false)
-        return n.hasSuffix(".ts.net") && labels.count == 4 && !labels.contains("") ? n : nil
-    }
-
-    /// The MagicDNS name in the output of `tailscale status --json`.
-    static func magicDNSName(statusJSON: Data) -> String? {
-        struct Status: Decodable {
-            struct Node: Decodable { var DNSName: String? }
-            var me: Node?
-            enum CodingKeys: String, CodingKey { case me = "Self" }
-        }
-        return (try? JSONDecoder().decode(Status.self, from: statusJSON))?.me?.DNSName.flatMap(magicDNSName)
+        return reverseLookup(ip).flatMap(Tailnet.magicDNSName) ?? tailscaleStatus().flatMap(Tailnet.magicDNSName(statusJSON:))
     }
 
     private static func reverseLookup(_ ip: String) -> String? {
@@ -142,12 +98,6 @@ public final class LocalServer: @unchecked Sendable {
         guard (try? p.run()) != nil else { return nil }
         if done.wait(timeout: .now() + 3) == .timedOut { p.terminate(); return nil }
         return p.terminationStatus == 0 ? out.fileHandleForReading.readDataToEndOfFile() : nil
-    }
-
-    /// Tailscale hands out addresses from the carrier-grade NAT range, 100.64.0.0/10.
-    public static func isTailscale(_ addr: String) -> Bool {
-        let o = addr.split(separator: ".").compactMap { UInt8($0) }
-        return o.count == 4 && o[0] == 100 && (64...127).contains(o[1])
     }
 
     /// Every up, non-loopback IPv4 address, with its interface name.

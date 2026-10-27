@@ -1,6 +1,4 @@
 import Foundation
-import AVFoundation
-import Accelerate
 
 /// Turns audio into rows of bar heights (0...1) for the panel's backdrop.
 public enum Spectrum {
@@ -13,20 +11,18 @@ public enum Spectrum {
     private static let floorDB: Float = -62
     private static let ceilingDB: Float = -14
 
-    /// One row of `bands` heights per 1/`fps` second of `buffer`.
-    public static func frames(_ buffer: AVAudioPCMBuffer) -> [[Float]] {
-        guard let data = buffer.floatChannelData, buffer.frameLength > 0 else { return [] }
-        let n = Int(buffer.frameLength), channels = Int(buffer.format.channelCount)
-        let rate = buffer.format.sampleRate
+    /// One row of `bands` heights per 1/`fps` second of `audio`.
+    public static func frames(_ audio: PCMAudio) -> [[Float]] {
+        let n = audio.frameCount, channels = audio.channels.count
+        guard n > 0 else { return [] }
+        let rate = audio.sampleRate
         var mono = [Float](repeating: 0, count: n)
-        for c in 0..<channels { vDSP_vadd(mono, 1, data[c], 1, &mono, 1, vDSP_Length(n)) }
-        if channels > 1 { var k = 1 / Float(channels); vDSP_vsmul(mono, 1, &k, &mono, 1, vDSP_Length(n)) }
+        for c in audio.channels { for i in 0..<n { mono[i] += c[i] } }
+        if channels > 1 { let k = 1 / Float(channels); for i in 0..<n { mono[i] *= k } }
 
-        let size = fftSize, log2n = vDSP_Length(log2(Double(size)))
-        guard let setup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2)) else { return [] }
-        defer { vDSP_destroy_fftsetup(setup) }
-        var window = [Float](repeating: 0, count: size)
-        vDSP_hann_window(&window, vDSP_Length(size), Int32(vDSP_HANN_NORM))
+        let size = fftSize
+        let dsp = Platform.current.dsp
+        let window = dsp.hannWindow(count: size)
 
         // Bin ranges for log-spaced bands, and a tilt that offsets the natural fall-off of music towards the treble.
         let binHz = rate / Double(size)
@@ -41,30 +37,15 @@ public enum Spectrum {
         }
 
         let half = size / 2
-        var real = [Float](repeating: 0, count: half), imag = [Float](repeating: 0, count: half)
         var chunk = [Float](repeating: 0, count: size)
-        var power = [Float](repeating: 0, count: half)
         let hop = Int(rate / fps)
         var out: [[Float]] = []
         var start = 0
         while start < n {
             let take = min(size, n - start)
-            chunk.withUnsafeMutableBufferPointer { p in
-                mono.withUnsafeBufferPointer { src in
-                    for i in 0..<take { p[i] = src[start + i] }
-                    for i in take..<size { p[i] = 0 }
-                }
-            }
-            vDSP.multiply(chunk, window, result: &chunk)
-            real.withUnsafeMutableBufferPointer { r in imag.withUnsafeMutableBufferPointer { im in
-                var split = DSPSplitComplex(realp: r.baseAddress!, imagp: im.baseAddress!)
-                chunk.withUnsafeBytes { raw in
-                    vDSP_ctoz(raw.bindMemory(to: DSPComplex.self).baseAddress!, 2, &split, 1, vDSP_Length(half))
-                }
-                vDSP_fft_zrip(setup, &split, 1, log2n, FFTDirection(kFFTDirection_Forward))
-                split.imagp[0] = 0                       // the Nyquist term is packed here
-                vDSP_zvmags(&split, 1, &power, 1, vDSP_Length(half))
-            } }
+            for i in 0..<take { chunk[i] = mono[start + i] * window[i] }
+            for i in take..<size { chunk[i] = 0 }
+            let power = dsp.powerSpectrum(chunk, dropNyquist: true)
             // The real FFT scales by 2, so a full-scale sine reads about 0 dB here.
             var row = [Float](repeating: 0, count: bands)
             for b in 0..<bands {

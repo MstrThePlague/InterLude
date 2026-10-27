@@ -1,0 +1,25 @@
+# The portable core must keep building away from the Mac: tests on Linux, a compile on Windows.
+# The Mac app and its tests need macOS 26 and are built locally with scripts/build-app.sh.
+name: Core
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    container: swift:6.2
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift test
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: compnerd/gha-setup-swift@main
+        with:
+          branch: swift-6.2-release
+          tag: 6.2-RELEASE
+      - run: swift build --target InterLudeCore
