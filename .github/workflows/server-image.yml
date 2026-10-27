@@ -1,0 +1,43 @@
+# Builds the server image for each release tag (v1.2.3) and pushes it to GitHub's container registry, as
+# ghcr.io/mstrtheplague/interlude-server:1.2.3 and :latest. The Mac app's zip is still made locally with
+# scripts/package-release.sh, since it is signed with a certificate on the Mac.
+name: Server image
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/mstrtheplague/interlude-server
+          tags: |
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=sha,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # The YAMNet conversion and the Swift build are slow; reuse unchanged layers between releases.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

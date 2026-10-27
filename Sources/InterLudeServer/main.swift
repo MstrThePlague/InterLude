@@ -3,11 +3,16 @@ import InterLudeCore
 import InterLudePortable
 import InterLudeHTTP
 import InterLudeML
+import InterLudeCast
 
 // interlude-server: InterLude without a Mac. The web app at /app/<token>/ plays, controls and configures one shared
 // session, which starts when a browser asks for the stream and stops when nobody has for 10 minutes.
 //
 //   interlude-server [--port 8642] [--data DIR] [--stations FILE] [--web DIR] [--models DIR] [--ambience DIR] [--ffmpeg PATH]
+//                    [--keep-running] [--cast-host ADDRESS]
+//
+// --keep-running (or INTERLUDE_KEEP_RUNNING=1) runs the live session all the time, for comparing with the Mac.
+// --cast-host is the address Cast speakers fetch the stream from; by default, this machine's LAN address.
 //
 // --models holds yamnet.onnx and its class map (scripts/yamnet/convert.sh), and whisper.cpp's ggml-base.en.bin for the
 // newsreader's opening and sign-off. Without YAMNet the server plays but can't recognise bulletins.
@@ -23,6 +28,8 @@ struct Options {
     var models = URL(fileURLWithPath: "/usr/share/interlude/models", isDirectory: true)
     var ambience = URL(fileURLWithPath: "/usr/share/interlude/ambience", isDirectory: true)
     var ffmpeg: URL?
+    var keepRunning = ProcessInfo.processInfo.environment["INTERLUDE_KEEP_RUNNING"] == "1"
+    var castHost = ProcessInfo.processInfo.environment["INTERLUDE_CAST_HOST"]
 
     init(_ args: [String]) throws {
         var i = 1
@@ -40,6 +47,8 @@ struct Options {
             case "--models": models = URL(fileURLWithPath: try value(), isDirectory: true)
             case "--ambience": ambience = URL(fileURLWithPath: try value(), isDirectory: true)
             case "--ffmpeg": ffmpeg = URL(fileURLWithPath: try value())
+            case "--keep-running": keepRunning = true
+            case "--cast-host": castHost = try value()
             default: throw UsageError("unknown option \(args[i])")
             }
             i += 1
@@ -98,7 +107,9 @@ do {
     AppPaths.root = opt.data
     let catalogue = try Catalogue.load(from: Catalogue.editableURL(bundled: opt.stations))
     let controller = Controller(catalogue: catalogue, settingsURL: try AppPaths.supportDirectory().appendingPathComponent("settings.json"),
-                                detects: detects, ambienceDirectory: opt.ambience)
+                                detects: detects, ambienceDirectory: opt.ambience, keepRunning: opt.keepRunning,
+                                castBase: (opt.castHost ?? LocalAddress.lan()).map { "http://\($0):\(opt.port)" })
+    if opt.keepRunning { log("keeping the live session running") }
     let web = opt.web
     let icon = (try? Data(contentsOf: web.appendingPathComponent("icon.png"))) ?? Data()
     let touchIcon = (try? Data(contentsOf: web.appendingPathComponent("touch-icon.png"))) ?? Data()
