@@ -1,6 +1,4 @@
 import Foundation
-import Accelerate
-import AVFoundation
 
 // Recognising a station's news theme. A theme is the same recording every time, so a simple spectral fingerprint
 // and normalised correlation find it reliably (0.99 on held-out bulletins, below 0.7 almost everywhere else).
@@ -15,12 +13,10 @@ public enum IdentFeatures {
     public static func extract(_ samples: [Float]) -> [[Float]] { extract(samples, bands: bands, log2n: 12, hop: hop) }
 
     public static func extract(_ samples: [Float], bands: Int, log2n: Int, hop: Int) -> [[Float]] {
-        let fftSize = 1 << log2n
-        guard samples.count >= fftSize, let setup = vDSP_create_fftsetup(vDSP_Length(log2n), FFTRadix(kFFTRadix2)) else { return [] }
-        defer { vDSP_destroy_fftsetup(setup) }
-        let n = fftSize, half = n / 2
-        var window = [Float](repeating: 0, count: n)
-        vDSP_hann_window(&window, vDSP_Length(n), Int32(vDSP_HANN_NORM))
+        let n = 1 << log2n, half = n / 2
+        guard samples.count >= n else { return [] }
+        let dsp = Platform.current.dsp
+        let window = dsp.hannWindow(count: n)
         // Band edges, log spaced
         let edges: [Int] = (0...bands).map { b in
             let f = 100.0 * pow(8000.0 / 100.0, Double(b) / Double(bands))
@@ -28,41 +24,30 @@ public enum IdentFeatures {
         }
         var out: [[Float]] = []
         var start = 0
-        var real = [Float](repeating: 0, count: half), imag = [Float](repeating: 0, count: half)
         var frame = [Float](repeating: 0, count: n)
         while start + n <= samples.count {
-            vDSP_vmul(Array(samples[start..<(start + n)]), 1, window, 1, &frame, 1, vDSP_Length(n))
-            real.withUnsafeMutableBufferPointer { rp in imag.withUnsafeMutableBufferPointer { ip in
-                var split = DSPSplitComplex(realp: rp.baseAddress!, imagp: ip.baseAddress!)
-                frame.withUnsafeBufferPointer { fp in
-                    fp.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: half) { vDSP_ctoz($0, 2, &split, 1, vDSP_Length(half)) }
-                }
-                vDSP_fft_zrip(setup, &split, 1, vDSP_Length(log2n), FFTDirection(FFT_FORWARD))
-                var mag = [Float](repeating: 0, count: half)
-                vDSP_zvmags(&split, 1, &mag, 1, vDSP_Length(half))
-                var bandsOut = [Float](repeating: 0, count: bands)
-                for b in 0..<bands {
-                    let lo = edges[b], hi = max(edges[b + 1], lo + 1)
-                    var sum: Float = 0
-                    vDSP_sve(Array(mag[lo..<hi]), 1, &sum, vDSP_Length(hi - lo))
-                    bandsOut[b] = log10(sum / Float(hi - lo) + 1e-3)
-                }
-                out.append(bandsOut)
-            } }
+            for i in 0..<n { frame[i] = samples[start + i] * window[i] }
+            let mag = dsp.powerSpectrum(frame, dropNyquist: false)
+            var bandsOut = [Float](repeating: 0, count: bands)
+            for b in 0..<bands {
+                let lo = edges[b], hi = max(edges[b + 1], lo + 1)
+                var sum: Float = 0
+                for k in lo..<hi { sum += mag[k] }
+                bandsOut[b] = log10(sum / Float(hi - lo) + 1e-3)
+            }
+            out.append(bandsOut)
             start += hop
         }
         // Remove each frame's mean so loudness differences do not matter.
         return out.map { f in let m = f.reduce(0, +) / Float(f.count); return f.map { $0 - m } }
     }
 
-    public static func mono(_ buf: AVAudioPCMBuffer) -> [Float] {
-        guard let ch = buf.floatChannelData else { return [] }
-        let n = Int(buf.frameLength)
-        var m = [Float](repeating: 0, count: n)
-        if buf.format.channelCount > 1 {
-            vDSP_vadd(ch[0], 1, ch[1], 1, &m, 1, vDSP_Length(n)); var h: Float = 0.5; vDSP_vsmul(m, 1, &h, &m, 1, vDSP_Length(n))
-        } else { m = Array(UnsafeBufferPointer(start: ch[0], count: n)) }
-        return m
+    /// The first two channels averaged, or the only one.
+    public static func mono(_ audio: PCMAudio) -> [Float] {
+        guard let l = audio.channels.first else { return [] }
+        guard audio.channels.count > 1 else { return l }
+        let r = audio.channels[1]
+        return (0..<l.count).map { (l[$0] + r[$0]) * 0.5 }
     }
 }
 
@@ -70,19 +55,13 @@ public enum IdentFeatures {
 public enum IdentMatcher {
     /// Frame-by-frame dot products of `a` against `b` (a.count x b.count, row major), computed with one matrix multiply.
     static func similarity(_ a: [[Float]], _ b: [[Float]]) -> [Float] {
-        let d = a.first?.count ?? 0
-        let fa = a.flatMap { $0 }, fb = b.flatMap { $0 }
-        var bt = [Float](repeating: 0, count: fb.count)
-        vDSP_mtrans(fb, 1, &bt, 1, vDSP_Length(d), vDSP_Length(b.count))
-        var out = [Float](repeating: 0, count: a.count * b.count)
-        vDSP_mmul(fa, 1, bt, 1, &out, 1, vDSP_Length(a.count), vDSP_Length(b.count), vDSP_Length(d))
-        return out
+        Platform.current.dsp.rowDots(a.flatMap { $0 }, b.flatMap { $0 }, width: a.first?.count ?? 0)
     }
 
     /// Prefix sums of each frame's squared length, for the norm of any run of frames.
     static func energyPrefix(_ x: [[Float]]) -> [Float] {
         var p = [Float](repeating: 0, count: x.count + 1)
-        for (i, f) in x.enumerated() { var e: Float = 0; vDSP_svesq(f, 1, &e, vDSP_Length(f.count)); p[i + 1] = p[i] + e }
+        for (i, f) in x.enumerated() { p[i + 1] = p[i] + f.reduce(0) { $0 + $1 * $1 } }
         return p
     }
 

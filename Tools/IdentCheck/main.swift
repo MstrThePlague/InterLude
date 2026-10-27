@@ -1,6 +1,8 @@
 import Foundation
-import AVFoundation
 import InterLudeCore
+import InterLudeApple
+
+Platform.install(.apple)
 
 let env = ProcessInfo.processInfo.environment
 let BANDS = Int(env["BANDS"] ?? "") ?? IdentFeatures.bands
