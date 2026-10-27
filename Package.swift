@@ -16,10 +16,13 @@ var targets: [Target] = [
     .systemLibrary(name: "CGGML", path: "Sources/CGGML", pkgConfig: "ggml", providers: [.brew(["ggml"])]),
     .systemLibrary(name: "CWhisper", path: "Sources/CWhisper", pkgConfig: "whisper", providers: [.brew(["whisper.cpp"])]),
     .target(name: "InterLudeML", dependencies: ["InterLudeCore", "COnnxRuntime", "CGGML", "CWhisper"], path: "Sources/InterLudeML"),
-    .executableTarget(name: "interlude-server", dependencies: ["InterLudeCore", "InterLudePortable", "InterLudeHTTP", "InterLudeML"],
+    .target(name: "InterLudeCast", dependencies: ["InterLudeCore", .product(name: "NIOCore", package: "swift-nio"),
+                                                  .product(name: "NIOPosix", package: "swift-nio"), .product(name: "NIOSSL", package: "swift-nio-ssl")],
+            path: "Sources/InterLudeCast"),
+    .executableTarget(name: "interlude-server", dependencies: ["InterLudeCore", "InterLudePortable", "InterLudeHTTP", "InterLudeML", "InterLudeCast"],
                       path: "Sources/InterLudeServer"),
     .testTarget(name: "InterLudeCoreTests", dependencies: ["InterLudeCore"], path: "Tests/InterLudeCoreTests"),
-    .testTarget(name: "InterLudePortableTests", dependencies: ["InterLudeCore", "InterLudePortable", "InterLudeHTTP", "InterLudeML"],
+    .testTarget(name: "InterLudePortableTests", dependencies: ["InterLudeCore", "InterLudePortable", "InterLudeHTTP", "InterLudeML", "InterLudeCast"],
                 path: "Tests/InterLudePortableTests"),
 ]
 
@@ -46,6 +49,10 @@ targets += [
 let package = Package(
     name: "InterLude",
     platforms: [.macOS(.v26)],
-    dependencies: [.package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.28.0")],
+    dependencies: [
+        .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.28.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.80.0"),
+        .package(url: "https://github.com/apple/swift-nio-ssl.git", from: "2.30.0"),
+    ],
     targets: targets
 )

@@ -2,6 +2,7 @@ import Foundation
 import Testing
 import InterLudeCore
 @testable import InterLudeML
+import InterLudePortable
 
 @Test func scoreMapInterpolatesAndClamps() {
     let m = ScoreMap([(0.1, 0), (0.5, 0.8), (0.9, 1)])
@@ -39,4 +40,16 @@ func yamnetRunsOnAudio() throws {
     let scores = try clf.classify([PCMAudio(channels: [samples, samples], sampleRate: 48000)])
     #expect(scores.map(\.time) == [0, 1.5, 3])
     #expect(scores.allSatisfy { $0.speech < 0.2 })
+}
+
+/// whisper.cpp hears a sign-off (spoken by macOS's text to speech) when its model is in Models/.
+@Test(.enabled(if: FileManager.default.fileExists(atPath: "Models/ggml-base.en.bin") && FFmpegDecoder.find() != nil, "needs Models/ggml-base.en.bin"))
+func whisperHearsASignOff() async throws {
+    let wav = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("Fixtures/signoff.wav")
+    let audio = try FFmpegDecoder(executable: FFmpegDecoder.find()!).read(contentsOf: wav)
+    let stt = WhisperTranscriber(model: URL(fileURLWithPath: "Models/ggml-base.en.bin"))
+    #expect(await stt.prepare(install: false))
+    let phrases = try await stt.transcribe(samples: audio.channels[0], sampleRate: audio.sampleRate)
+    let text = phrases.map(\.text).joined(separator: " ")
+    #expect(NewsPhrases.signOff(in: phrases, after: 0) != nil, "heard: \(text)")
 }

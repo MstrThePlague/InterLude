@@ -1,6 +1,6 @@
 # InterLude
 
-InterLude is a small macOS menu bar app that plays BBC radio about a minute behind live and quietly mutes the news bulletins. It plays on the Mac itself or on Chromecast speakers and groups.
+InterLude is a small macOS menu bar app that plays BBC radio about a minute behind live and quietly mutes the news bulletins. It plays on the Mac itself or on Chromecast speakers and groups. It also runs as a web app on a Linux server (see [Running the server](#running-the-server)).
 
 I wanted 6 Music in the background all day without the hourly news, so it is tuned for music stations. Speech stations play normally.
 
@@ -94,6 +94,56 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --scratch-pa
 ```
 
 To see the panel's states without playing anything, launch with `--demo=playing`, `--demo=muted`, `--demo=upcoming`, `--demo=error`, `--demo=earlier`, `--demo=earlier-past`, `--demo=replay` or `--demo=settings`.
+
+## Running the server
+
+InterLude also runs as a web app on a Linux machine, so it works with no Mac involved: any phone, tablet or computer plays and controls it in a browser, and it can cast to Chromecasts itself. It uses open models in place of Apple's: YAMNet for speech and music and whisper.cpp for the newsreader, both running on the server's CPU. Nothing is sent to a speech service.
+
+It ships as a Docker image for x86-64 Linux. You need Docker with Compose, and about 1 GB of memory free.
+
+```
+mkdir interlude && cd interlude
+curl -fsSLO https://raw.githubusercontent.com/MstrThePlague/InterLude/main/compose.yaml
+docker compose pull && docker compose up -d
+docker compose logs | grep "Open the app"
+```
+
+The log gives the app's address, `http://<server>:8642/app/<code>/`. The long code keeps other people on your network out; **Settings › Reset link** makes a new one. Open it on a phone and add it to the Home Screen to keep it as an app. Settings also shows a QR code for opening it on another device.
+
+The server starts playing when a browser asks for it and stops 10 minutes after the last one stops listening. Play and Stop act on the browser you press them in. With a Cast speaker chosen, they start and stop the speaker instead.
+
+**Your network.** Browsers on your LAN reach the server on TCP 8642. Cast speakers need two more things:
+
+- **The stream:** the speakers must be allowed to fetch it from the server on TCP 8642.
+- **Discovery:** the server must see the speakers' multicast DNS, port 5353. On a network split into VLANs, add the server's network to the gateway's mDNS proxy or reflector.
+
+If the server runs a firewall such as ufw, allow those ports in from your networks.
+
+**Away from home.** With Tailscale on the server, serve the app over HTTPS on your tailnet:
+
+```
+sudo tailscale serve --bg --https=8443 http://127.0.0.1:8642
+```
+
+Then open `https://<server's tailnet name>:8443/app/<code>/`. Cast speakers still use the LAN address.
+
+**Updating:** `docker compose pull && docker compose up -d`. Each release tag publishes the image as `ghcr.io/mstrtheplague/interlude-server`. To build from a checkout instead: `docker compose up -d --build`.
+
+**Backing up.** Settings, station profiles and learned news jingles live in the `data` volume. To copy them out:
+
+```
+docker run --rm -v interlude_data:/data -v "$PWD":/backup alpine tar czf /backup/interlude-data.tgz -C /data .
+```
+
+The volume is named after the folder `compose.yaml` is in, so for a folder called `interlude` it's `interlude_data`. Run `docker volume ls` to check. A jingle the Mac app has learned can be copied across: put its `profiles/<station>.json` and `.candidates` files into the volume's `profiles` folder and restart.
+
+**Comparing with the Mac.** To check the server against the Mac app, turn on `INTERLUDE_KEEP_RUNNING` in `compose.yaml`; the server then runs the live session all the time. Leave the Mac app playing the same station, and after a few days compare the two event logs:
+
+```
+scripts/compare-events.py "~/Library/Containers/org.benbull.InterLude/Data/Library/Application Support/InterLude/events.jsonl" server-events.jsonl
+```
+
+To get `server-events.jsonl`, run `docker compose cp interlude:/var/lib/interlude/events.jsonl server-events.jsonl`.
 
 ## Where things are kept
 
