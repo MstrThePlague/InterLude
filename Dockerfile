@@ -36,7 +36,7 @@ ADD --checksum=sha256:a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36
 COPY Resources/Ambience /usr/share/interlude/ambience
 COPY Data/stations.json /usr/share/interlude/stations.json
 COPY Web /usr/share/interlude/web
-# hls.js plays the stream in browsers without HLS of their own; qrcode-generator draws Settings' QR code. Both MIT.
+# hls.js (Apache 2.0) plays the stream in browsers without HLS of their own; qrcode-generator (MIT) draws Settings' QR code.
 ADD --checksum=sha256:d016c1230496ee59f3f5b01c16cce4cc01b5a1d3d357adec200c908b131ebe49 \
     https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js /usr/share/interlude/web/hls.min.js
 ADD --checksum=sha256:18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780 \
