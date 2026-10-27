@@ -2,15 +2,17 @@
 import PackageDescription
 
 // InterLudeCore is portable Swift and builds on macOS, Linux and Windows. InterLudePortable holds the platform
-// implementations that work away from the Mac, and interlude-server runs on them. Everything that needs Apple's
+// implementations that work away from the Mac, and builds on all three too. InterLudeHTTP is the web server on
+// Hummingbird, which supports macOS and Linux only; interlude-server runs on both. Everything that needs Apple's
 // frameworks (their implementations, the menu bar app and the measuring tools) is declared only when building on macOS.
 var targets: [Target] = [
     .target(name: "InterLudeCore", path: "Sources/InterLudeCore"),
-    .target(name: "InterLudePortable", dependencies: ["InterLudeCore", .product(name: "Hummingbird", package: "hummingbird")],
-            path: "Sources/InterLudePortable"),
-    .executableTarget(name: "interlude-server", dependencies: ["InterLudeCore", "InterLudePortable"], path: "Sources/InterLudeServer"),
+    .target(name: "InterLudePortable", dependencies: ["InterLudeCore"], path: "Sources/InterLudePortable"),
+    .target(name: "InterLudeHTTP", dependencies: ["InterLudeCore", .product(name: "Hummingbird", package: "hummingbird")],
+            path: "Sources/InterLudeHTTP"),
+    .executableTarget(name: "interlude-server", dependencies: ["InterLudeCore", "InterLudePortable", "InterLudeHTTP"], path: "Sources/InterLudeServer"),
     .testTarget(name: "InterLudeCoreTests", dependencies: ["InterLudeCore"], path: "Tests/InterLudeCoreTests"),
-    .testTarget(name: "InterLudePortableTests", dependencies: ["InterLudeCore", "InterLudePortable"], path: "Tests/InterLudePortableTests"),
+    .testTarget(name: "InterLudePortableTests", dependencies: ["InterLudeCore", "InterLudePortable", "InterLudeHTTP"], path: "Tests/InterLudePortableTests"),
 ]
 
 #if os(macOS)

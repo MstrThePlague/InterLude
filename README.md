@@ -105,7 +105,8 @@ Inside the App Sandbox, `Application Support` is the app's own container under `
 |---|---|
 | `Sources/InterLudeCore` | Everything that isn't user interface or tied to Apple's frameworks: stream handling, MPEG-TS, detection, playout, the phone remote's page and the Cast protocol. Builds and tests on Linux too. |
 | `Sources/InterLudeApple` | The Mac's implementations of what the core asks the platform for: AAC decoding and encoding, the sound classifier, speech recognition, signal maths, the local server and Cast discovery. |
-| `Sources/InterLudePortable` | Implementations that work away from the Mac: an HTTP server on Hummingbird and audio decoding with ffmpeg. |
+| `Sources/InterLudePortable` | Implementations that work away from the Mac, on Linux and Windows: audio decoding with ffmpeg. |
+| `Sources/InterLudeHTTP` | The web server for macOS and Linux, on Hummingbird. |
 | `Sources/InterLudeServer` | `interlude-server`, InterLude for a Linux host, in progress. `Dockerfile` and `compose.yaml` build and run it. |
 | `Sources/InterLudeApp` | The SwiftUI menu bar app. |
 | `Web` | The server's web page. |
