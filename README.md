@@ -4,6 +4,13 @@ InterLude is a small macOS menu bar app that plays BBC radio about a minute behi
 
 I wanted 6 Music in the background all day without the hourly news, so it is tuned for music stations. Speech stations play normally.
 
+<p align="center">
+  <img src="docs/images/mac-playing.png" width="260" alt="The InterLude panel on the Mac playing 6 Music live, with the track, artwork and volume">
+  <img src="docs/images/mac-muted.png" width="260" alt="The panel while a bulletin is muted, with a Not news button">
+  <img src="docs/images/mac-earlier.png" width="260" alt="An earlier programme playing from its start, with two bulletins skipped">
+</p>
+<p align="center"><sub>On the Mac: playing live, muting a bulletin, and an earlier programme with the news cut out.</sub></p>
+
 > **Unofficial.** InterLude is not affiliated with the BBC. It relies on stream addresses the BBC does not document and can change at any time. It sends no telemetry: its only network traffic is to BBC servers, and to speakers and the phone remote on your own network.
 
 ## What it does
@@ -98,6 +105,12 @@ To see the panel's states without playing anything, launch with `--demo=playing`
 ## Running the server
 
 InterLude also runs as a web app on a Linux machine, so it works with no Mac involved: any phone, tablet or computer plays and controls it in a browser, and it can cast to Chromecasts itself. It uses open models in place of Apple's: YAMNet for speech and music and whisper.cpp for the newsreader, both running on the server's CPU. Nothing is sent to a speech service.
+
+<p align="center">
+  <img src="docs/images/web-phone.png" width="250" alt="The web app on a phone, playing 6 Music live">
+  <img src="docs/images/web-desktop.png" width="560" alt="The web app on a computer, with the Earlier programme list beside the player">
+</p>
+<p align="center"><sub>In a browser: on a phone, and on a computer with yesterday's programmes.</sub></p>
 
 It ships as a Docker image for x86-64 Linux. You need Docker with Compose, and about 1 GB of memory free.
 
