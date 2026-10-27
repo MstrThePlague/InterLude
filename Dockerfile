@@ -41,7 +41,8 @@ ADD --checksum=sha256:d016c1230496ee59f3f5b01c16cce4cc01b5a1d3d357adec200c908b13
     https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js /usr/share/interlude/web/hls.min.js
 ADD --checksum=sha256:18ae399f81182bc9de916e9c77b195df20cc58d6f2d55a62b085a299f1bf1780 \
     https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js /usr/share/interlude/web/qrcode.js
-RUN chmod 644 /usr/share/interlude/web/*
+# ADD leaves downloads readable by root only, and the server runs as its own user.
+RUN chmod 644 /usr/share/interlude/web/* /usr/share/interlude/models/*
 USER interlude
 VOLUME /var/lib/interlude
 EXPOSE 8642
