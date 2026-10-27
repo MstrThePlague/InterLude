@@ -5,6 +5,7 @@ import FoundationNetworking
 import Testing
 import InterLudeCore
 @testable import InterLudePortable
+import InterLudeHTTP
 
 /// A 440 Hz tone encoded as ADTS AAC by ffmpeg itself, split into frames as a segment carries them.
 private func toneFrames(ffmpeg: URL, seconds: Double) throws -> [Data] {

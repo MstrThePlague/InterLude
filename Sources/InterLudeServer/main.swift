@@ -1,6 +1,7 @@
 import Foundation
 import InterLudeCore
 import InterLudePortable
+import InterLudeHTTP
 
 // interlude-server: InterLude without a Mac. It plays one station a fixed time behind live to any browser, starting a
 // session on the first request for the stream and stopping it when nobody has asked for 10 minutes.

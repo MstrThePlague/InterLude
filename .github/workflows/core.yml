@@ -1,4 +1,5 @@
 # The portable core and adapters must keep building away from the Mac: tests on Linux, a compile on Windows.
+# InterLudeHTTP is left out on Windows, since Hummingbird supports only macOS and Linux.
 # The Mac app and its tests need macOS 26 and are built locally with scripts/build-app.sh.
 name: Core
 
