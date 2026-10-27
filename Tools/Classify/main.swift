@@ -1,11 +1,13 @@
 import Foundation
 import InterLudeCore
 import InterLudeApple
+import InterLudeML
 
 Platform.install(.apple)
 
 // classify <recordingDir> <outCsv>
-// Decodes every segment in index order and writes per-window speech and music scores:
+// Decodes every segment in index order and writes per-window speech and music scores. CLASSIFIER=yamnet:<dir> scores
+// with YAMNet from that directory instead of Apple's classifier; YAMNET_RAW=1 leaves its scores uncalibrated.
 // index,segment_start_unix,offset_in_segment,speech,music
 let a = CommandLine.arguments
 guard a.count >= 3 else { print("usage: classify <recordingDir> <outCsv>"); exit(2) }
@@ -14,7 +16,11 @@ let parts = try String(contentsOf: dir.appendingPathComponent("index.txt"), enco
 let first = Int(parts[0])!, last = Int(parts[1])!
 let block = 50
 var csv = "index,segment_start_unix,offset_in_segment,speech,music\n"
-let clf = AppleSoundClassifier()
+let choice = ProcessInfo.processInfo.environment["CLASSIFIER"] ?? "apple"
+let clf: any SoundClassifying = choice.hasPrefix("yamnet:")
+    ? try YAMNetClassifier(directory: URL(fileURLWithPath: String(choice.dropFirst(7))),
+                           calibrated: ProcessInfo.processInfo.environment["YAMNET_RAW"] == nil)
+    : AppleSoundClassifier()
 var missing = 0, windows = 0
 var prev: PCMAudio?
 var blockStart = first
@@ -29,9 +35,7 @@ while blockStart <= last {
               let buf = try? Decode.pcm(frames: info.frames) else { missing += 1; continue }
         buffers.append(buf); indices.append(i); prev = buf
     }
-    if blockStart == first { print("dbg frames", buffers.map { $0.frameCount }.prefix(5), buffers.count, buffers[0].sampleRate) }
     let scores = try clf.classify(buffers)
-    if blockStart == first { print("dbg scores", scores.count, scores.prefix(4).map { $0.time }) }
     var starts: [(Double, Int)] = []; var t = ctxSeconds
     for (k, b) in buffers.dropFirst(ctx.count).enumerated() { starts.append((t, indices[k])); t += b.duration }
     var k = 0
