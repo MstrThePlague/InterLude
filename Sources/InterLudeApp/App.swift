@@ -1,5 +1,7 @@
 import SwiftUI
 import AppKit
+import InterLudeCore
+import InterLudeApple
 
 /// InterLude has no Dock icon, so a menu bar icon is easy to miss. The delegate shows the panel in a window on first
 /// launch, and whenever the app is opened again from Finder or Spotlight.
@@ -41,7 +43,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct InterLudeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    private let model = AppModel.shared
+    private let model: AppModel
+
+    init() {
+        Platform.install(.apple)
+        model = AppModel.shared
+    }
 
     var body: some Scene {
         MenuBarExtra {

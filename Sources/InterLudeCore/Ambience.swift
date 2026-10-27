@@ -1,5 +1,4 @@
 import Foundation
-import AVFoundation
 
 /// A looping background sound, such as waves or birdsong, played in place of a muted bulletin.
 /// The loop runs on the stream's own clock, so consecutive muted segments join up without a seam.
@@ -13,20 +12,16 @@ public struct Ambience: Sendable {
 
     /// Loads a 48 kHz audio file, sets it to a gentle level and blends its end into its start.
     public init(url: URL, levelDB: Float = -30) throws {
-        let file = try AVAudioFile(forReading: url)
-        let fmt = file.processingFormat
-        guard fmt.sampleRate == 48000, let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(file.length)) else {
-            throw AmbienceError.format
-        }
-        try file.read(into: buf)
-        guard let ch = buf.floatChannelData else { throw AmbienceError.format }
-        let n = Int(buf.frameLength), right = fmt.channelCount > 1 ? 1 : 0
+        let audio = try Platform.current.decoder.read(contentsOf: url)
+        guard audio.sampleRate == 48000, let left = audio.channels.first else { throw AmbienceError.format }
+        let right = audio.channels.count > 1 ? audio.channels[1] : left
+        let n = audio.frameCount
         let xfade = 2 * 48000
         guard n > 4 * xfade else { throw AmbienceError.tooShort }
 
         // Normalise to a fixed RMS level, so every choice sits at the same volume.
         var sum: Double = 0
-        for i in 0..<n { let l = ch[0][i], r = ch[right][i]; sum += Double(l * l + r * r) }
+        for i in 0..<n { let l = left[i], r = right[i]; sum += Double(l * l + r * r) }
         let rms = Float((sum / Double(2 * n)).squareRoot())
         let gain = rms > 0 ? powf(10, levelDB / 20) / rms : 0
 
@@ -34,11 +29,11 @@ public struct Ambience: Sendable {
         let len = n - xfade
         var out = [Float](repeating: 0, count: len * 2)
         for i in 0..<len {
-            var l = ch[0][i], r = ch[right][i]
+            var l = left[i], r = right[i]
             if i < xfade {
                 let t = Float(i) / Float(xfade), a = sinf(t * .pi / 2), b = cosf(t * .pi / 2)
-                l = l * a + ch[0][len + i] * b
-                r = r * a + ch[right][len + i] * b
+                l = l * a + left[len + i] * b
+                r = r * a + right[len + i] * b
             }
             out[2 * i] = max(-1, min(1, l * gain)); out[2 * i + 1] = max(-1, min(1, r * gain))
         }

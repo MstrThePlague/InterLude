@@ -1,6 +1,8 @@
 import Foundation
-import AVFoundation
 import InterLudeCore
+import InterLudeApple
+
+Platform.install(.apple)
 
 // signoff-check <dir>:<blockStart>,<blockEnd> ...
 // Transcribes each muted block (20 s before to 10 s after) and reports the newsreader's opening and sign-off.

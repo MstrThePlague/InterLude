@@ -1,15 +1,12 @@
 import Testing
-import AVFoundation
+import Foundation
 @testable import InterLudeCore
 
 @Suite struct SpectrumTests {
-    private func tone(_ hz: Double, seconds: Double = 1, amplitude: Float = 0.5) -> AVAudioPCMBuffer {
-        let fmt = AVAudioFormat(standardFormatWithSampleRate: 48000, channels: 2)!
-        let n = AVAudioFrameCount(48000 * seconds)
-        let b = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: n)!
-        b.frameLength = n
-        for c in 0..<2 { for i in 0..<Int(n) { b.floatChannelData![c][i] = amplitude * Float(sin(2 * .pi * hz * Double(i) / 48000)) } }
-        return b
+    private func tone(_ hz: Double, seconds: Double = 1, amplitude: Float = 0.5) -> PCMAudio {
+        let n = Int(48000 * seconds)
+        let ch = (0..<n).map { amplitude * Float(sin(2 * .pi * hz * Double($0) / 48000)) }
+        return PCMAudio(channels: [ch, ch], sampleRate: 48000)
     }
 
     @Test func frameRateAndWidth() {

@@ -1,5 +1,8 @@
 import Foundation
 import InterLudeCore
+import InterLudeApple
+
+Platform.install(.apple)
 
 // cast-spike list
 // cast-spike play <deviceNameSubstring> <url> [seconds]    load a stream and report which hlsSegmentFormat worked

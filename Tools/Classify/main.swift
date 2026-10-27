@@ -1,6 +1,8 @@
 import Foundation
-import AVFoundation
 import InterLudeCore
+import InterLudeApple
+
+Platform.install(.apple)
 
 // classify <recordingDir> <outCsv>
 // Decodes every segment in index order and writes per-window speech and music scores:
@@ -12,26 +14,26 @@ let parts = try String(contentsOf: dir.appendingPathComponent("index.txt"), enco
 let first = Int(parts[0])!, last = Int(parts[1])!
 let block = 50
 var csv = "index,segment_start_unix,offset_in_segment,speech,music\n"
-let clf = ClipClassifier()
+let clf = AppleSoundClassifier()
 var missing = 0, windows = 0
-var prev: AVAudioPCMBuffer?
+var prev: PCMAudio?
 var blockStart = first
 while blockStart <= last {
     let blockEnd = min(blockStart + block - 1, last)
-    var buffers: [AVAudioPCMBuffer] = [], indices: [Int] = []
+    var buffers: [PCMAudio] = [], indices: [Int] = []
     let ctx = prev.map { [$0] } ?? []
     buffers += ctx
-    let ctxSeconds = ctx.isEmpty ? 0 : Double(ctx[0].frameLength) / ctx[0].format.sampleRate
+    let ctxSeconds = ctx.first?.duration ?? 0
     for i in blockStart...blockEnd {
         guard let d = try? Data(contentsOf: dir.appendingPathComponent("\(i).ts")), let info = TS.parse(d), !info.frames.isEmpty,
               let buf = try? Decode.pcm(frames: info.frames) else { missing += 1; continue }
         buffers.append(buf); indices.append(i); prev = buf
     }
-    if blockStart == first { print("dbg frames", buffers.map { $0.frameLength }.prefix(5), buffers.count, buffers[0].format) }
+    if blockStart == first { print("dbg frames", buffers.map { $0.frameCount }.prefix(5), buffers.count, buffers[0].sampleRate) }
     let scores = try clf.classify(buffers)
     if blockStart == first { print("dbg scores", scores.count, scores.prefix(4).map { $0.time }) }
     var starts: [(Double, Int)] = []; var t = ctxSeconds
-    for (k, b) in buffers.dropFirst(ctx.count).enumerated() { starts.append((t, indices[k])); t += Double(b.frameLength) / b.format.sampleRate }
+    for (k, b) in buffers.dropFirst(ctx.count).enumerated() { starts.append((t, indices[k])); t += b.duration }
     var k = 0
     for s in scores.sorted(by: { $0.time < $1.time }) where s.time >= ctxSeconds && !starts.isEmpty {
         while k + 1 < starts.count && starts[k + 1].0 <= s.time { k += 1 }
