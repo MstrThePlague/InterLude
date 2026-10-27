@@ -13,7 +13,8 @@ public actor WhisperTranscriber: NewsTranscribing {
     private let queue = DispatchQueue(label: "interlude.whisper")
     private let threads: Int32
 
-    public init(model: URL, threads: Int32 = 4) {
+    /// `threads` defaults to every core, up to eight: whisper is the slowest step in starting an earlier programme.
+    public init(model: URL, threads: Int32 = Int32(min(8, ProcessInfo.processInfo.activeProcessorCount))) {
         modelPath = model.path; self.threads = threads
     }
 
