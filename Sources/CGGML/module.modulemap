@@ -1,0 +1,4 @@
+module CGGML [system] {
+    header "shim.h"
+    export *
+}

@@ -13,7 +13,8 @@ jobs:
     container: swift:6.2
     steps:
       - uses: actions/checkout@v4
-      - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg
+      - run: apt-get update && apt-get install -y --no-install-recommends ffmpeg pkg-config curl cmake build-essential
+      - run: scripts/install-linux-deps.sh
       - run: swift test
 
   windows:

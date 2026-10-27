@@ -2,11 +2,15 @@ import Foundation
 import InterLudeCore
 import InterLudePortable
 import InterLudeHTTP
+import InterLudeML
 
 // interlude-server: InterLude without a Mac. The web app at /app/<token>/ plays, controls and configures one shared
 // session, which starts when a browser asks for the stream and stops when nobody has for 10 minutes.
 //
-//   interlude-server [--port 8642] [--data DIR] [--stations FILE] [--web DIR] [--ffmpeg PATH]
+//   interlude-server [--port 8642] [--data DIR] [--stations FILE] [--web DIR] [--models DIR] [--ambience DIR] [--ffmpeg PATH]
+//
+// --models holds yamnet.onnx and its class map (scripts/yamnet/convert.sh), and whisper.cpp's ggml-base.en.bin for the
+// newsreader's opening and sign-off. Without YAMNet the server plays but can't recognise bulletins.
 
 /// Writes a line straight to stdout, unbuffered, so `docker logs` keeps up.
 func log(_ line: String) { FileHandle.standardOutput.write(Data((line + "\n").utf8)) }
@@ -16,6 +20,8 @@ struct Options {
     var data = URL(fileURLWithPath: "/var/lib/interlude", isDirectory: true)
     var stations = URL(fileURLWithPath: "/usr/share/interlude/stations.json")
     var web = URL(fileURLWithPath: "/usr/share/interlude/web", isDirectory: true)
+    var models = URL(fileURLWithPath: "/usr/share/interlude/models", isDirectory: true)
+    var ambience = URL(fileURLWithPath: "/usr/share/interlude/ambience", isDirectory: true)
     var ffmpeg: URL?
 
     init(_ args: [String]) throws {
@@ -31,6 +37,8 @@ struct Options {
             case "--data": data = URL(fileURLWithPath: try value(), isDirectory: true)
             case "--stations": stations = URL(fileURLWithPath: try value())
             case "--web": web = URL(fileURLWithPath: try value(), isDirectory: true)
+            case "--models": models = URL(fileURLWithPath: try value(), isDirectory: true)
+            case "--ambience": ambience = URL(fileURLWithPath: try value(), isDirectory: true)
             case "--ffmpeg": ffmpeg = URL(fileURLWithPath: try value())
             default: throw UsageError("unknown option \(args[i])")
             }
@@ -68,10 +76,29 @@ func text(_ status: Int, _ s: String) -> HTTPResponse {
 do {
     let opt = try Options(CommandLine.arguments)
     guard let ffmpeg = opt.ffmpeg ?? FFmpegDecoder.find() else { throw UsageError("ffmpeg not found; install it or pass --ffmpeg") }
-    Platform.install(.portable(ffmpeg: ffmpeg))
+    var platform = Platform.portable(ffmpeg: ffmpeg)
+    var detects = false
+    do {
+        // One model for every session: loading takes a moment, and ONNX Runtime sessions can be shared.
+        let yamnet = try YAMNetClassifier(directory: opt.models)
+        platform.makeClassifier = { yamnet }
+        detects = true
+        log("YAMNet loaded from \(opt.models.path)")
+    } catch {
+        log("no sound classifier (\(error.localizedDescription)); news won't be recognised")
+    }
+    let whisperModel = opt.models.appendingPathComponent("ggml-base.en.bin")
+    if FileManager.default.fileExists(atPath: whisperModel.path) {
+        // One transcriber, so the model loads once; it runs one bulletin at a time.
+        let whisper = WhisperTranscriber(model: whisperModel)
+        platform.makeTranscriber = { whisper }
+        log("whisper model at \(whisperModel.path)")
+    }
+    Platform.install(platform)
     AppPaths.root = opt.data
     let catalogue = try Catalogue.load(from: Catalogue.editableURL(bundled: opt.stations))
-    let controller = Controller(catalogue: catalogue, settingsURL: try AppPaths.supportDirectory().appendingPathComponent("settings.json"))
+    let controller = Controller(catalogue: catalogue, settingsURL: try AppPaths.supportDirectory().appendingPathComponent("settings.json"),
+                                detects: detects, ambienceDirectory: opt.ambience)
     let web = opt.web
     let icon = (try? Data(contentsOf: web.appendingPathComponent("icon.png"))) ?? Data()
     let touchIcon = (try? Data(contentsOf: web.appendingPathComponent("touch-icon.png"))) ?? Data()

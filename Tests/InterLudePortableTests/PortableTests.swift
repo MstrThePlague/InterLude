@@ -44,7 +44,7 @@ func ffmpegDecodesADTS() throws {
 @Test(.enabled(if: FFmpegDecoder.find() != nil, "needs ffmpeg"))
 func ffmpegReportsBadInput() throws {
     let ffmpeg = try #require(FFmpegDecoder.find())
-    #expect(throws: FFmpegDecoder.DecodeError.self) { try FFmpegDecoder(executable: ffmpeg).decode(adts: [Data(repeating: 0x55, count: 400)]) }
+    #expect(throws: FFmpeg.Failure.self) { try FFmpegDecoder(executable: ffmpeg).decode(adts: [Data(repeating: 0x55, count: 400)]) }
     #expect(try FFmpegDecoder(executable: ffmpeg).decode(adts: []) == nil)
 }
 
