@@ -18,7 +18,7 @@ services:
       # from the BBC (about 3.5 GB a day at 320 kbps) whether or not anyone is listening.
       # INTERLUDE_KEEP_RUNNING: "1"
       # The address Cast speakers fetch the stream from, if the server picks the wrong one.
-      # INTERLUDE_CAST_HOST: "10.10.10.238"
+      # INTERLUDE_CAST_HOST: "192.168.1.50"
 
 volumes:
   data:

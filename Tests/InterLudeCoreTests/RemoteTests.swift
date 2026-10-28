@@ -18,28 +18,28 @@ import Foundation
     }
 
     @Test func recognisesTailscaleAddresses() {
-        #expect(Tailnet.isTailscale("100.70.0.49"))
+        #expect(Tailnet.isTailscale("100.100.1.2"))
         #expect(Tailnet.isTailscale("100.64.0.1"))
         #expect(Tailnet.isTailscale("100.127.255.254"))
         #expect(!Tailnet.isTailscale("100.128.0.1"))
         #expect(!Tailnet.isTailscale("100.63.0.1"))
         #expect(!Tailnet.isTailscale("192.168.1.20"))
-        #expect(!Tailnet.isTailscale("100.70.0"))
+        #expect(!Tailnet.isTailscale("100.100.1"))
     }
 
     @Test func recognisesMagicDNSNames() {
-        #expect(Tailnet.magicDNSName("bb-mba-m3-1.tail896e40.ts.net.") == "bb-mba-m3-1.tail896e40.ts.net")
-        #expect(Tailnet.magicDNSName("Ben-Mac.Tail896e40.TS.NET") == "ben-mac.tail896e40.ts.net")
-        #expect(Tailnet.magicDNSName("49.0.70.100.in-addr.arpa") == nil)
-        #expect(Tailnet.magicDNSName("tail896e40.ts.net") == nil)
-        #expect(Tailnet.magicDNSName("a.b.tail896e40.ts.net") == nil)
+        #expect(Tailnet.magicDNSName("my-mac.tailnet-1234.ts.net.") == "my-mac.tailnet-1234.ts.net")
+        #expect(Tailnet.magicDNSName("My-Mac.Tailnet-1234.TS.NET") == "my-mac.tailnet-1234.ts.net")
+        #expect(Tailnet.magicDNSName("2.1.100.100.in-addr.arpa") == nil)
+        #expect(Tailnet.magicDNSName("tailnet-1234.ts.net") == nil)
+        #expect(Tailnet.magicDNSName("a.b.tailnet-1234.ts.net") == nil)
         #expect(Tailnet.magicDNSName("mac..ts.net") == nil)
         #expect(Tailnet.magicDNSName("mac.local") == nil)
     }
 
     @Test func readsTheNameFromTailscaleStatus() {
-        let json = #"{"BackendState":"Running","Self":{"HostName":"bb-mba-m3-1","DNSName":"bb-mba-m3-1.tail896e40.ts.net.","TailscaleIPs":["100.70.0.49"]}}"#
-        #expect(Tailnet.magicDNSName(statusJSON: Data(json.utf8)) == "bb-mba-m3-1.tail896e40.ts.net")
+        let json = #"{"BackendState":"Running","Self":{"HostName":"my-mac","DNSName":"my-mac.tailnet-1234.ts.net.","TailscaleIPs":["100.100.1.2"]}}"#
+        #expect(Tailnet.magicDNSName(statusJSON: Data(json.utf8)) == "my-mac.tailnet-1234.ts.net")
         #expect(Tailnet.magicDNSName(statusJSON: Data(#"{"BackendState":"Stopped","Self":{"DNSName":""}}"#.utf8)) == nil)
         #expect(Tailnet.magicDNSName(statusJSON: Data(#"{"BackendState":"NoState"}"#.utf8)) == nil)
         #expect(Tailnet.magicDNSName(statusJSON: Data("not json".utf8)) == nil)

@@ -22,10 +22,10 @@ import Testing
     let hostAt = m.count - host.count
     let txt = ["id=abc", "md=Chromecast Audio", "fn=Kitchen"].flatMap { [UInt8($0.utf8.count)] + Array($0.utf8) }
     m += rr(ptr(instanceAt), 16, txt)
-    m += rr(ptr(hostAt), 1, [10, 30, 30, 12])
+    m += rr(ptr(hostAt), 1, [192, 168, 1, 50])
 
     let speakers = MDNS.speakers(from: MDNS.parse(m))
-    #expect(speakers == [CastSpeaker(id: "Kitchen-abc", name: "Kitchen", model: "Chromecast Audio", host: "10.30.30.12", port: 8009)])
+    #expect(speakers == [CastSpeaker(id: "Kitchen-abc", name: "Kitchen", model: "Chromecast Audio", host: "192.168.1.50", port: 8009)])
     #expect(speakers.first?.isGroup == false)
 }
 

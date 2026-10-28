@@ -55,7 +55,7 @@ Turn on **Settings › Phone remote** and point a phone's camera at the QR code.
 
 The remote is served by the same small web server the Chromecasts use. Its address carries a long random code, so other people on the network can't guess it; **Reset link** makes a new one and the old link stops working. The Mac has to be awake with InterLude open. In Live, Play on the phone plays live; in Earlier it plays the programme last picked from its start, or live if none was. If the Mac's firewall is on, macOS asks once whether InterLude may accept incoming connections.
 
-The design, the measurements behind each rule and the mistakes along the way are written up in [docs/findings.md](docs/findings.md).
+The design, the measurements behind each rule and the mistakes along the way are written up in [docs/archive/findings.md](docs/findings.md).
 
 ## Requirements
 
@@ -192,7 +192,7 @@ The server keeps the same files in its `data` volume (`/var/lib/interlude` in th
 | `Web` | The server's app icons. Its page is the phone remote's, in `Sources/InterLudeCore/Remote.swift`. |
 | `Tests` | Unit tests for the parts that can be tested without a network or speakers. |
 | `Tools` | Command-line programs used to measure and tune detection (below). |
-| `docs` | Findings from testing, notes on on-demand playback, checklists for the tests that need ears or hardware, release notes and screenshots. |
+| `docs` | Notes on on-demand playback, release notes and screenshots. `docs/archive` holds the findings and manual test checklists from early development. |
 | `scripts` | Building and packaging the Mac app, installing the server's native libraries on Linux, preparing YAMNet, and comparing two event logs. |
 
 ### Tools
@@ -206,10 +206,8 @@ Run with `swift run --scratch-path ~/Library/Caches/InterLudeBuild <name>`. Reco
 | `evaluate <csv> [labels.json] [profile.json]` | Replay the speech rule over scores and report accuracy against labelled bulletins. |
 | `ident-check` | Find and test a station's news theme in recordings. `PLATFORM=portable` decodes with ffmpeg and uses the server's signal maths. |
 | `signoff-check` | Transcribe bulletins and report where the newsreader opens and signs off. `WHISPER=<model file>` uses whisper.cpp, as the server does. |
-| `voice-changes`, `presenter-check` | Experiments in telling voices apart (they didn't work; see the findings). |
 | `serve <serviceId> [delay] [port]` | A session without the app, for testing with ffmpeg or curl. `REPLAY=<ISO time>` plays from that broadcast time instead; add `VERSION=<pid>` to play that BBC Sounds version on demand and `OFFSET=<seconds>` to start part way in. |
 | `cast-spike list` / `play <device> <url>` | List Cast speakers and groups, or play a stream on one. |
-| `rms-poll`, `spike01-stream` | Early experiments with the track metadata and stream format. |
 
 ## Sounds
 
