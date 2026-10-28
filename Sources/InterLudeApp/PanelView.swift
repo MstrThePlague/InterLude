@@ -7,6 +7,10 @@ struct PanelView: View {
     @Bindable var model: AppModel
     @Environment(\.openWindow) private var openWindow
 
+    private var mood: Aurora.Mood {
+        switch model.playState { case .muted: .muted; case .earlier: .earlier; default: .live }
+    }
+
     var body: some View {
         VStack(spacing: 14) {
             if model.showWelcome && !model.demoHidesWelcome { WelcomeCard(dismiss: { model.showWelcome = false }) }
@@ -37,6 +41,8 @@ struct PanelView: View {
         .background(alignment: .bottom) {
             SpectrumBackdrop(active: model.isPlaying, muted: model.status.muted, sampler: model.spectrumSampler)
         }
+        .background { AuroraBackdrop(mood: mood, active: model.isPlaying) }
+        .preferredColorScheme(.dark)
         .fitsHostWindow()
         .animation(.snappy(duration: 0.25), value: model.status.muted)
         .animation(.snappy(duration: 0.25), value: model.status.muteStartsIn == nil)
@@ -124,14 +130,14 @@ private struct StatusBadge: View {
         HStack(spacing: 4) {
             Circle().fill(color).frame(width: 6, height: 6)
                 .opacity(state == .starting && pulse ? 0.25 : 1)
-            if let label { Text(label).font(.system(size: 9, weight: .bold)).foregroundStyle(color) }
+            if let label { Text(label).font(.caption2.weight(.bold)).foregroundStyle(color) }
         }
         .padding(.horizontal, label == nil ? 0 : 5).padding(.vertical, 2)
         .background(label == nil ? Color.clear : color.opacity(0.14), in: Capsule())
         .onAppear { withAnimation(.easeInOut(duration: 0.7).repeatForever()) { pulse = true } }
     }
-    private var color: Color { switch state { case .off: .secondary; case .starting: .yellow; case .live: .green; case .earlier: .blue; case .muted: .orange; case .error: .red } }
-    private var label: String? { switch state { case .live: "LIVE"; case .earlier: "EARLIER"; case .muted: "MUTED"; case .starting: "STARTING"; default: nil } }
+    private var color: Color { switch state { case .off: .secondary; case .starting: .yellow; case .live: Aurora.liveText; case .earlier: Aurora.earlierText; case .muted: Aurora.mutedText; case .error: .red } }
+    private var label: String? { switch state { case .live: "LIVE"; case .earlier: "EARLIER"; case .muted: "MUTED"; case .starting: "STARTING"; case .error: "ERROR"; default: nil } }
 }
 
 // MARK: Earlier programmes
@@ -170,8 +176,7 @@ private struct ProgrammeList: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .glassCard(radius: 12)
         .onAppear { model.loadSchedule() }
     }
 }
@@ -210,8 +215,8 @@ private struct ProgrammeRow: View {
                 VStack(alignment: .leading, spacing: 1) {
                     HStack(spacing: 5) {
                         Text(programme.title).font(.callout).lineLimit(1)
-                        if onNow { Text("ON NOW").font(.system(size: 8, weight: .bold)).foregroundStyle(.green)
-                            .padding(.horizontal, 4).padding(.vertical, 1).background(Color.green.opacity(0.14), in: Capsule()) }
+                        if onNow { Text("ON NOW").font(.caption2.weight(.bold)).foregroundStyle(Aurora.liveText)
+                            .padding(.horizontal, 4).padding(.vertical, 1).background(Aurora.teal.opacity(0.25), in: Capsule()) }
                     }
                     Text(playable ? (programme.subtitle ?? length) : (onNow ? "On now" : "Not available"))
                         .font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -250,9 +255,10 @@ private struct ReplayProgress: View {
                 ZStack(alignment: .leading) {
                     Capsule().fill(.quaternary)
                     Capsule().fill(Color.primary.opacity(0.12)).frame(width: x(replay.analysedThrough, w))
-                    Capsule().fill(Color.accentColor).frame(width: max(4, x(replay.heard, w)))
+                    Capsule().fill(LinearGradient(colors: [Aurora.blue, Aurora.violet], startPoint: .leading, endPoint: .trailing))
+                        .frame(width: max(4, x(replay.heard, w)))
                     ForEach(Array(replay.news.enumerated()), id: \.offset) { _, r in
-                        Rectangle().fill(Color.orange).frame(width: max(2, x(r.upperBound, w) - x(r.lowerBound, w)))
+                        Rectangle().fill(Aurora.pink).frame(width: max(2, x(r.upperBound, w) - x(r.lowerBound, w)))
                             .offset(x: x(r.lowerBound, w))
                     }
                 }
@@ -283,12 +289,14 @@ private struct ReplayProgress: View {
 
 private struct TransportRow: View {
     @Bindable var model: AppModel
+    @SwiftUI.State private var volumeBeforeMute = 0.5
 
     var body: some View {
         HStack(spacing: 12) {
             Button { model.togglePlay() } label: {
                 ZStack {
-                    Circle().fill(Color.accentColor.gradient)
+                    Circle().fill(AngularGradient(colors: [Aurora.blue, Aurora.violet, Aurora.pink, Aurora.blue], center: .center, angle: .degrees(200)))
+                    Circle().strokeBorder(.white.opacity(0.3), lineWidth: 1)
                     if model.isStarting { ProgressView().controlSize(.small).tint(.white) }
                     else {
                         Image(systemName: model.isPlaying ? "stop.fill" : "play.fill")
@@ -298,18 +306,22 @@ private struct TransportRow: View {
                     }
                 }
                 .frame(width: 46, height: 46)
-                .shadow(color: Color.accentColor.opacity(0.35), radius: 6, y: 2)
+                .shadow(color: Aurora.violet.opacity(0.55), radius: 10, y: 2)
             }
             .buttonStyle(PressableStyle())
             .keyboardShortcut(.space, modifiers: [])
             .accessibilityLabel(model.isPlaying || model.isStarting ? "Stop" : "Play")
             .help(model.isPlaying || model.isStarting ? "Stop (Space)" : "Play (Space)")
 
-            Image(systemName: model.volume == 0 ? "speaker.slash.fill" : "speaker.fill")
-                .foregroundStyle(.secondary).frame(width: 16)
-                .onTapGesture { model.volume = model.volume == 0 ? 0.5 : 0 }
-                .accessibilityLabel("Mute")
-            Slider(value: $model.volume, in: 0...1).accessibilityLabel("Volume")
+            Button {
+                if model.volume == 0 { model.volume = volumeBeforeMute } else { volumeBeforeMute = model.volume; model.volume = 0 }
+            } label: {
+                Image(systemName: model.volume == 0 ? "speaker.slash.fill" : "speaker.fill").frame(width: 16, height: 22)
+            }
+            .buttonStyle(.borderless).foregroundStyle(.secondary)
+            .accessibilityLabel(model.volume == 0 ? "Unmute" : "Mute")
+            .help(model.volume == 0 ? "Unmute" : "Mute")
+            Slider(value: $model.volume, in: 0...1).tint(Aurora.blue).accessibilityLabel("Volume")
             Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary).frame(width: 22)
                 .accessibilityHidden(true)
         }
@@ -405,7 +417,7 @@ private struct Chip: View {
         HStack(spacing: 9) {
             leading
             VStack(alignment: .leading, spacing: 0) {
-                Text(caption).font(.system(size: 9, weight: .semibold)).foregroundStyle(.tertiary).textCase(.uppercase)
+                Text(caption).font(.caption2.weight(.semibold)).foregroundStyle(.secondary).textCase(.uppercase)
                 Text(text).font(.callout).lineLimit(1)
             }
             Spacer(minLength: 0)
@@ -414,7 +426,8 @@ private struct Chip: View {
         }
         .padding(.horizontal, 10).frame(height: 38)
         .frame(maxWidth: .infinity)
-        .background(.quaternary.opacity(hover ? 0.8 : 0.5), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .glassCard(radius: 9)
+        .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(.white.opacity(hover ? 0.08 : 0)))
         .contentShape(Rectangle())
         .onHover { hover = $0 }
     }
@@ -431,7 +444,7 @@ private struct NewsCard: View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 10) {
                 Image(systemName: p.muteNews && !speech ? "newspaper.fill" : "newspaper")
-                    .font(.title3).foregroundStyle(p.muteNews && !speech ? Color.accentColor : .secondary).frame(width: 24)
+                    .font(.title3).foregroundStyle(p.muteNews && !speech ? Aurora.liveText : .secondary).frame(width: 24)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(model.mode == .earlier ? "Skip news" : "Mute news").font(.callout.weight(.medium))
                     Text(model.muteSubtitle).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -439,7 +452,7 @@ private struct NewsCard: View {
                 Spacer()
                 Toggle("Mute news", isOn: Binding(get: { p.muteNews && !speech },
                                                   set: { v in model.updateProfile(model.selectedStationID) { $0.muteNews = v } }))
-                    .labelsHidden().toggleStyle(.switch).controlSize(.small)
+                    .labelsHidden().toggleStyle(.switch).controlSize(.small).tint(Aurora.teal)
                     .disabled(speech)
             }
             .padding(12)
@@ -447,36 +460,36 @@ private struct NewsCard: View {
             if model.isPlaying && !speech {
                 if let k = model.status.replay?.justSkipped {
                     HStack(spacing: 8) {
-                        Image(systemName: "forward.end.fill").foregroundStyle(.blue)
+                        Image(systemName: "forward.end.fill").foregroundStyle(Aurora.earlierText)
                         Text("Skipped \(clock(k)) of news").font(.caption.weight(.medium)).monospacedDigit()
                         Spacer()
                     }
                     .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Color.blue.opacity(0.1))
+                    .background(Aurora.violet.opacity(0.25))
                     .transition(.opacity)
                 } else if model.status.muted {
                     HStack(spacing: 10) {
-                        Image(systemName: "speaker.slash.fill").foregroundStyle(.orange).symbolEffect(.pulse)
+                        Image(systemName: "speaker.slash.fill").foregroundStyle(Aurora.mutedText).symbolEffect(.pulse)
                         VStack(alignment: .leading, spacing: 0) {
                             Text("Bulletin muted").font(.callout.weight(.semibold))
                             if let e = model.status.muteElapsed { Text("\(clock(e)) so far").font(.caption).foregroundStyle(.secondary).monospacedDigit() }
                         }
                         Spacer()
-                        Button("Not news") { model.notNews() }
-                            .buttonStyle(.borderedProminent).tint(.orange).controlSize(.small)
+                        Button { model.notNews() } label: { Text("Not news").foregroundStyle(Aurora.onPink) }
+                            .buttonStyle(.borderedProminent).tint(Aurora.pink).controlSize(.small)
                             .help("This isn't a bulletin. Sound returns within a few seconds.")
                     }
                     .padding(.horizontal, 12).padding(.vertical, 10)
-                    .background(Color.orange.opacity(0.13))
+                    .background(LinearGradient(colors: [Aurora.pink.opacity(0.3), Aurora.violet.opacity(0.2)], startPoint: .leading, endPoint: .trailing))
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 } else if let t = model.status.muteStartsIn {
                     HStack(spacing: 8) {
-                        Image(systemName: "timer").foregroundStyle(.orange)
+                        Image(systemName: "timer").foregroundStyle(Aurora.mutedText)
                         Text("Bulletin coming up · \(model.isReplay ? "skipping" : "muting") in \(clock(t))").font(.caption.weight(.medium)).monospacedDigit()
                         Spacer()
                     }
                     .padding(.horizontal, 12).padding(.vertical, 8)
-                    .background(Color.orange.opacity(0.08))
+                    .background(Aurora.pink.opacity(0.15))
                     .transition(.opacity)
                 }
                 Divider().padding(.horizontal, 12).opacity(model.status.muted || model.status.muteStartsIn != nil ? 0 : 1)
@@ -490,8 +503,7 @@ private struct NewsCard: View {
                 .padding(.horizontal, 12).padding(.vertical, 8)
             }
         }
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .glassCard(radius: 12)
     }
 }
 
@@ -532,7 +544,7 @@ private struct RecentBlocks: View {
     private func row(_ b: NewsBlock) -> some View {
         HStack(spacing: 8) {
             Image(systemName: b.falseStart ? "arrow.uturn.backward.circle.fill" : (b.isOpen ? "speaker.slash.circle.fill" : "checkmark.circle.fill"))
-                .foregroundStyle(b.falseStart ? Color.secondary : (b.isOpen ? Color.orange : Color.green))
+                .foregroundStyle(b.falseStart ? Color.secondary : (b.isOpen ? Aurora.mutedText : Aurora.liveText))
             Text(time(b.start)).font(.caption.monospacedDigit())
             Text(length(b)).font(.caption).foregroundStyle(.secondary)
             Spacer()
@@ -567,9 +579,11 @@ private struct FooterRow: View {
                 Text(model.footerText).font(.caption2).foregroundStyle(.tertiary).monospacedDigit()
             }
             Spacer()
-            Button { NSApplication.shared.terminate(nil) } label: { Image(systemName: "power") }
-                .buttonStyle(.borderless).help("Quit InterLude (⌘Q)").keyboardShortcut("q", modifiers: .command)
-                .accessibilityLabel("Quit")
+            Menu {
+                Button("Quit InterLude") { NSApplication.shared.terminate(nil) }.keyboardShortcut("q", modifiers: .command)
+            } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
+                .help("More").accessibilityLabel("More")
         }
         .foregroundStyle(.secondary)
     }
@@ -593,7 +607,7 @@ private struct WelcomeCard: View {
             }
         }
         .padding(12)
-        .background(Color.accentColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .glassCard(radius: 12)
         .transition(.opacity.combined(with: .move(edge: .top)))
     }
 }

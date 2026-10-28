@@ -244,7 +244,7 @@ public enum RemoteRoutes {
 
     public static let manifest = HTTPResponse(contentType: "application/manifest+json", body: Data("""
         {"name":"InterLude","short_name":"InterLude","start_url":"./","scope":"./","display":"standalone",
-        "background_color":"#000000","theme_color":"#000000",
+        "background_color":"#070a1e","theme_color":"#070a1e",
         "icons":[{"src":"icon.png","sizes":"512x512","type":"image/png"}]}
         """.utf8))
 }
@@ -264,27 +264,50 @@ enum RemotePage {
 <meta name="apple-mobile-web-app-title" content="InterLude">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#070a1e" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" sizes="180x180" href="__TOUCH_ICON__">
 <link rel="icon" href="icon.png">
 <title>InterLude</title>
 <style>
+@property --c1 { syntax: "<color>"; inherits: true; initial-value: #0080ff; }
+@property --c2 { syntax: "<color>"; inherits: true; initial-value: #8b00ff; }
+@property --c3 { syntax: "<color>"; inherits: true; initial-value: #20b2aa; }
 :root {
   color-scheme: light dark;
-  --bg: #f2f2f7; --card: #ffffff; --text: #1c1c1e; --muted: #6e6e73; --line: rgba(60,60,67,.14);
-  --accent: #007aff; --green: #248a3d; --orange: #c93400; --orange-bg: rgba(255,149,0,.16); --blue: #0064d1; --red: #d70015;
-  --press: rgba(0,0,0,.06); --track: rgba(118,118,128,.12); --seg-on: #ffffff;
+  --bg: #f2f2f7; --card: rgba(255,255,255,.74); --glass-line: rgba(255,255,255,.7); --aurora-op: .3;
+  --text: #1c1c1e; --muted: #6e6e73; --line: rgba(60,60,67,.14);
+  --accent: #0068d6; --green: #0b7a73; --orange: #b0005a; --orange-bg: rgba(255,20,147,.14); --blue: #6a00c0; --red: #d70015;
+  --warn-bg: rgba(255,149,0,.16); --pink: #ff1493;
+  transition: --c1 1.4s, --c2 1.4s, --c3 1.4s;
+  --press: rgba(0,0,0,.06); --track: rgba(118,118,128,.12); --seg-on: #ffffff; --on-orange: #ffffff;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #000000; --card: #1c1c1e; --text: #f2f2f7; --muted: #98989f; --line: rgba(84,84,88,.6);
-    --accent: #0a84ff; --green: #30d158; --orange: #ff9f0a; --orange-bg: rgba(255,159,10,.18); --blue: #409cff; --red: #ff6961;
-    --press: rgba(255,255,255,.08); --track: rgba(118,118,128,.24); --seg-on: #636366;
+    --bg: #070a1e; --card: rgba(11,15,42,.6); --glass-line: rgba(255,255,255,.14); --aurora-op: 1;
+    --text: #f2f2f7; --muted: #a8aac4; --line: rgba(255,255,255,.14);
+    --accent: #3d9bff; --green: #5fe3d8; --orange: #ff7cc0; --orange-bg: rgba(255,20,147,.22); --blue: #b98cff; --red: #ff6961;
+    --warn-bg: rgba(255,159,10,.18);
+    --press: rgba(255,255,255,.08); --track: rgba(118,118,128,.24); --seg-on: rgba(255,255,255,.2); --on-orange: #2a0016;
   }
 }
+:root[data-mood="live"]    { --c1: #0080ff; --c2: #8b00ff; --c3: #20b2aa; }
+:root[data-mood="muted"]   { --c1: #ff1493; --c2: #8b00ff; --c3: #0080ff; }
+:root[data-mood="earlier"] { --c1: #8b00ff; --c2: #0080ff; --c3: #20b2aa; }
+/* The Aurora background: three colour fields drifting on 9 to 12 second loops. Text sits on the glass cards, not on it. */
+.aurora { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; opacity: var(--aurora-op); transition: opacity .6s; }
+.aurora i { position: absolute; width: 90vmax; height: 70vmax; border-radius: 50%; filter: blur(40px); animation: drift 11s ease-in-out infinite alternate; will-change: transform; }
+.aurora i:nth-child(1) { left: -30vmax; top: -25vmax; background: radial-gradient(circle, var(--c1), transparent 68%); }
+.aurora i:nth-child(2) { right: -35vmax; top: 15vh; background: radial-gradient(circle, var(--c2), transparent 68%); animation-duration: 9s; animation-delay: -3s; }
+.aurora i:nth-child(3) { left: -10vmax; bottom: -35vmax; background: radial-gradient(circle, var(--c3), transparent 68%); animation-duration: 12s; animation-delay: -6s; }
+@keyframes drift { from { transform: translate(0, 0) scale(1); } to { transform: translate(8vmax, 6vmax) scale(1.15); } }
+:root[data-playing="0"] .aurora i { animation-play-state: paused; }
+:root[data-playing="0"] .aurora { opacity: calc(var(--aurora-op) * .6); }
+@media (prefers-reduced-motion: reduce) { .aurora i { animation: none; } :root { transition: none; } }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; background: var(--bg); color: var(--text); }
+html { background: var(--bg); }
+html, body { margin: 0; color: var(--text); }
 body {
   font: 17px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
   padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
@@ -292,16 +315,17 @@ body {
 }
 main { max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
-.card { background: var(--card); border-radius: 16px; }
+.card { background: var(--card); border-radius: 16px; border: 1px solid var(--glass-line);
+  -webkit-backdrop-filter: blur(22px) saturate(150%); backdrop-filter: blur(22px) saturate(150%); }
 .banner { padding: 12px 14px; border-radius: 12px; font-size: 15px; }
-.banner.offline { background: var(--orange-bg); }
+.banner.offline { background: var(--warn-bg); }
 .banner.error { background: rgba(255,59,48,.14); color: var(--red); }
 .banner b { display: block; color: var(--text); margin-bottom: 2px; }
 [hidden] { display: none !important; }
 
 .now { padding: 18px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; }
 .art { position: relative; width: min(64vw, 240px); aspect-ratio: 1; border-radius: 18px; overflow: hidden; margin-bottom: 12px;
-  box-shadow: 0 8px 24px rgba(0,0,0,.18); display: grid; place-items: center; color: #fff; font-weight: 800;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.2), 0 12px 40px -10px var(--c1); display: grid; place-items: center; color: #fff; font-weight: 800;
   font-size: min(24vw, 90px); background: var(--accent); }
 .art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .art .shade { position: absolute; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; }
@@ -316,8 +340,9 @@ h1 { font-size: 22px; margin: 2px 0 0; line-height: 1.2; overflow-wrap: anywhere
 .sub { color: var(--muted); font-size: 16px; overflow-wrap: anywhere; }
 
 .transport { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 6px 0 2px; }
-.play { width: 84px; height: 84px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center;
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 40%, transparent); transition: transform .12s; }
+.play { width: 84px; height: 84px; border-radius: 50%; color: #fff; display: grid; place-items: center;
+  background: conic-gradient(from 200deg, #0080ff, #8b00ff, #ff1493, #0080ff);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.3), 0 0 30px -2px color-mix(in srgb, var(--c1) 70%, transparent); transition: transform .12s; }
 .play:active { transform: scale(.94); }
 .play svg { width: 34px; height: 34px; }
 .play[aria-busy="true"] { opacity: .7; }
@@ -343,7 +368,7 @@ input[type=range] { flex: 1; min-width: 0; height: 32px; accent-color: var(--acc
 .alert .label { flex: 1; }
 .alert .label small { display: block; color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
 .alert b { font-weight: 700; }
-.btn { background: var(--orange); color: #fff; font-weight: 700; padding: 10px 16px; border-radius: 99px; font-size: 16px; flex: none; }
+.btn { background: var(--orange); color: var(--on-orange); font-weight: 700; padding: 10px 16px; border-radius: 99px; font-size: 16px; flex: none; }
 .btn:active { opacity: .8; }
 .secondary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 14px; min-height: 52px; }
 .link { color: var(--accent); font-weight: 600; padding: 10px 0; }
@@ -364,14 +389,14 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .bar { position: relative; height: 6px; border-radius: 99px; overflow: hidden; background: var(--track); }
 .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; }
 .bar .analysed { background: var(--press); }
-.bar .heard { background: var(--accent); min-width: 6px; }
-.bar .cut { position: absolute; top: 0; bottom: 0; min-width: 2px; background: var(--orange); }
+.bar .heard { background: linear-gradient(90deg, #0080ff, #8b00ff); min-width: 6px; }
+.bar .cut { position: absolute; top: 0; bottom: 0; min-width: 2px; background: var(--pink); }
 .progress-text { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 13px;
   font-variant-numeric: tabular-nums; }
 
 .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; border-radius: 10px; background: var(--track); }
-.seg button { padding: 7px 0; border-radius: 8px; font-size: 15px; font-weight: 600; color: var(--text); }
-.seg button[aria-pressed="true"] { background: var(--seg-on); box-shadow: 0 1px 4px rgba(0,0,0,.14); }
+.seg button { padding: 7px 0; border-radius: 8px; font-size: 15px; font-weight: 600; color: var(--muted); }
+.seg button[aria-pressed="true"] { background: var(--seg-on); color: var(--text); box-shadow: 0 1px 4px rgba(0,0,0,.14); }
 
 .earlier { overflow: hidden; }
 .days { display: flex; align-items: center; justify-content: space-between; padding: 4px; border-bottom: 1px solid var(--line); }
@@ -417,7 +442,7 @@ input.toggle { appearance: none; -webkit-appearance: none; width: 51px; height: 
   position: relative; flex: none; cursor: pointer; transition: background .2s; }
 input.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff;
   box-shadow: 0 2px 4px rgba(0,0,0,.2); transition: transform .2s; }
-input.toggle:checked { background: var(--green); }
+input.toggle:checked { background: linear-gradient(90deg, #20b2aa, #0080ff); }
 input.toggle:checked::after { transform: translateX(20px); }
 select { font: inherit; color: inherit; background: var(--track); border: 0; border-radius: 8px; padding: 6px 10px; }
 .qr { background: #fff; border-radius: 12px; padding: 10px; width: 180px; align-self: center; }
@@ -432,6 +457,7 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
 </style>
 </head>
 <body>
+<div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
 <main>
   <div class="banner offline" id="offline" hidden role="status"><b>Can't reach InterLude</b><span id="offlineText">Check that the Mac is awake, InterLude is open, and this phone is on the same Wi-Fi.</span></div>
   <div class="banner offline" id="gone" hidden role="status"><b>This link has stopped working</b><span id="goneText">The remote was turned off or its link was reset. Open InterLude's Settings on the Mac and scan the code again.</span></div>
@@ -443,6 +469,7 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
     <div class="meta"><span class="pill" id="pill" hidden></span><span id="stationName"></span></div>
     <h1 id="headline">InterLude</h1>
     <div class="sub" id="subheadline">Connecting…</div>
+    <div class="hint" id="startNote" hidden>Starting. The first start takes about 20 seconds while InterLude builds its delay.</div>
     <div class="progress" id="progress" hidden aria-label="Position in programme">
       <div class="bar" id="bar"><i class="analysed" id="analysed"></i><i class="heard" id="heard"></i></div>
       <div class="progress-text"><span id="position"></span><span id="skipped"></span></div>
@@ -602,11 +629,11 @@ async function send(command, params) {
 document.addEventListener("visibilitychange", () => { if (document.hidden) { if (!here) quiet(); } else refresh(); });
 window.addEventListener("pageshow", refresh);
 
-function toast(text) {
+function toast(text, ms = 2600) {
   const t = $("toast");
   t.textContent = text; t.hidden = false; t.style.opacity = 1;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.style.opacity = 0; setTimeout(() => { t.hidden = true; }, 300); }, 2600);
+  toastTimer = setTimeout(() => { t.style.opacity = 0; setTimeout(() => { t.hidden = true; }, 300); }, ms);
 }
 
 function render(s) {
@@ -631,6 +658,9 @@ function render(s) {
   $("stationName").textContent = s.stationName;
   $("headline").textContent = s.headline;
   $("subheadline").textContent = s.subheadline;
+  $("startNote").hidden = !(s.stream && s.state === "starting");
+  document.documentElement.dataset.mood = s.state === "muted" ? "muted" : s.state === "earlier" ? "earlier" : "live";
+  document.documentElement.dataset.playing = s.playing ? "1" : "0";
   document.title = s.playing ? s.headline + " · InterLude" : "InterLude";
 
   if (s.stream) followStream(s);
@@ -820,6 +850,12 @@ $("play").addEventListener("click", async () => {
   $("play").setAttribute("aria-busy", "true");
   await send("toggle");
 });
+// Space plays and stops, as on the Mac, unless it would press a focused control or a sheet is open.
+document.addEventListener("keydown", e => {
+  if (e.code !== "Space" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (document.querySelector("dialog[open]") || e.target.closest("button, input, select, textarea, a, summary")) return;
+  e.preventDefault(); $("play").click();
+});
 $("volume").addEventListener("input", e => {
   if (playsHere()) {
     player.volume = e.target.value / 100;
@@ -877,7 +913,7 @@ function attach() {
   else if (window.Hls && Hls.isSupported()) {
     // The first request starts the session, which takes 20 s or so to fill its delay.
     hls = new Hls({ manifestLoadingTimeOut: 60000, manifestLoadingMaxRetry: 4, levelLoadingTimeOut: 60000 });
-    hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal && here) { toast("Playback stopped (" + d.details + ")"); stopHere(); render(state); } });
+    hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal && here) { toast("Playback stopped. Check your connection, then press play to try again.", 8000); stopHere(); render(state); } });
     hls.loadSource(state.stream); hls.attachMedia(player);
   } else { toast("This browser can't play the stream."); return false; }
   hereStream = state.streamID;
@@ -1014,8 +1050,16 @@ function renderSettings() {
     toast("Link copied.");
   });
   const reset = document.createElement("button"); reset.className = "link danger"; reset.textContent = "Reset link";
+  // Asks again in the page rather than in the browser's dialog: the first press arms the button for a few seconds.
+  let armed = null;
   reset.addEventListener("click", async () => {
-    if (!confirm("Make a new link? Pages and Home Screen icons with the old link stop working.")) return;
+    if (!armed) {
+      reset.textContent = "Confirm reset";
+      toast("Pages and Home Screen icons with the old link will stop working. Press again to confirm.", 5000);
+      armed = setTimeout(() => { armed = null; reset.textContent = "Reset link"; }, 5000);
+      return;
+    }
+    clearTimeout(armed); armed = null;
     if (await send("resetlink")) location.replace(state.settings.link);
   });
   actions.append(copy, reset);
@@ -1028,7 +1072,7 @@ function drawQR(el, text) {
   const draw = () => { const q = qrcode(0, "M"); q.addData(text); q.make(); el.innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); };
   if (window.qrcode) return draw();
   const sc = document.createElement("script"); sc.src = "/static/qrcode.js"; sc.onload = draw;
-  sc.onerror = () => { el.hidden = true; };
+  sc.onerror = () => { el.removeAttribute("aria-hidden"); el.style.cssText = "background:none;color:var(--muted);font-size:14px;width:auto;text-align:center"; el.textContent = "The QR code didn't load. Use the link below instead."; };
   document.head.append(sc);
 }
 
