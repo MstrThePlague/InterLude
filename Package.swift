@@ -31,17 +31,13 @@ let apple: [Target.Dependency] = ["InterLudeCore", "InterLudeApple"]
 targets += [
     .target(name: "InterLudeApple", dependencies: ["InterLudeCore"], path: "Sources/InterLudeApple"),
     .executableTarget(name: "InterLude", dependencies: apple, path: "Sources/InterLudeApp"),
-    .executableTarget(name: "spike01-stream", path: "Tools/Spike01Stream"),
     .executableTarget(name: "record", dependencies: ["InterLudeCore"], path: "Tools/Record"),
     .executableTarget(name: "classify", dependencies: apple + ["InterLudeML"], path: "Tools/Classify"),
     .executableTarget(name: "evaluate", dependencies: ["InterLudeCore"], path: "Tools/Evaluate"),
     .executableTarget(name: "serve", dependencies: apple, path: "Tools/Serve"),
     .executableTarget(name: "cast-spike", dependencies: apple, path: "Tools/CastSpike"),
     .executableTarget(name: "ident-check", dependencies: apple + ["InterLudePortable"], path: "Tools/IdentCheck"),
-    .executableTarget(name: "voice-changes", dependencies: apple, path: "Tools/VoiceChanges"),
-    .executableTarget(name: "presenter-check", dependencies: apple, path: "Tools/PresenterCheck"),
     .executableTarget(name: "signoff-check", dependencies: apple + ["InterLudeML"], path: "Tools/SignoffCheck"),
-    .executableTarget(name: "rms-poll", path: "Tools/RmsPoll"),
     .testTarget(name: "InterLudeAppleTests", dependencies: apple, path: "Tests/InterLudeAppleTests"),
 ]
 #endif
