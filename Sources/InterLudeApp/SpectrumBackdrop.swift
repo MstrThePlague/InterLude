@@ -21,7 +21,7 @@ struct SpectrumBackdrop: View {
             Canvas { ctx, size in draw(&ctx, size: size) }
         }
         .mask(LinearGradient(colors: [.clear, .black.opacity(0.9)], startPoint: .top, endPoint: .bottom))
-        .opacity(active ? (muted ? 0.05 : 0.1) : 0)
+        .opacity(active ? (muted ? 0.08 : 0.2) : 0)
         .animation(.easeInOut(duration: 0.6), value: active)
         .animation(.easeInOut(duration: 0.6), value: muted)
         .allowsHitTesting(false)
@@ -47,7 +47,7 @@ struct SpectrumBackdrop: View {
         for i in 0..<bars {
             let x = CGFloat(i) * (barW + gap)
             let lit = Int((Double(motion.levels[i]) * Double(rows) * 0.8).rounded())
-            for r in 0..<lit { ctx.fill(Path(rect(x, r)), with: .color(.accentColor)) }
+            for r in 0..<lit { ctx.fill(Path(rect(x, r)), with: .color(Aurora.cyan)) }
             // Peak cap that hangs above the bar and falls under gravity, as on the original.
             let cap = min(rows - 1, Int((Double(motion.peaks[i]) * Double(rows) * 0.8).rounded()))
             if cap > lit { ctx.fill(Path(rect(x, cap)), with: .color(.primary)) }
