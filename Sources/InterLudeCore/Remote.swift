@@ -452,9 +452,10 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 /* Phones: "On air". Live and Earlier at the top, the station's name large over a single glow in its colour, what's playing
    beneath it, and every control in a dock fixed to the bottom edge, so nothing scrolls away even at large text. */
 @media (max-width: 899px) {
-  .col.player { display: flex; flex-direction: column; gap: 16px;
-    min-height: calc(100vh - var(--dock-h, 15rem) - max(16px, env(safe-area-inset-top)) - 16px);
-    min-height: calc(100svh - var(--dock-h, 15rem) - max(16px, env(safe-area-inset-top)) - 16px); }
+  /* The player fills the first screen and keeps clear of the dock, so whatever follows starts below it. */
+  .col.player { display: flex; flex-direction: column; gap: 16px; padding-bottom: calc(var(--dock-h, 15rem) + 8px);
+    min-height: calc(100vh - max(16px, env(safe-area-inset-top)));
+    min-height: calc(100svh - max(16px, env(safe-area-inset-top))); }
   .topbar .seg { flex: 0 0 auto; display: flex; gap: 1.2rem; padding: 0; background: none; }
   .topbar .seg button { min-height: 2.75rem; padding: 0; border-radius: 0; background: none; box-shadow: none; font-size: 1.25rem; font-weight: 800;
     letter-spacing: -.01em; opacity: .42; }
@@ -841,6 +842,7 @@ function render(s) {
   if (s.earlier) renderEarlier(s.earlier, station);
 
   if ($("speakerSheet").open) renderSpeakers();
+  requestAnimationFrame(fitDock);
 }
 
 function renderReplay(r) {
@@ -1219,7 +1221,7 @@ function fitDock() {
   document.documentElement.style.setProperty("--dock-h", h + "px");
   document.body.style.paddingBottom = fixed ? (h + 16) + "px" : "";
 }
-if (window.ResizeObserver) new ResizeObserver(fitDock).observe(dock);
+if (window.ResizeObserver) new ResizeObserver(() => requestAnimationFrame(fitDock)).observe(dock);
 window.addEventListener("resize", fitDock);
 fitDock();
 
