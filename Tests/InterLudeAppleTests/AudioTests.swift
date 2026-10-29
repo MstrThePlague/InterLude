@@ -73,9 +73,13 @@ func syntheticPrototype() -> TSSegmentInfo {
     #expect(snr(12.9, 15, lag: lag) > 15)                // third segment, before its fade-out
 }
 
-@Test func silentSegmentsJoinRealOnesWithoutTimestampBreaks() throws {
+/// Needs saved BBC segments: record some with the `record` tool and point INTERLUDE_RECORDINGS at that folder
+/// (it holds `index.txt` and the `.ts` files). Without it the test is skipped.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["INTERLUDE_RECORDINGS"] != nil,
+               "Set INTERLUDE_RECORDINGS to a folder of saved segments"))
+func silentSegmentsJoinRealOnesWithoutTimestampBreaks() throws {
     Platform.install(.apple)
-    let dir = "/Users/ben/Documents/GitHub/InterLude/recordings/6music-a"
+    let dir = ProcessInfo.processInfo.environment["INTERLUDE_RECORDINGS"] ?? ""
     guard let idx = try? String(contentsOfFile: dir + "/index.txt", encoding: .utf8) else { return }
     let first = Int(idx.split(separator: " ")[0])! + 200
     var out = Data()

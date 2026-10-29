@@ -133,6 +133,15 @@ do {
     let icon = (try? Data(contentsOf: web.appendingPathComponent("icon.png"))) ?? Data()
     let touchIcon = (try? Data(contentsOf: web.appendingPathComponent("touch-icon.png"))) ?? Data()
     let prefix = RemoteRoutes.appPrefix
+    // A page in the data folder that is newer than this program replaces the built-in one, so the interface can be
+    // updated without rebuilding the image (scripts/push-web.sh). An image built after it wins again.
+    let pageFile = opt.data.appendingPathComponent("web/index.html")
+    let built = (Bundle.main.executablePath).flatMap { try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date } ?? .distantPast
+    @Sendable func pageHTML() -> String {
+        guard let changed = try? FileManager.default.attributesOfItem(atPath: pageFile.path)[.modificationDate] as? Date, changed > built,
+              let html = try? String(contentsOf: pageFile, encoding: .utf8) else { return RemotePage.html }
+        return html
+    }
 
     let server = HTTPServer(port: opt.port, events: { req in
         guard RemoteRoutes.route(req, token: await controller.token, prefix: prefix) == .events else { return nil }
@@ -146,7 +155,7 @@ do {
             return req.path == "/" ? text(404, "InterLude: open the link shown in the server's log.\n") : .notFound
         }
         switch route {
-        case .page: return RemoteRoutes.page(token: token, touchIcon: touchIcon, prefix: prefix)
+        case .page: return RemoteRoutes.page(token: token, touchIcon: touchIcon, prefix: prefix, html: pageHTML())
         case .manifest: return RemoteRoutes.manifest
         case .icon: return HTTPResponse(contentType: "image/png", body: icon)
         case .state, .events: return RemoteRoutes.json(await controller.state())

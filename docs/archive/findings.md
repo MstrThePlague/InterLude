@@ -1,3 +1,5 @@
+> Archived. Written during early development and kept for the measurements and the reasoning; some details, tools and phase numbers no longer match the code.
+
 # Findings
 
 Measured on 12 October 2026 on the owner's Mac. Evidence comes from the tools in `Tools/`. Items marked **Owner** need a person.

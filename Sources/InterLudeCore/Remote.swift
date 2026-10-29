@@ -235,24 +235,25 @@ public enum RemoteRoutes {
     }
 
     /// The page, with `touchIcon` (a PNG) inline as its Home Screen icon: iOS 27 shows a letter tile for a fetched one.
-    public static func page(token: String, touchIcon: Data = Data(), prefix: String = prefix) -> HTTPResponse {
+    /// `html` is the built-in page unless the server has a newer copy (see interlude-server).
+    public static func page(token: String, touchIcon: Data = Data(), prefix: String = prefix, html: String = RemotePage.html) -> HTTPResponse {
         let icon = touchIcon.isEmpty ? "icon.png" : "data:image/png;base64,\(touchIcon.base64EncodedString())"
-        let html = RemotePage.html.replacingOccurrences(of: "__BASE__", with: pagePath(token: token, prefix: prefix))
+        let html = html.replacingOccurrences(of: "__BASE__", with: pagePath(token: token, prefix: prefix))
             .replacingOccurrences(of: "__TOUCH_ICON__", with: icon)
         return HTTPResponse(contentType: "text/html; charset=utf-8", body: Data(html.utf8), noCache: true)
     }
 
     public static let manifest = HTTPResponse(contentType: "application/manifest+json", body: Data("""
         {"name":"InterLude","short_name":"InterLude","start_url":"./","scope":"./","display":"standalone",
-        "background_color":"#000000","theme_color":"#000000",
+        "background_color":"#070a1e","theme_color":"#070a1e",
         "icons":[{"src":"icon.png","sizes":"512x512","type":"image/png"}]}
         """.utf8))
 }
 
 /// The remote's single page. Plain HTML, CSS and script with nothing loaded from elsewhere, apart from album art from
 /// the BBC. Every value from the Mac is set as text, never as markup.
-enum RemotePage {
-    static let html = #"""
+public enum RemotePage {
+    public static let html = #"""
 <!doctype html>
 <html lang="en">
 <head>
@@ -264,119 +265,164 @@ enum RemotePage {
 <meta name="apple-mobile-web-app-title" content="InterLude">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#070a1e" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" sizes="180x180" href="__TOUCH_ICON__">
 <link rel="icon" href="icon.png">
 <title>InterLude</title>
 <style>
+@property --c1 { syntax: "<color>"; inherits: true; initial-value: #0080ff; }
+@property --c2 { syntax: "<color>"; inherits: true; initial-value: #8b00ff; }
+@property --c3 { syntax: "<color>"; inherits: true; initial-value: #20b2aa; }
 :root {
   color-scheme: light dark;
-  --bg: #f2f2f7; --card: #ffffff; --text: #1c1c1e; --muted: #6e6e73; --line: rgba(60,60,67,.14);
-  --accent: #007aff; --green: #248a3d; --orange: #c93400; --orange-bg: rgba(255,149,0,.16); --blue: #0064d1; --red: #d70015;
-  --press: rgba(0,0,0,.06); --track: rgba(118,118,128,.12); --seg-on: #ffffff;
+  --bg: #f2f2f7; --card: rgba(255,255,255,.74); --glass-line: rgba(255,255,255,.7); --aurora-op: .3;
+  --text: #1c1c1e; --muted: #55555a; --line: rgba(60,60,67,.14);
+  --track-hi: rgba(60,60,67,.3); --card-solid: #ffffff; --chip: rgba(0,0,0,.06); --dock: rgba(255,255,255,.86); --play-bg: #1c1c1e; --play-fg: #ffffff;
+  --accent: #0068d6; --green: #0b7a73; --orange: #b0005a; --orange-bg: rgba(255,20,147,.14); --blue: #6a00c0; --red: #d70015;
+  --warn-bg: rgba(255,149,0,.16); --pink: #ff1493;
+  transition: --c1 1.4s, --c2 1.4s, --c3 1.4s;
+  --press: rgba(0,0,0,.06); --track: rgba(118,118,128,.12); --seg-on: #ffffff; --on-orange: #ffffff;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #000000; --card: #1c1c1e; --text: #f2f2f7; --muted: #98989f; --line: rgba(84,84,88,.6);
-    --accent: #0a84ff; --green: #30d158; --orange: #ff9f0a; --orange-bg: rgba(255,159,10,.18); --blue: #409cff; --red: #ff6961;
-    --press: rgba(255,255,255,.08); --track: rgba(118,118,128,.24); --seg-on: #636366;
+    --bg: #070a1e; --card: rgba(11,15,42,.6); --glass-line: rgba(255,255,255,.14); --aurora-op: 1;
+    --text: #f2f2f7; --muted: #c6c9df; --line: rgba(255,255,255,.14);
+    --track-hi: rgba(255,255,255,.3); --card-solid: #0f1330; --chip: rgba(255,255,255,.1); --dock: rgba(26,26,34,.82); --play-bg: #ffffff; --play-fg: #0b0d1f;
+    --accent: #3d9bff; --green: #5fe3d8; --orange: #ff7cc0; --orange-bg: rgba(255,20,147,.22); --blue: #b98cff; --red: #ff6961;
+    --warn-bg: rgba(255,159,10,.18);
+    --press: rgba(255,255,255,.08); --track: rgba(118,118,128,.24); --seg-on: rgba(255,255,255,.3); --on-orange: #2a0016;
   }
 }
+:root[data-mood="live"]    { --c1: var(--station, #0080ff); --c2: #8b00ff; --c3: #20b2aa; }
+:root[data-mood="muted"]   { --c1: #ff1493; --c2: #8b00ff; --c3: #0080ff; }
+:root[data-mood="earlier"] { --c1: #8b00ff; --c2: #0080ff; --c3: #20b2aa; }
+/* The Aurora background: three colour fields drifting on 9 to 12 second loops. Text sits on the glass cards, not on it. */
+.aurora { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; opacity: var(--aurora-op); transition: opacity .6s; }
+.aurora i { position: absolute; width: 90vmax; height: 70vmax; border-radius: 50%; filter: blur(40px); animation: drift 11s ease-in-out infinite alternate; will-change: transform; }
+.aurora i:nth-child(1) { left: -30vmax; top: -25vmax; background: radial-gradient(circle, var(--c1), transparent 68%); }
+.aurora i:nth-child(2) { right: -35vmax; top: 15vh; background: radial-gradient(circle, var(--c2), transparent 68%); animation-duration: 9s; animation-delay: -3s; }
+.aurora i:nth-child(3) { left: -10vmax; bottom: -35vmax; background: radial-gradient(circle, var(--c3), transparent 68%); animation-duration: 12s; animation-delay: -6s; }
+@keyframes drift { from { transform: translate(0, 0) scale(1); } to { transform: translate(8vmax, 6vmax) scale(1.15); } }
+:root[data-playing="0"] .aurora i { animation-play-state: paused; }
+:root[data-playing="0"] .aurora { opacity: calc(var(--aurora-op) * .6); }
+@media (prefers-reduced-motion: reduce) { .aurora i { animation: none; } :root { transition: none; } }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html, body { margin: 0; background: var(--bg); color: var(--text); }
+html { background: var(--bg); font-size: 106.25%; }
+@supports (font: -apple-system-body) { html { font: -apple-system-body; } }
+html, body { margin: 0; color: var(--text); }
 body {
-  font: 17px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+  font: 1rem/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
   padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
   -webkit-user-select: none; user-select: none;
 }
 main { max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
-.card { background: var(--card); border-radius: 16px; }
-.banner { padding: 12px 14px; border-radius: 12px; font-size: 15px; }
-.banner.offline { background: var(--orange-bg); }
+.card { background: var(--card); border-radius: 16px; border: 1px solid var(--glass-line);
+  -webkit-backdrop-filter: blur(22px) saturate(150%); backdrop-filter: blur(22px) saturate(150%); }
+.banner { padding: 12px 14px; border-radius: 12px; font-size: 0.882rem; }
+.banner.offline { background: var(--warn-bg); }
 .banner.error { background: rgba(255,59,48,.14); color: var(--red); }
 .banner b { display: block; color: var(--text); margin-bottom: 2px; }
 [hidden] { display: none !important; }
 
 .now { padding: 18px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; }
-.art { position: relative; width: min(64vw, 240px); aspect-ratio: 1; border-radius: 18px; overflow: hidden; margin-bottom: 12px;
-  box-shadow: 0 8px 24px rgba(0,0,0,.18); display: grid; place-items: center; color: #fff; font-weight: 800;
-  font-size: min(24vw, 90px); background: var(--accent); }
+.art { --art: min(64vw, 240px, 32vh); position: relative; width: var(--art); aspect-ratio: 1; border-radius: 18px; overflow: hidden; margin-bottom: 12px;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.2), 0 12px 40px -10px var(--c1); display: grid; place-items: center; color: #fff; font-weight: 800;
+  font-size: calc(var(--art) * .3); background: var(--accent); }
+.art::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(circle at 28% 22%, rgba(255,255,255,.22), transparent 55%),
+    repeating-radial-gradient(circle at 50% 130%, rgba(255,255,255,.07) 0 2px, transparent 2px 26px); }
 .art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .art .shade { position: absolute; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; }
 .art .shade svg { width: 30%; height: 30%; }
-.meta { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--muted); font-weight: 600; }
-.pill { font-size: 11px; font-weight: 800; letter-spacing: .04em; padding: 2px 7px; border-radius: 99px; }
+.meta { display: flex; align-items: center; gap: 8px; font-size: .76rem; color: var(--muted); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.pill { font-size: .76rem; font-weight: 800; letter-spacing: .04em; padding: 2px 7px; border-radius: 99px; }
 .pill.live { color: var(--green); background: color-mix(in srgb, var(--green) 16%, transparent); }
 .pill.muted { color: var(--orange); background: var(--orange-bg); }
 .pill.earlier { color: var(--blue); background: color-mix(in srgb, var(--blue) 16%, transparent); }
 .pill.starting { color: var(--muted); background: var(--press); }
-h1 { font-size: 22px; margin: 2px 0 0; line-height: 1.2; overflow-wrap: anywhere; }
-.sub { color: var(--muted); font-size: 16px; overflow-wrap: anywhere; }
+h1 { font-size: 1.294rem; margin: 2px 0 0; line-height: 1.2; overflow-wrap: anywhere; }
+.sub { color: var(--muted); font-size: 0.941rem; overflow-wrap: anywhere; }
 
-.transport { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 6px 0 2px; }
-.play { width: 84px; height: 84px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center;
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 40%, transparent); transition: transform .12s; }
+.transport { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.play { width: 4.5rem; height: 4.5rem; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--play-bg); color: var(--play-fg);
+  box-shadow: 0 10px 34px -8px color-mix(in srgb, var(--c1) 70%, transparent); transition: transform .12s; }
 .play:active { transform: scale(.94); }
-.play svg { width: 34px; height: 34px; }
+.play svg { width: 38%; height: 38%; }
+#iconPlay { transform: translateX(6%); }
 .play[aria-busy="true"] { opacity: .7; }
-.volume { width: 100%; display: flex; align-items: center; gap: 12px; color: var(--muted); }
-.volume svg { width: 22px; height: 22px; flex: none; }
-input[type=range] { flex: 1; min-width: 0; height: 32px; accent-color: var(--accent); }
+.volume { width: 100%; display: flex; align-items: center; gap: 2px; }
+.vbtn { width: 2.75rem; height: 2.75rem; flex: none; display: grid; place-items: center; border-radius: 50%; color: var(--muted); }
+.vbtn:active { background: var(--press); }
+.vbtn svg { width: 1.3rem; height: 1.3rem; }
+input[type=range] { --fill: 50%; flex: 1; min-width: 0; height: 2.75rem; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; }
+input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 99px; background: linear-gradient(90deg, var(--text) var(--fill), var(--track-hi) var(--fill)); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; margin-top: -9px; border-radius: 50%; background: #fff;
+  border: 1px solid rgba(0,0,0,.15); box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+input[type=range]::-moz-range-track { height: 6px; border-radius: 99px; background: var(--track-hi); }
+input[type=range]::-moz-range-progress { height: 6px; border-radius: 99px; background: var(--text); }
+input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: #fff; border: 1px solid rgba(0,0,0,.15); box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.topbar .seg { flex: 1; }
+.iconbtn { width: 2.75rem; height: 2.75rem; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--chip); color: var(--text); }
+.iconbtn svg { width: 1.3rem; height: 1.3rem; }
 
 .rows { overflow: hidden; }
-.row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 60px; text-align: left; }
+.row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 3.75rem; text-align: left; }
 .row + .row { border-top: 1px solid var(--line); }
 .row:active { background: var(--press); }
 .row .label { flex: 1; min-width: 0; }
-.row .label small { display: block; color: var(--muted); font-size: 13px; }
-.row .label span { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+.row .label small { display: block; color: var(--muted); font-size: 0.765rem; }
+.row .label span { display: block; overflow-wrap: anywhere; font-weight: 600; }
 .row .chev { width: 14px; height: 14px; color: var(--muted); flex: none; }
-.badge { width: 36px; height: 36px; border-radius: 9px; flex: none; display: grid; place-items: center; color: #fff;
-  font-weight: 800; font-size: 14px; background: var(--accent); }
-.icon { width: 36px; height: 36px; flex: none; display: grid; place-items: center; color: var(--muted); }
+.badge { width: 2.25rem; height: 2.25rem; border-radius: 9px; flex: none; display: grid; place-items: center; color: #fff;
+  font-weight: 800; font-size: 0.824rem; background: var(--accent); }
+.icon { width: 2.25rem; height: 2.25rem; flex: none; display: grid; place-items: center; color: var(--muted); }
 .icon svg { width: 24px; height: 24px; }
 
 .news { overflow: hidden; }
-.alert { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--orange-bg); }
+.alert { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--orange-bg); border-radius: 14px; }
 .alert .label { flex: 1; }
-.alert .label small { display: block; color: var(--muted); font-size: 14px; font-variant-numeric: tabular-nums; }
+.alert .label small { display: block; color: var(--muted); font-size: 0.824rem; font-variant-numeric: tabular-nums; }
 .alert b { font-weight: 700; }
-.btn { background: var(--orange); color: #fff; font-weight: 700; padding: 10px 16px; border-radius: 99px; font-size: 16px; flex: none; }
+.btn { background: var(--orange); color: var(--on-orange); font-weight: 700; padding: .65rem 1.1rem; min-height: 2.75rem; border-radius: 99px; font-size: 0.941rem; flex: none; }
 .btn:active { opacity: .8; }
-.secondary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 14px; min-height: 52px; }
-.link { color: var(--accent); font-weight: 600; padding: 10px 0; }
-.secondary small { color: var(--muted); font-size: 13px; text-align: right; }
-footer { text-align: center; color: var(--muted); font-size: 13px; }
+.secondary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 14px; min-height: 3.25rem; }
+.link { color: var(--accent); font-weight: 600; padding: 10px 0; min-height: 2.75rem; }
+.secondary small { color: var(--muted); font-size: 0.765rem; text-align: right; }
+.plainrow { text-align: center; }
+.plainrow .link { color: var(--muted); font-weight: 500; font-size: .82rem; }
+footer { text-align: center; color: var(--muted); font-size: 0.765rem; }
 
 dialog { border: 0; padding: 0; margin: auto auto 0; width: 100%; max-width: 520px; max-height: 82vh; background: var(--bg); color: var(--text);
   border-radius: 18px 18px 0 0; display: flex; flex-direction: column; }
 dialog:not([open]) { display: none; }
 dialog::backdrop { background: rgba(0,0,0,.4); }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 8px; }
-.sheet-head h2 { margin: 0; font-size: 20px; }
+.sheet-head h2 { margin: 0; font-size: 1.176rem; }
 .sheet-body { overflow-y: auto; padding: 0 16px max(20px, env(safe-area-inset-bottom)); -webkit-overflow-scrolling: touch; }
-.group-title { color: var(--muted); font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin: 16px 4px 6px; }
+.group-title { color: var(--muted); font-size: 0.765rem; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin: 16px 4px 6px; }
 .check { width: 20px; height: 20px; color: var(--accent); flex: none; }
-.hint { color: var(--muted); font-size: 14px; margin: 12px 4px; }
+.hint { color: var(--muted); font-size: 0.824rem; margin: 12px 4px; }
 .progress { width: 100%; margin-top: 12px; }
 .bar { position: relative; height: 6px; border-radius: 99px; overflow: hidden; background: var(--track); }
 .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; }
 .bar .analysed { background: var(--press); }
-.bar .heard { background: var(--accent); min-width: 6px; }
-.bar .cut { position: absolute; top: 0; bottom: 0; min-width: 2px; background: var(--orange); }
-.progress-text { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 13px;
+.bar .heard { background: linear-gradient(90deg, #0080ff, #8b00ff); min-width: 6px; }
+.bar .cut { position: absolute; top: 0; bottom: 0; min-width: 2px; background: var(--pink); }
+.progress-text { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 0.765rem;
   font-variant-numeric: tabular-nums; }
 
-.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; border-radius: 10px; background: var(--track); }
-.seg button { padding: 7px 0; border-radius: 8px; font-size: 15px; font-weight: 600; color: var(--text); }
-.seg button[aria-pressed="true"] { background: var(--seg-on); box-shadow: 0 1px 4px rgba(0,0,0,.14); }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px; border-radius: 999px; background: var(--chip); }
+.seg button { min-height: 2.75rem; padding: 0 .9rem; border-radius: 999px; font-size: 0.882rem; font-weight: 600; color: var(--text); }
+.seg button[aria-pressed="true"] { background: var(--seg-on); font-weight: 800; box-shadow: 0 1px 4px rgba(0,0,0,.14), inset 0 0 0 1px var(--glass-line); }
 
 .earlier { overflow: hidden; }
 .days { display: flex; align-items: center; justify-content: space-between; padding: 4px; border-bottom: 1px solid var(--line); }
-.days b { font-size: 16px; }
-.step { width: 48px; height: 44px; display: grid; place-items: center; color: var(--accent); border-radius: 10px; }
+.days b { font-size: 0.941rem; }
+.step { width: 3.5rem; height: 3.5rem; display: grid; place-items: center; color: var(--accent); border-radius: 10px; }
 .step:active { background: var(--press); }
 .step:disabled { color: var(--muted); opacity: .4; }
 .step svg { width: 18px; height: 18px; }
@@ -385,31 +431,104 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .prog:active:not(:disabled) { background: var(--press); }
 .prog:disabled { cursor: default; }
 .prog:disabled .thumb, .prog:disabled .label { opacity: .45; }
-.thumb { position: relative; width: 52px; height: 52px; border-radius: 9px; overflow: hidden; flex: none; display: grid; place-items: center;
-  color: #fff; font-weight: 800; font-size: 15px; background: var(--accent); }
+.thumb { position: relative; width: 3.25rem; height: 3.25rem; border-radius: 9px; overflow: hidden; flex: none; display: grid; place-items: center;
+  color: #fff; font-weight: 800; font-size: 0.882rem; background: var(--accent); }
 .thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .25s; }
 .thumb img.ready { opacity: 1; }
 .prog .label { flex: 1; min-width: 0; }
-.prog .when { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.prog .title { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.prog .detail { display: block; color: var(--muted); font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prog .when { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.765rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.prog .title { display: block; font-weight: 600; overflow-wrap: anywhere; }
+.prog .detail { display: block; color: var(--muted); font-size: 0.824rem; overflow-wrap: anywhere; }
 .prog .end { width: 22px; height: 22px; flex: none; color: var(--muted); }
 .prog .end.on { color: var(--accent); }
-.pill.now { color: var(--green); background: color-mix(in srgb, var(--green) 16%, transparent); font-size: 10px; padding: 1px 6px; }
-.empty { padding: 14px; color: var(--muted); font-size: 15px; }
+.pill.now { color: var(--green); background: color-mix(in srgb, var(--green) 16%, transparent); font-size: .7rem; padding: 1px 6px; }
+.empty { padding: 14px; color: var(--muted); font-size: 0.882rem; }
 .empty .link { display: block; padding: 8px 0 0; }
 
 .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.quick { display: none; }
+.np, .nptext, .artwrap, .dock { display: contents; }
+@media (min-width: 900px) { .phoneonly { display: none !important; } }
+/* Phones: "On air". Live and Earlier at the top, the station's name large over a single glow in its colour, what's playing
+   beneath it, and every control in a dock fixed to the bottom edge, so nothing scrolls away even at large text. */
+@media (max-width: 899px) {
+  /* The player fills the first screen and keeps clear of the dock, so whatever follows starts below it. */
+  .col.player { display: flex; flex-direction: column; gap: 16px; padding-bottom: calc(var(--dock-h, 15rem) + 8px);
+    min-height: calc(100vh - max(16px, env(safe-area-inset-top)));
+    min-height: calc(100svh - max(16px, env(safe-area-inset-top))); }
+  .topbar .seg { flex: 0 0 auto; display: flex; gap: 1.2rem; padding: 0; background: none; }
+  .topbar .seg button { min-height: 2.75rem; padding: 0; border-radius: 0; background: none; box-shadow: none; font-size: 1.25rem; font-weight: 800;
+    letter-spacing: -.01em; opacity: .42; }
+  .topbar .seg button[aria-pressed="true"] { background: none; box-shadow: none; opacity: 1; }
+  .now.card { flex: 1 1 auto; justify-content: flex-end; align-items: stretch; text-align: left; gap: 0; padding: 0 0 4px;
+    background: none; border: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .eq { display: flex; align-items: flex-end; gap: 5px; height: 2rem; margin-bottom: 1rem; }
+  .eq i { width: 6px; height: 30%; border-radius: 3px; background: var(--green); }
+  :root[data-playing="1"]:not([data-mood="muted"]) .eq i { animation: eq 1.1s ease-in-out infinite alternate; }
+  :root[data-mood="muted"] .eq i { background: var(--pink); height: 14%; }
+  .eq i:nth-child(2) { animation-delay: -.3s; } .eq i:nth-child(3) { animation-delay: -.7s; } .eq i:nth-child(4) { animation-delay: -.5s; }
+  .eyebrow { font-size: .8rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+  .bigname { font-size: clamp(2.1rem, 12.5vw, 3.4rem); font-weight: 800; letter-spacing: -.045em; line-height: .98; margin: .5rem 0 1.25rem;
+    text-wrap: balance; overflow-wrap: anywhere; }
+  .np { display: flex; align-items: center; gap: .9rem; }
+  .nptext { display: block; min-width: 0; }
+  .np .meta { display: none; }
+  .art { --art: 3.6rem; width: var(--art); flex: none; margin: 0; border-radius: 10px; box-shadow: 0 6px 18px -6px rgba(0,0,0,.5); }
+  .art::before { display: none; }
+  h1 { font-size: 1.2rem; margin: 0; }
+  .sub { font-size: .95rem; }
+  .lede { color: var(--muted); font-size: 1.05rem; max-width: 30ch; }
+  :root.idle .np, :root:not(.idle) .lede { display: none; }
+  .progress { margin-top: 1rem; }
+  .dock { display: flex; flex-direction: column; gap: .9rem; position: fixed; z-index: 6; bottom: 0; left: 50%; transform: translateX(-50%);
+    width: min(100%, 560px); border-radius: 1.75rem 1.75rem 0 0; background: var(--dock); border-top: 1px solid var(--glass-line);
+    -webkit-backdrop-filter: blur(24px) saturate(160%); backdrop-filter: blur(24px) saturate(160%);
+    padding: 1rem max(16px, env(safe-area-inset-right)) max(1.1rem, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+  .dock .alert { border-radius: 999px; padding: .45rem .45rem .45rem 1rem; border: 1px solid color-mix(in srgb, var(--pink) 45%, transparent); }
+  .dock .alert .label { display: flex; flex-wrap: wrap; gap: 0 .5rem; align-items: baseline; }
+  .dock .alert .btn { background: var(--pink); color: #22000f; }
+  .transport { flex-direction: row; gap: .9rem; }
+  .play { width: min(4rem, 19vw); height: min(4rem, 19vw); }
+  .volume { flex: 1; min-width: 0; }
+  .vbtn { width: min(2.75rem, 11vw); height: min(2.75rem, 11vw); min-width: 44px; min-height: 44px; }
+  .quick { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: .6rem; }
+  .chip { min-width: 0; display: flex; align-items: center; gap: .55rem; min-height: 2.9rem; padding: .4rem .6rem; border-radius: 1rem;
+    background: var(--chip); font-weight: 600; text-align: left; }
+  .chip:active { background: var(--press); }
+  .chip .badge { width: min(2rem, 9vw); height: min(2rem, 9vw); flex: none; border-radius: 8px; font-size: .78rem; }
+  .chip .icon { width: min(2rem, 9vw); height: min(2rem, 9vw); flex: none; color: var(--text); }
+  .chip .icon svg { width: 1.3rem; height: 1.3rem; }
+  .chip .name { min-width: 0; line-height: 1.2; }
+  .chip .name small { display: block; font-size: .72rem; font-weight: 500; color: var(--muted); }
+  .chip .name span { display: block; overflow-wrap: break-word; }
+  .deskonly, .rows { display: none; }
+  /* One soft glow in the station's colour (pink through a bulletin) in place of the drifting fields */
+  .aurora i { display: none; }
+  .aurora::before { content: ""; position: absolute; left: -30%; right: -30%; top: -25%; height: 80%;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--c1) 48%, transparent), transparent); }
+}
+@media (max-width: 899px) and (prefers-color-scheme: dark) { :root { --bg: #0a0a0f; } }
+/* The glow changes colour at once on phones: some browsers don't repaint a pseudo-element while a registered colour transitions. */
+@media (max-width: 899px) { :root { transition: none; } }
+@keyframes eq { from { height: 25%; } to { height: 100%; } }
+@media (prefers-reduced-motion: reduce) { .eq i { animation: none !important; } }
+/* A plain background for anyone who finds the gradient hard to read: chosen at the foot of the page, or by the phone's own settings. */
+:root[data-plain] .aurora { display: none; }
+:root[data-plain] .card, :root[data-plain] .vbtn { background: var(--card-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
+@media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
+  .aurora { display: none; }
+  .card, .vbtn { background: var(--card-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
+}
 @media (min-width: 900px) {
   main { max-width: 980px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 28px; align-items: start; }
-  main > .banner, main > footer { grid-column: 1 / -1; }
-  main > .col:first-of-type { position: sticky; top: 16px; }      /* the player stays in view beside a long list */
+  main > .banner, main > footer, main > .plainrow { grid-column: 1 / -1; }
+  main > .col.player { position: sticky; top: 16px; }      /* the player stays in view beside a long list */
   dialog { margin: auto; border-radius: 18px; max-height: 80vh; }
 }
 .set { display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 52px; }
 .set + .set { border-top: 1px solid var(--line); }
 .set .label { flex: 1; min-width: 0; }
-.set .label small { display: block; color: var(--muted); font-size: 13px; }
+.set .label small { display: block; color: var(--muted); font-size: 0.765rem; }
 .set.column { flex-direction: column; align-items: stretch; }
 .set output { color: var(--muted); font-variant-numeric: tabular-nums; }
 .set .seg { min-width: 180px; }
@@ -417,64 +536,88 @@ input.toggle { appearance: none; -webkit-appearance: none; width: 51px; height: 
   position: relative; flex: none; cursor: pointer; transition: background .2s; }
 input.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff;
   box-shadow: 0 2px 4px rgba(0,0,0,.2); transition: transform .2s; }
-input.toggle:checked { background: var(--green); }
+input.toggle:checked { background: linear-gradient(90deg, #20b2aa, #0080ff); }
 input.toggle:checked::after { transform: translateX(20px); }
 select { font: inherit; color: inherit; background: var(--track); border: 0; border-radius: 8px; padding: 6px 10px; }
 .qr { background: #fff; border-radius: 12px; padding: 10px; width: 180px; align-self: center; }
 .qr svg { display: block; width: 100%; height: auto; }
-.linkbox { font: 14px ui-monospace, Menlo, monospace; width: 100%; color: var(--muted); background: var(--track); border: 0; border-radius: 8px;
+.linkbox { font: .82rem ui-monospace, Menlo, monospace; width: 100%; color: var(--muted); background: var(--track); border: 0; border-radius: 8px;
   padding: 8px 10px; -webkit-user-select: text; user-select: text; }
 .actions { display: flex; gap: 24px; justify-content: center; }
 .link.danger { color: var(--red); }
-.toast { position: fixed; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%); background: rgba(40,40,40,.94);
-  color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 15px; max-width: calc(100% - 32px); text-align: center; z-index: 10;
+.toast { position: fixed; left: 50%; top: max(16px, env(safe-area-inset-top)); transform: translateX(-50%); background: rgba(40,40,40,.94);
+  color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 0.882rem; max-width: calc(100% - 32px); text-align: center; z-index: 10;
   transition: opacity .25s; }
 </style>
 </head>
 <body>
+<div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
 <main>
   <div class="banner offline" id="offline" hidden role="status"><b>Can't reach InterLude</b><span id="offlineText">Check that the Mac is awake, InterLude is open, and this phone is on the same Wi-Fi.</span></div>
   <div class="banner offline" id="gone" hidden role="status"><b>This link has stopped working</b><span id="goneText">The remote was turned off or its link was reset. Open InterLude's Settings on the Mac and scan the code again.</span></div>
   <div class="banner error" id="error" hidden role="alert"></div>
 
-  <div class="col">
+  <div class="col player">
+  <div class="topbar">
+    <div class="seg" role="group" aria-label="Listen">
+      <button id="modeLive" aria-pressed="true">Live</button>
+      <button id="modeEarlier" aria-pressed="false">Earlier</button>
+    </div>
+    <button class="iconbtn phoneonly" id="gearBtn" aria-label="Settings" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.7a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg></button>
+  </div>
+
   <section class="card now" aria-live="polite">
-    <div class="art" id="art"><span id="artText">R</span><img id="artImg" alt="" hidden><div class="shade" id="artShade" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"/></svg></div></div>
-    <div class="meta"><span class="pill" id="pill" hidden></span><span id="stationName"></span></div>
-    <h1 id="headline">InterLude</h1>
-    <div class="sub" id="subheadline">Connecting…</div>
+    <div class="eq phoneonly" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="eyebrow phoneonly" id="eyebrow"></div>
+    <div class="bigname phoneonly" id="bigName"></div>
+    <div class="np">
+      <div class="artwrap"><div class="art" id="art"><span id="artText">R</span><img id="artImg" alt="" hidden><div class="shade" id="artShade" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"/></svg></div></div></div>
+      <div class="nptext">
+        <div class="meta"><span class="pill" id="pill" hidden></span><span id="stationName"></span></div>
+        <h1 id="headline">InterLude</h1>
+        <div class="sub" id="subheadline">Connecting…</div>
+      </div>
+    </div>
+    <div class="lede phoneonly">Plays a minute behind live and mutes each news bulletin for you.</div>
+    <div class="hint" id="startNote" hidden>Starting. The first start takes about 20 seconds while InterLude builds its delay.</div>
     <div class="progress" id="progress" hidden aria-label="Position in programme">
       <div class="bar" id="bar"><i class="analysed" id="analysed"></i><i class="heard" id="heard"></i></div>
       <div class="progress-text"><span id="position"></span><span id="skipped"></span></div>
     </div>
   </section>
 
+  <div class="dock" id="dock">
+      <div class="alert" id="alert" hidden>
+        <div class="label"><b id="alertTitle"></b><small id="alertDetail"></small></div>
+        <button class="btn" id="notNews" hidden>Not news</button>
+      </div>
   <section class="transport">
     <button class="play" id="play" aria-label="Play">
       <svg id="iconPlay" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>
       <svg id="iconStop" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" hidden><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
     </button>
-    <label class="volume">
-      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 9v6h4l5 5V4L9 9H5z"/></svg>
+    <div class="volume">
+      <button class="vbtn" id="volDown" aria-label="Quieter"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 9v6h4l5 5V4L9 9H5z"/></svg></button>
       <input type="range" id="volume" min="0" max="100" step="1" value="70" aria-label="Volume">
-      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg>
-    </label>
+      <button class="vbtn" id="volUp" aria-label="Louder"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg></button>
+    </div>
   </section>
 
-  <div class="seg" role="group" aria-label="Listen">
-    <button id="modeLive" aria-pressed="true">Live</button>
-    <button id="modeEarlier" aria-pressed="false">Earlier</button>
+  <div class="quick">
+    <button class="chip" id="quickStation"><div class="badge" id="quickBadge">R</div><span class="name"><small>Station</small><span id="quickStationLabel">…</span></span></button>
+    <button class="chip" id="quickSpeaker"><span class="icon" id="quickIcon"></span><span class="name"><small id="quickSpeakerCaption">Play on</small><span id="quickSpeakerLabel">…</span></span></button>
+  </div>
   </div>
   </div>
 
   <div class="col">
   <section class="card rows">
-    <button class="row" id="stationRow">
+    <button class="row deskonly" id="stationRow">
       <div class="badge" id="stationBadge">R</div>
       <div class="label"><small>Station</small><span id="stationLabel">…</span></div>
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
     </button>
-    <button class="row" id="speakerRow">
+    <button class="row deskonly" id="speakerRow">
       <div class="icon" id="speakerIcon"></div>
       <div class="label"><small id="speakerCaption">Play on</small><span id="speakerLabel">…</span></div>
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
@@ -487,10 +630,6 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
   </section>
 
   <section class="card news" id="news" hidden>
-    <div class="alert" id="alert" hidden>
-      <div class="label"><b id="alertTitle"></b><small id="alertDetail"></small></div>
-      <button class="btn" id="notNews" hidden>Not news</button>
-    </div>
     <div class="secondary">
       <button class="link" id="gotThrough">News got through</button>
       <small id="note"></small>
@@ -508,6 +647,7 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
   </div>
 
   <footer id="footer"></footer>
+  <div class="plainrow"><button class="link" id="plainBtn">Plain background</button></div>
 </main>
 
 <dialog id="stationSheet" aria-labelledby="stationSheetTitle">
@@ -602,11 +742,11 @@ async function send(command, params) {
 document.addEventListener("visibilitychange", () => { if (document.hidden) { if (!here) quiet(); } else refresh(); });
 window.addEventListener("pageshow", refresh);
 
-function toast(text) {
+function toast(text, ms = 2600) {
   const t = $("toast");
   t.textContent = text; t.hidden = false; t.style.opacity = 1;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.style.opacity = 0; setTimeout(() => { t.hidden = true; }, 300); }, 2600);
+  toastTimer = setTimeout(() => { t.style.opacity = 0; setTimeout(() => { t.hidden = true; }, 300); }, ms);
 }
 
 function render(s) {
@@ -628,9 +768,20 @@ function render(s) {
   pill.hidden = !PILLS[s.state];
   pill.className = "pill " + s.state;
   pill.textContent = PILLS[s.state] || "";
-  $("stationName").textContent = s.stationName;
+  // A line that repeats the one above is left out, so a station name isn't shown three times.
   $("headline").textContent = s.headline;
-  $("subheadline").textContent = s.subheadline;
+  $("stationName").textContent = s.stationName && s.stationName !== s.headline ? s.stationName : "";
+  const showSub = !!s.subheadline && s.subheadline !== s.headline && s.subheadline !== s.stationName && !(!s.playing && s.subheadline === "Ready to play");
+  $("subheadline").textContent = showSub ? s.subheadline : "";
+  $("subheadline").hidden = !showSub;
+  $("startNote").hidden = !(s.stream && s.state === "starting");
+  document.documentElement.dataset.mood = s.state === "muted" ? "muted" : s.state === "earlier" ? "earlier" : "live";
+  document.documentElement.dataset.playing = s.playing ? "1" : "0";
+  // The phone's "On air" hero: the station large, a line saying what it is doing, and what's playing beneath.
+  document.documentElement.classList.toggle("idle", !s.playing && s.state !== "starting" && s.mode !== "earlier");
+  const behind = s.footer ? " · " + s.footer.charAt(0).toLowerCase() + s.footer.slice(1) : "";
+  $("eyebrow").textContent = s.muted ? "Bulletin muted" + (s.muteElapsed != null ? " · " + clock(s.muteElapsed) : "")
+    : s.state === "starting" ? "Starting" : s.state === "earlier" ? "Earlier programme" : s.playing ? "On air" + behind : "Not playing";
   document.title = s.playing ? s.headline + " · InterLude" : "InterLude";
 
   if (s.stream) followStream(s);
@@ -647,14 +798,20 @@ function render(s) {
 
   if (local) $("volume").value = Math.round(player.volume * 100);
   else if (Date.now() > volumeHeldUntil) $("volume").value = Math.round(s.volume * 100);
+  fillRange($("volume"));
 
-  paintBadge($("stationBadge"), station);
-  $("stationLabel").textContent = station ? station.name : "Choose a station";
+  paintBadge($("stationBadge"), station); paintBadge($("quickBadge"), station);
+  $("bigName").textContent = station ? station.name : "InterLude";
+  const tint = colourOf(station && station.colour);
+  if (tint) document.documentElement.style.setProperty("--station", tint); else document.documentElement.style.removeProperty("--station");
+  $("stationLabel").textContent = $("quickStationLabel").textContent = station ? station.name : "Choose a station";
   const speaker = s.speakers.find(x => x.id === s.speaker) || s.speakers[0];
-  $("speakerIcon").innerHTML = ICONS[speaker ? speaker.kind : "mac"];
-  $("speakerLabel").textContent = speaker ? speaker.name : "This Mac";
-  $("speakerCaption").textContent = on ? "Playing on" : "Play on";
-  $("settingsRow").hidden = !s.settings;
+  $("speakerIcon").innerHTML = $("quickIcon").innerHTML = ICONS[speaker ? speaker.kind : "mac"];
+  $("speakerLabel").textContent = $("quickSpeakerLabel").textContent = speaker ? speaker.name : "This Mac";
+  $("speakerCaption").textContent = $("quickSpeakerCaption").textContent = on ? "Playing on" : "Play on";
+  $("quickStation").setAttribute("aria-label", "Station: " + $("stationLabel").textContent);
+  $("quickSpeaker").setAttribute("aria-label", (on ? "Playing on " : "Play on ") + $("speakerLabel").textContent);
+  $("settingsRow").hidden = $("gearBtn").hidden = !s.settings;
   if (s.settings && $("settingsSheet").open) {
     const key = JSON.stringify(s.settings);
     // Not while the delay slider is held, which a rebuild would drop.
@@ -687,6 +844,7 @@ function render(s) {
   if (s.earlier) renderEarlier(s.earlier, station);
 
   if ($("speakerSheet").open) renderSpeakers();
+  requestAnimationFrame(fitDock);
 }
 
 function renderReplay(r) {
@@ -820,6 +978,23 @@ $("play").addEventListener("click", async () => {
   $("play").setAttribute("aria-busy", "true");
   await send("toggle");
 });
+// Space plays and stops, as on the Mac, unless it would press a focused control or a sheet is open.
+document.addEventListener("keydown", e => {
+  if (e.code !== "Space" || e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (document.querySelector("dialog[open]") || e.target.closest("button, input, select, textarea, a, summary")) return;
+  e.preventDefault(); $("play").click();
+});
+// The filled part of a slider's track follows its value.
+function fillRange(el) { el.style.setProperty("--fill", ((el.value - el.min) / (el.max - el.min) * 100) + "%"); }
+document.addEventListener("input", e => { if (e.target.type === "range") fillRange(e.target); });
+// Large buttons beside the slider, for anyone who finds dragging hard.
+for (const [id, step] of [["volDown", -5], ["volUp", 5]]) {
+  $(id).addEventListener("click", () => {
+    const v = $("volume");
+    v.value = Math.min(100, Math.max(0, Number(v.value) + step));
+    v.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
 $("volume").addEventListener("input", e => {
   if (playsHere()) {
     player.volume = e.target.value / 100;
@@ -830,9 +1005,9 @@ $("volume").addEventListener("input", e => {
   clearTimeout(volumeTimer);
   volumeTimer = setTimeout(() => send("volume", { v: (e.target.value / 100).toFixed(2) }), 150);
 });
-$("stationRow").addEventListener("click", () => { if (!state) return; renderStations(); $("stationSheet").showModal(); });
-$("speakerRow").addEventListener("click", () => { if (!state) return; renderSpeakers(); $("speakerSheet").showModal(); });
-$("settingsRow").addEventListener("click", () => { if (!state || !state.settings) return; renderSettings(); $("settingsSheet").showModal(); });
+for (const id of ["stationRow", "quickStation"]) $(id).addEventListener("click", () => { if (!state) return; renderStations(); $("stationSheet").showModal(); });
+for (const id of ["speakerRow", "quickSpeaker"]) $(id).addEventListener("click", () => { if (!state) return; renderSpeakers(); $("speakerSheet").showModal(); });
+for (const id of ["settingsRow", "gearBtn"]) $(id).addEventListener("click", () => { if (!state || !state.settings) return; renderSettings(); $("settingsSheet").showModal(); });
 for (const d of document.querySelectorAll("dialog")) {
   d.addEventListener("click", e => { if (e.target === d || e.target.hasAttribute("data-close")) d.close(); });
 }
@@ -877,7 +1052,7 @@ function attach() {
   else if (window.Hls && Hls.isSupported()) {
     // The first request starts the session, which takes 20 s or so to fill its delay.
     hls = new Hls({ manifestLoadingTimeOut: 60000, manifestLoadingMaxRetry: 4, levelLoadingTimeOut: 60000 });
-    hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal && here) { toast("Playback stopped (" + d.details + ")"); stopHere(); render(state); } });
+    hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal && here) { toast("Playback stopped. Check your connection, then press play to try again.", 8000); stopHere(); render(state); } });
     hls.loadSource(state.stream); hls.attachMedia(player);
   } else { toast("This browser can't play the stream."); return false; }
   hereStream = state.streamID;
@@ -966,7 +1141,7 @@ function renderSettings() {
   head.style.padding = "0"; head.style.minHeight = "0";
   const out = head.querySelector("output"); out.textContent = st.delay + " s";
   const range = document.createElement("input"); range.type = "range"; range.min = 30; range.max = 600; range.step = 5; range.value = st.delay;
-  range.setAttribute("aria-label", "Delay behind live");
+  range.setAttribute("aria-label", "Delay behind live"); fillRange(range);
   range.addEventListener("input", () => { out.textContent = range.value + " s"; });
   range.addEventListener("change", () => change("delay", range.value));
   delay.append(head, range);
@@ -1014,8 +1189,16 @@ function renderSettings() {
     toast("Link copied.");
   });
   const reset = document.createElement("button"); reset.className = "link danger"; reset.textContent = "Reset link";
+  // Asks again in the page rather than in the browser's dialog: the first press arms the button for a few seconds.
+  let armed = null;
   reset.addEventListener("click", async () => {
-    if (!confirm("Make a new link? Pages and Home Screen icons with the old link stop working.")) return;
+    if (!armed) {
+      reset.textContent = "Confirm reset";
+      toast("Pages and Home Screen icons with the old link will stop working. Press again to confirm.", 5000);
+      armed = setTimeout(() => { armed = null; reset.textContent = "Reset link"; }, 5000);
+      return;
+    }
+    clearTimeout(armed); armed = null;
     if (await send("resetlink")) location.replace(state.settings.link);
   });
   actions.append(copy, reset);
@@ -1028,9 +1211,30 @@ function drawQR(el, text) {
   const draw = () => { const q = qrcode(0, "M"); q.addData(text); q.make(); el.innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); };
   if (window.qrcode) return draw();
   const sc = document.createElement("script"); sc.src = "/static/qrcode.js"; sc.onload = draw;
-  sc.onerror = () => { el.hidden = true; };
+  sc.onerror = () => { el.removeAttribute("aria-hidden"); el.style.cssText = "background:none;color:var(--muted);font-size:14px;width:auto;text-align:center"; el.textContent = "The QR code didn't load. Use the link below instead."; };
   document.head.append(sc);
 }
+
+// The dock is fixed to the bottom on phones; the page keeps its height free so nothing hides under it.
+const dock = $("dock");
+function fitDock() {
+  const fixed = getComputedStyle(dock).position === "fixed";
+  const h = fixed ? dock.getBoundingClientRect().height : 0;
+  document.documentElement.style.setProperty("--dock-h", h + "px");
+  document.body.style.paddingBottom = fixed ? (h + 16) + "px" : "";
+}
+if (window.ResizeObserver) new ResizeObserver(() => requestAnimationFrame(fitDock)).observe(dock);
+window.addEventListener("resize", fitDock);
+fitDock();
+
+// A plain background, remembered on this device. The phone's Increase Contrast setting applies it too.
+function setPlain(on) {
+  document.documentElement.toggleAttribute("data-plain", on);
+  $("plainBtn").textContent = on ? "Colourful background" : "Plain background";
+  try { localStorage.setItem("plain", on ? "1" : "0"); } catch {}
+}
+try { setPlain(localStorage.getItem("plain") === "1"); } catch { setPlain(false); }
+$("plainBtn").addEventListener("click", () => setPlain(!document.documentElement.hasAttribute("data-plain")));
 
 refresh();
 </script>
