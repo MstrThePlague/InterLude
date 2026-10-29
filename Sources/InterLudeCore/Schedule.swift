@@ -4,7 +4,7 @@ import FoundationNetworking
 #endif
 
 // The station's schedule, for playing an earlier programme from its start. The BBC's live origin keeps about
-// 11 hours of segments (docs/findings.md, "Playing earlier programmes"), so only programmes that began within
+// 11 hours of segments (docs/archive/findings.md, "Playing earlier programmes"), so only programmes that began within
 // that window can be played.
 
 /// One broadcast from the station's schedule.

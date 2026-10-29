@@ -35,7 +35,7 @@ public enum HLS {
     }
 
     /// Start of a segment on the stream's clock. A segment's index is its *end* time divided by 6.4, which is
-    /// why one is subtracted (checked against `EXT-X-PROGRAM-DATE-TIME`; see docs/findings.md).
+    /// why one is subtracted (checked against `EXT-X-PROGRAM-DATE-TIME`; see docs/archive/findings.md).
     public static func startTime(ofIndex i: Int) -> Date {
         Date(timeIntervalSince1970: Double(i - 1) * segmentDuration)
     }
