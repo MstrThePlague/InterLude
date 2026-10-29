@@ -1,3 +1,5 @@
+> Archived. Written during early development and kept for the measurements and the reasoning; some details, tools and phase numbers no longer match the code.
+
 # Checklists for tests that need a person
 
 Record your answers in `docs/findings.md` under "Owner results".

@@ -24,13 +24,13 @@ import Foundation
         #expect(!Tailnet.isTailscale("100.128.0.1"))
         #expect(!Tailnet.isTailscale("100.63.0.1"))
         #expect(!Tailnet.isTailscale("192.168.1.20"))
-        #expect(!Tailnet.isTailscale("100.70.0"))
+        #expect(!Tailnet.isTailscale("100.100.1"))
     }
 
     @Test func recognisesMagicDNSNames() {
         #expect(Tailnet.magicDNSName("my-mac.tailnet-1234.ts.net.") == "my-mac.tailnet-1234.ts.net")
         #expect(Tailnet.magicDNSName("My-Mac.Tailnet-1234.TS.NET") == "my-mac.tailnet-1234.ts.net")
-        #expect(Tailnet.magicDNSName("49.0.70.100.in-addr.arpa") == nil)
+        #expect(Tailnet.magicDNSName("2.1.100.100.in-addr.arpa") == nil)
         #expect(Tailnet.magicDNSName("tailnet-1234.ts.net") == nil)
         #expect(Tailnet.magicDNSName("a.b.tailnet-1234.ts.net") == nil)
         #expect(Tailnet.magicDNSName("mac..ts.net") == nil)
