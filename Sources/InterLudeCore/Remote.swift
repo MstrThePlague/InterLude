@@ -293,7 +293,7 @@ enum RemotePage {
     --press: rgba(255,255,255,.08); --track: rgba(118,118,128,.24); --seg-on: rgba(255,255,255,.3); --on-orange: #2a0016;
   }
 }
-:root[data-mood="live"]    { --c1: #0080ff; --c2: #8b00ff; --c3: #20b2aa; }
+:root[data-mood="live"]    { --c1: var(--station, #0080ff); --c2: #8b00ff; --c3: #20b2aa; }
 :root[data-mood="muted"]   { --c1: #ff1493; --c2: #8b00ff; --c3: #0080ff; }
 :root[data-mood="earlier"] { --c1: #8b00ff; --c2: #0080ff; --c3: #20b2aa; }
 /* The Aurora background: three colour fields drifting on 9 to 12 second loops. Text sits on the glass cards, not on it. */
@@ -438,11 +438,30 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .empty .link { display: block; padding: 8px 0 0; }
 
 .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.quick { display: none; }
+.artwrap { display: contents; }
+/* Phones: one player screen, like a music app. The artwork takes whatever height is left, play and volume sit low where a thumb
+   rests, and station and speaker are buttons at the bottom. Everything else is a scroll away. */
 @media (max-width: 899px) {
-  .col { display: contents; }
-  /* Pinned to the top once the artwork scrolls away, so play and volume are always in reach. */
-  .transport { position: sticky; top: 0; z-index: 5; margin: 0 -16px; padding: max(10px, env(safe-area-inset-top)) 16px 10px;
-    background: var(--card-bar); border-bottom: 1px solid var(--glass-line); -webkit-backdrop-filter: blur(22px) saturate(150%); backdrop-filter: blur(22px) saturate(150%); }
+  .col.player { display: flex; flex-direction: column; gap: 14px; min-height: 100vh; min-height: calc(100svh - max(16px, env(safe-area-inset-top)) - max(24px, env(safe-area-inset-bottom))); }
+  .now.card { flex: 1 1 auto; min-height: 0; background: none; border: 0; -webkit-backdrop-filter: none; backdrop-filter: none; padding: 0;
+    align-items: stretch; text-align: left; gap: 4px; }
+  .artwrap { display: grid; place-items: center; flex: 1 1 7rem; min-height: 6rem; container-type: size; }
+  .art { --art: min(100cqw, 100cqh, 24rem); width: var(--art); margin: 0; }
+  .meta { justify-content: flex-start; margin-top: 8px; }
+  h1 { font-size: 1.65rem; }
+  .sub { font-size: 1.05rem; }
+  .transport { padding: 8px 0 0; }
+  .quick { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr)); gap: 10px; }
+  .qbtn { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 3.75rem; padding: .5rem .75rem; text-align: left; border-radius: 14px; }
+  .qbtn .label { min-width: 0; }
+  .qbtn .label small { display: block; color: var(--muted); font-size: .76rem; }
+  .qbtn .label span { display: block; overflow-wrap: anywhere; font-weight: 600; line-height: 1.2; }
+  .deskonly { display: none; }
+  .rows:not(:has(#settingsRow:not([hidden]))) { display: none; }
+}
+@media (max-width: 899px) and (prefers-color-scheme: dark) {
+  .aurora::after { content: ""; position: absolute; inset: 0; background: linear-gradient(rgba(5,7,20,.4), rgba(5,7,20,.62)); }
 }
 /* A plain background for anyone who finds the gradient hard to read: chosen at the foot of the page, or by the phone's own settings. */
 :root[data-plain] .aurora { display: none; }
@@ -456,7 +475,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 @media (min-width: 900px) {
   main { max-width: 980px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 28px; align-items: start; }
   main > .banner, main > footer, main > .plainrow { grid-column: 1 / -1; }
-  main > .col:first-of-type { position: sticky; top: 16px; }      /* the player stays in view beside a long list */
+  main > .col.player { position: sticky; top: 16px; }      /* the player stays in view beside a long list */
   dialog { margin: auto; border-radius: 18px; max-height: 80vh; }
 }
 .set { display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 52px; }
@@ -491,9 +510,9 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
   <div class="banner offline" id="gone" hidden role="status"><b>This link has stopped working</b><span id="goneText">The remote was turned off or its link was reset. Open InterLude's Settings on the Mac and scan the code again.</span></div>
   <div class="banner error" id="error" hidden role="alert"></div>
 
-  <div class="col">
+  <div class="col player">
   <section class="card now" aria-live="polite">
-    <div class="art" id="art"><span id="artText">R</span><img id="artImg" alt="" hidden><div class="shade" id="artShade" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"/></svg></div></div>
+    <div class="artwrap"><div class="art" id="art"><span id="artText">R</span><img id="artImg" alt="" hidden><div class="shade" id="artShade" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"/></svg></div></div></div>
     <div class="meta"><span class="pill" id="pill" hidden></span><span id="stationName"></span></div>
     <h1 id="headline">InterLude</h1>
     <div class="sub" id="subheadline">Connecting…</div>
@@ -520,16 +539,21 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
     <button id="modeLive" aria-pressed="true">Live</button>
     <button id="modeEarlier" aria-pressed="false">Earlier</button>
   </div>
+
+  <div class="quick">
+    <button class="card qbtn" id="quickStation"><div class="badge" id="quickBadge">R</div><div class="label"><small>Station</small><span id="quickStationLabel">…</span></div></button>
+    <button class="card qbtn" id="quickSpeaker"><div class="icon" id="quickIcon"></div><div class="label"><small id="quickSpeakerCaption">Play on</small><span id="quickSpeakerLabel">…</span></div></button>
+  </div>
   </div>
 
   <div class="col">
   <section class="card rows">
-    <button class="row" id="stationRow">
+    <button class="row deskonly" id="stationRow">
       <div class="badge" id="stationBadge">R</div>
       <div class="label"><small>Station</small><span id="stationLabel">…</span></div>
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
     </button>
-    <button class="row" id="speakerRow">
+    <button class="row deskonly" id="speakerRow">
       <div class="icon" id="speakerIcon"></div>
       <div class="label"><small id="speakerCaption">Play on</small><span id="speakerLabel">…</span></div>
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
@@ -711,12 +735,14 @@ function render(s) {
   else if (Date.now() > volumeHeldUntil) $("volume").value = Math.round(s.volume * 100);
   fillRange($("volume"));
 
-  paintBadge($("stationBadge"), station);
-  $("stationLabel").textContent = station ? station.name : "Choose a station";
+  paintBadge($("stationBadge"), station); paintBadge($("quickBadge"), station);
+  const tint = colourOf(station && station.colour);
+  if (tint) document.documentElement.style.setProperty("--station", tint); else document.documentElement.style.removeProperty("--station");
+  $("stationLabel").textContent = $("quickStationLabel").textContent = station ? station.name : "Choose a station";
   const speaker = s.speakers.find(x => x.id === s.speaker) || s.speakers[0];
-  $("speakerIcon").innerHTML = ICONS[speaker ? speaker.kind : "mac"];
-  $("speakerLabel").textContent = speaker ? speaker.name : "This Mac";
-  $("speakerCaption").textContent = on ? "Playing on" : "Play on";
+  $("speakerIcon").innerHTML = $("quickIcon").innerHTML = ICONS[speaker ? speaker.kind : "mac"];
+  $("speakerLabel").textContent = $("quickSpeakerLabel").textContent = speaker ? speaker.name : "This Mac";
+  $("speakerCaption").textContent = $("quickSpeakerCaption").textContent = on ? "Playing on" : "Play on";
   $("settingsRow").hidden = !s.settings;
   if (s.settings && $("settingsSheet").open) {
     const key = JSON.stringify(s.settings);
@@ -910,8 +936,8 @@ $("volume").addEventListener("input", e => {
   clearTimeout(volumeTimer);
   volumeTimer = setTimeout(() => send("volume", { v: (e.target.value / 100).toFixed(2) }), 150);
 });
-$("stationRow").addEventListener("click", () => { if (!state) return; renderStations(); $("stationSheet").showModal(); });
-$("speakerRow").addEventListener("click", () => { if (!state) return; renderSpeakers(); $("speakerSheet").showModal(); });
+for (const id of ["stationRow", "quickStation"]) $(id).addEventListener("click", () => { if (!state) return; renderStations(); $("stationSheet").showModal(); });
+for (const id of ["speakerRow", "quickSpeaker"]) $(id).addEventListener("click", () => { if (!state) return; renderSpeakers(); $("speakerSheet").showModal(); });
 $("settingsRow").addEventListener("click", () => { if (!state || !state.settings) return; renderSettings(); $("settingsSheet").showModal(); });
 for (const d of document.querySelectorAll("dialog")) {
   d.addEventListener("click", e => { if (e.target === d || e.target.hasAttribute("data-close")) d.close(); });
