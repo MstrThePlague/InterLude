@@ -55,7 +55,7 @@ Turn on **Settings › Phone remote** and point a phone's camera at the QR code.
 
 The remote is served by the same small web server the Chromecasts use. Its address carries a long random code, so other people on the network can't guess it; **Reset link** makes a new one and the old link stops working. The Mac has to be awake with InterLude open. In Live, Play on the phone plays live; in Earlier it plays the programme last picked from its start, or live if none was. If the Mac's firewall is on, macOS asks once whether InterLude may accept incoming connections.
 
-The design, the measurements behind each rule and the mistakes along the way are written up in [docs/archive/findings.md](docs/findings.md).
+The design, the measurements behind each rule and the mistakes along the way are written up in [docs/archive/findings.md](docs/archive/findings.md).
 
 ## Requirements
 
@@ -106,14 +106,14 @@ Then:
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --scratch-path ~/Library/Caches/InterLudeBuild
 ```
 
-To see the panel's states without playing anything, launch with `--demo=playing`, `--demo=muted`, `--demo=upcoming`, `--demo=error`, `--demo=earlier`, `--demo=earlier-past`, `--demo=replay` or `--demo=settings`.
+To see the panel's states without playing anything, launch with `--demo=playing`, `--demo=muted`, `--demo=upcoming`, `--demo=error`, `--demo=earlier`, `--demo=earlier-past`, `--demo=replay` or `--demo=settings`. Add `--snapshot=<file.png>` to save the window as a picture and quit, as for the screenshots here.
 
 ## Running the server
 
 InterLude also runs as a web app on a Linux machine, so it works with no Mac involved: any phone, tablet or computer plays and controls it in a browser, and it can cast to Chromecasts itself. It uses open models in place of Apple's: YAMNet for speech and music and whisper.cpp for the newsreader, both running on the server's CPU. Nothing is sent to a speech service.
 
 <p align="center">
-  <img src="docs/images/web-phone.png" width="250" alt="The web app on a phone, playing 6 Music live">
+  <img src="docs/images/web-phone.png" width="250" alt="The web app on a phone playing 6 Music live: the station name large, with play, volume, station and speaker in a dock at the bottom">
   <img src="docs/images/web-desktop.png" width="560" alt="The web app on a computer, with the Earlier programme list beside the player">
 </p>
 <p align="center"><sub>In a browser: on a phone, and on a computer with yesterday's programmes.</sub></p>
@@ -193,7 +193,7 @@ The server keeps the same files in its `data` volume (`/var/lib/interlude` in th
 | `Tests` | Unit tests for the parts that can be tested without a network or speakers. |
 | `Tools` | Command-line programs used to measure and tune detection (below). |
 | `docs` | Notes on on-demand playback, release notes and screenshots. `docs/archive` holds the findings and manual test checklists from early development. |
-| `scripts` | Building and packaging the Mac app, installing the server's native libraries on Linux, preparing YAMNet, and comparing two event logs. |
+| `scripts` | Building and packaging the Mac app, installing the server's native libraries on Linux, preparing YAMNet, comparing two event logs, and `push-web.sh`, which puts a changed web page on a running server without rebuilding its image. |
 
 ### Tools
 

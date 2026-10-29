@@ -37,6 +37,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        if let path = CommandLine.arguments.first(where: { $0.hasPrefix("--snapshot=") })?.dropFirst(11) { snapshot(to: String(path)) }
+    }
+
+    /// For README screenshots with `--demo=`: saves the window's content as a PNG once it has settled, then quits.
+    private func snapshot(to path: String) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(4))
+            if let view = window?.contentView, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                view.cacheDisplay(in: view.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+            }
+            NSApp.terminate(nil)
+        }
     }
 }
 

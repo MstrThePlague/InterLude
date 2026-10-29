@@ -508,6 +508,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
     background: radial-gradient(closest-side, color-mix(in srgb, var(--c1) 48%, transparent), transparent); }
 }
 @media (max-width: 899px) and (prefers-color-scheme: dark) { :root { --bg: #0a0a0f; } }
+/* The glow changes colour at once on phones: some browsers don't repaint a pseudo-element while a registered colour transitions. */
+@media (max-width: 899px) { :root { transition: none; } }
 @keyframes eq { from { height: 25%; } to { height: 100%; } }
 @media (prefers-reduced-motion: reduce) { .eq i { animation: none !important; } }
 /* A plain background for anyone who finds the gradient hard to read: chosen at the foot of the page, or by the phone's own settings. */
