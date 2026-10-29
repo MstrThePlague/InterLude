@@ -16,6 +16,7 @@ s = open("Sources/InterLudeCore/Remote.swift", encoding="utf-8").read()
 start = s.index('static let html = #"""\n') + len('static let html = #"""\n')
 open(sys.argv[1], "w", encoding="utf-8").write(s[start:s.index('\n"""#', start)])
 EOF
+chmod 644 "$PAGE"     # mktemp makes it private, and the server runs as its own user
 scp -q "$PAGE" "$HOST:/tmp/interlude-index.html"
 ssh "$HOST" "cd '$DIR' && docker compose exec -T interlude mkdir -p /var/lib/interlude/web \
   && docker compose cp /tmp/interlude-index.html interlude:/var/lib/interlude/web/index.html && rm /tmp/interlude-index.html"
