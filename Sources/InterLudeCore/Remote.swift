@@ -278,7 +278,7 @@ public enum RemotePage {
   color-scheme: light dark;
   --bg: #f2f2f7; --card: rgba(255,255,255,.74); --glass-line: rgba(255,255,255,.7); --aurora-op: .3;
   --text: #1c1c1e; --muted: #55555a; --line: rgba(60,60,67,.14);
-  --track-hi: rgba(60,60,67,.3); --card-solid: #ffffff; --chip: rgba(0,0,0,.06); --play-bg: #1c1c1e; --play-fg: #ffffff;
+  --track-hi: rgba(60,60,67,.3); --card-solid: #ffffff; --chip: rgba(0,0,0,.06); --dock: rgba(255,255,255,.86); --play-bg: #1c1c1e; --play-fg: #ffffff;
   --accent: #0068d6; --green: #0b7a73; --orange: #b0005a; --orange-bg: rgba(255,20,147,.14); --blue: #6a00c0; --red: #d70015;
   --warn-bg: rgba(255,149,0,.16); --pink: #ff1493;
   transition: --c1 1.4s, --c2 1.4s, --c3 1.4s;
@@ -288,7 +288,7 @@ public enum RemotePage {
   :root {
     --bg: #070a1e; --card: rgba(11,15,42,.6); --glass-line: rgba(255,255,255,.14); --aurora-op: 1;
     --text: #f2f2f7; --muted: #c6c9df; --line: rgba(255,255,255,.14);
-    --track-hi: rgba(255,255,255,.3); --card-solid: #0f1330; --chip: rgba(255,255,255,.1); --play-bg: #ffffff; --play-fg: #0b0d1f;
+    --track-hi: rgba(255,255,255,.3); --card-solid: #0f1330; --chip: rgba(255,255,255,.1); --dock: rgba(26,26,34,.82); --play-bg: #ffffff; --play-fg: #0b0d1f;
     --accent: #3d9bff; --green: #5fe3d8; --orange: #ff7cc0; --orange-bg: rgba(255,20,147,.22); --blue: #b98cff; --red: #ff6961;
     --warn-bg: rgba(255,159,10,.18);
     --press: rgba(255,255,255,.08); --track: rgba(118,118,128,.24); --seg-on: rgba(255,255,255,.3); --on-orange: #2a0016;
@@ -383,7 +383,7 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 
 .icon svg { width: 24px; height: 24px; }
 
 .news { overflow: hidden; }
-.alert { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--orange-bg); }
+.alert { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--orange-bg); border-radius: 14px; }
 .alert .label { flex: 1; }
 .alert .label small { display: block; color: var(--muted); font-size: 0.824rem; font-variant-numeric: tabular-nums; }
 .alert b { font-weight: 700; }
@@ -393,6 +393,7 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 
 .link { color: var(--accent); font-weight: 600; padding: 10px 0; min-height: 2.75rem; }
 .secondary small { color: var(--muted); font-size: 0.765rem; text-align: right; }
 .plainrow { text-align: center; }
+.plainrow .link { color: var(--muted); font-weight: 500; font-size: .82rem; }
 footer { text-align: center; color: var(--muted); font-size: 0.765rem; }
 
 dialog { border: 0; padding: 0; margin: auto auto 0; width: 100%; max-width: 520px; max-height: 82vh; background: var(--bg); color: var(--text);
@@ -446,35 +447,68 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 
 .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .quick { display: none; }
-.artwrap { display: contents; }
+.np, .nptext, .artwrap, .dock { display: contents; }
 @media (min-width: 900px) { .phoneonly { display: none !important; } }
-/* Phones: one player screen, like a music app. Live and Earlier at the top with Settings beside them, the artwork in whatever
-   height is left, the title below it, play and volume low where a thumb rests, and station and speaker at the foot.
-   Everything else is a scroll away. */
+/* Phones: "On air". Live and Earlier at the top, the station's name large over a single glow in its colour, what's playing
+   beneath it, and every control in a dock fixed to the bottom edge, so nothing scrolls away even at large text. */
 @media (max-width: 899px) {
-  .col.player { display: flex; flex-direction: column; gap: 16px; min-height: 100vh;
-    min-height: calc(100svh - max(16px, env(safe-area-inset-top)) - max(24px, env(safe-area-inset-bottom))); }
-  .topbar .seg { flex: 0 1 14rem; }
-  .now.card { flex: 1 1 auto; min-height: 0; background: none; border: 0; -webkit-backdrop-filter: none; backdrop-filter: none; padding: 0;
-    align-items: stretch; text-align: left; gap: 4px; }
-  .artwrap { display: grid; place-items: center; flex: 1 1 7rem; min-height: 6rem; container-type: size; }
-  .art { --art: min(100cqw, 100cqh, 24rem); width: var(--art); margin: 0; border-radius: 16px; }
-  .meta { justify-content: flex-start; margin-top: 14px; }
-  h1 { font-size: 1.65rem; }
-  .sub { font-size: 1.05rem; }
-  .quick { display: flex; flex-wrap: wrap; gap: 10px; }
-  .chip { flex: 1 1 9rem; min-width: 0; display: flex; align-items: center; gap: 10px; min-height: 3rem; padding: .35rem 1rem .35rem .4rem;
-    border-radius: 999px; background: var(--chip); font-weight: 600; text-align: left; }
+  .col.player { display: flex; flex-direction: column; gap: 16px;
+    min-height: calc(100vh - var(--dock-h, 15rem) - max(16px, env(safe-area-inset-top)) - 16px);
+    min-height: calc(100svh - var(--dock-h, 15rem) - max(16px, env(safe-area-inset-top)) - 16px); }
+  .topbar .seg { flex: 0 0 auto; display: flex; gap: 1.2rem; padding: 0; background: none; }
+  .topbar .seg button { min-height: 2.75rem; padding: 0; border-radius: 0; background: none; box-shadow: none; font-size: 1.25rem; font-weight: 800;
+    letter-spacing: -.01em; opacity: .42; }
+  .topbar .seg button[aria-pressed="true"] { background: none; box-shadow: none; opacity: 1; }
+  .now.card { flex: 1 1 auto; justify-content: flex-end; align-items: stretch; text-align: left; gap: 0; padding: 0 0 4px;
+    background: none; border: 0; -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .eq { display: flex; align-items: flex-end; gap: 5px; height: 2rem; margin-bottom: 1rem; }
+  .eq i { width: 6px; height: 30%; border-radius: 3px; background: var(--green); }
+  :root[data-playing="1"]:not([data-mood="muted"]) .eq i { animation: eq 1.1s ease-in-out infinite alternate; }
+  :root[data-mood="muted"] .eq i { background: var(--pink); height: 14%; }
+  .eq i:nth-child(2) { animation-delay: -.3s; } .eq i:nth-child(3) { animation-delay: -.7s; } .eq i:nth-child(4) { animation-delay: -.5s; }
+  .eyebrow { font-size: .8rem; font-weight: 700; letter-spacing: .09em; text-transform: uppercase; color: var(--muted); }
+  .bigname { font-size: clamp(2.1rem, 12.5vw, 3.4rem); font-weight: 800; letter-spacing: -.045em; line-height: .98; margin: .5rem 0 1.25rem;
+    text-wrap: balance; overflow-wrap: anywhere; }
+  .np { display: flex; align-items: center; gap: .9rem; }
+  .nptext { display: block; min-width: 0; }
+  .np .meta { display: none; }
+  .art { --art: 3.6rem; width: var(--art); flex: none; margin: 0; border-radius: 10px; box-shadow: 0 6px 18px -6px rgba(0,0,0,.5); }
+  .art::before { display: none; }
+  h1 { font-size: 1.2rem; margin: 0; }
+  .sub { font-size: .95rem; }
+  .lede { color: var(--muted); font-size: 1.05rem; max-width: 30ch; }
+  :root.idle .np, :root:not(.idle) .lede { display: none; }
+  .progress { margin-top: 1rem; }
+  .dock { display: flex; flex-direction: column; gap: .9rem; position: fixed; z-index: 6; bottom: 0; left: 50%; transform: translateX(-50%);
+    width: min(100%, 560px); border-radius: 1.75rem 1.75rem 0 0; background: var(--dock); border-top: 1px solid var(--glass-line);
+    -webkit-backdrop-filter: blur(24px) saturate(160%); backdrop-filter: blur(24px) saturate(160%);
+    padding: 1rem max(16px, env(safe-area-inset-right)) max(1.1rem, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); }
+  .dock .alert { border-radius: 999px; padding: .45rem .45rem .45rem 1rem; border: 1px solid color-mix(in srgb, var(--pink) 45%, transparent); }
+  .dock .alert .label { display: flex; flex-wrap: wrap; gap: 0 .5rem; align-items: baseline; }
+  .dock .alert .btn { background: var(--pink); color: #22000f; }
+  .transport { flex-direction: row; gap: .9rem; }
+  .play { width: min(4rem, 19vw); height: min(4rem, 19vw); }
+  .volume { flex: 1; min-width: 0; }
+  .vbtn { width: min(2.75rem, 11vw); height: min(2.75rem, 11vw); min-width: 44px; min-height: 44px; }
+  .quick { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr)); gap: .6rem; }
+  .chip { min-width: 0; display: flex; align-items: center; gap: .55rem; min-height: 2.9rem; padding: .4rem .6rem; border-radius: 1rem;
+    background: var(--chip); font-weight: 600; text-align: left; }
   .chip:active { background: var(--press); }
-  .chip .badge { width: 2.25rem; height: 2.25rem; border-radius: 50%; font-size: .8rem; }
-  .chip .icon { width: 2.25rem; height: 2.25rem; color: var(--text); }
+  .chip .badge { width: min(2rem, 9vw); height: min(2rem, 9vw); flex: none; border-radius: 8px; font-size: .78rem; }
+  .chip .icon { width: min(2rem, 9vw); height: min(2rem, 9vw); flex: none; color: var(--text); }
   .chip .icon svg { width: 1.3rem; height: 1.3rem; }
-  .chip .name { min-width: 0; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .chip .name { min-width: 0; line-height: 1.2; }
+  .chip .name small { display: block; font-size: .72rem; font-weight: 500; color: var(--muted); }
+  .chip .name span { display: block; overflow-wrap: break-word; }
   .deskonly, .rows { display: none; }
+  /* One soft glow in the station's colour (pink through a bulletin) in place of the drifting fields */
+  .aurora i { display: none; }
+  .aurora::before { content: ""; position: absolute; left: -30%; right: -30%; top: -25%; height: 80%;
+    background: radial-gradient(closest-side, color-mix(in srgb, var(--c1) 48%, transparent), transparent); }
 }
-@media (max-width: 899px) and (prefers-color-scheme: dark) {
-  .aurora::after { content: ""; position: absolute; inset: 0; background: linear-gradient(rgba(5,7,20,.4), rgba(5,7,20,.62)); }
-}
+@media (max-width: 899px) and (prefers-color-scheme: dark) { :root { --bg: #0a0a0f; } }
+@keyframes eq { from { height: 25%; } to { height: 100%; } }
+@media (prefers-reduced-motion: reduce) { .eq i { animation: none !important; } }
 /* A plain background for anyone who finds the gradient hard to read: chosen at the foot of the page, or by the phone's own settings. */
 :root[data-plain] .aurora { display: none; }
 :root[data-plain] .card, :root[data-plain] .vbtn { background: var(--card-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
@@ -530,10 +564,18 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
   </div>
 
   <section class="card now" aria-live="polite">
-    <div class="artwrap"><div class="art" id="art"><span id="artText">R</span><img id="artImg" alt="" hidden><div class="shade" id="artShade" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"/></svg></div></div></div>
-    <div class="meta"><span class="pill" id="pill" hidden></span><span id="stationName"></span></div>
-    <h1 id="headline">InterLude</h1>
-    <div class="sub" id="subheadline">Connecting…</div>
+    <div class="eq phoneonly" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="eyebrow phoneonly" id="eyebrow"></div>
+    <div class="bigname phoneonly" id="bigName"></div>
+    <div class="np">
+      <div class="artwrap"><div class="art" id="art"><span id="artText">R</span><img id="artImg" alt="" hidden><div class="shade" id="artShade" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"/></svg></div></div></div>
+      <div class="nptext">
+        <div class="meta"><span class="pill" id="pill" hidden></span><span id="stationName"></span></div>
+        <h1 id="headline">InterLude</h1>
+        <div class="sub" id="subheadline">Connecting…</div>
+      </div>
+    </div>
+    <div class="lede phoneonly">Plays a minute behind live and mutes each news bulletin for you.</div>
     <div class="hint" id="startNote" hidden>Starting. The first start takes about 20 seconds while InterLude builds its delay.</div>
     <div class="progress" id="progress" hidden aria-label="Position in programme">
       <div class="bar" id="bar"><i class="analysed" id="analysed"></i><i class="heard" id="heard"></i></div>
@@ -541,6 +583,11 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
     </div>
   </section>
 
+  <div class="dock" id="dock">
+      <div class="alert" id="alert" hidden>
+        <div class="label"><b id="alertTitle"></b><small id="alertDetail"></small></div>
+        <button class="btn" id="notNews" hidden>Not news</button>
+      </div>
   <section class="transport">
     <button class="play" id="play" aria-label="Play">
       <svg id="iconPlay" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>
@@ -554,8 +601,9 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
   </section>
 
   <div class="quick">
-    <button class="chip" id="quickStation"><div class="badge" id="quickBadge">R</div><span class="name" id="quickStationLabel">…</span></button>
-    <button class="chip" id="quickSpeaker"><span class="icon" id="quickIcon"></span><span class="name" id="quickSpeakerLabel">…</span></button>
+    <button class="chip" id="quickStation"><div class="badge" id="quickBadge">R</div><span class="name"><small>Station</small><span id="quickStationLabel">…</span></span></button>
+    <button class="chip" id="quickSpeaker"><span class="icon" id="quickIcon"></span><span class="name"><small id="quickSpeakerCaption">Play on</small><span id="quickSpeakerLabel">…</span></span></button>
+  </div>
   </div>
   </div>
 
@@ -579,10 +627,6 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
   </section>
 
   <section class="card news" id="news" hidden>
-    <div class="alert" id="alert" hidden>
-      <div class="label"><b id="alertTitle"></b><small id="alertDetail"></small></div>
-      <button class="btn" id="notNews" hidden>Not news</button>
-    </div>
     <div class="secondary">
       <button class="link" id="gotThrough">News got through</button>
       <small id="note"></small>
@@ -730,6 +774,11 @@ function render(s) {
   $("startNote").hidden = !(s.stream && s.state === "starting");
   document.documentElement.dataset.mood = s.state === "muted" ? "muted" : s.state === "earlier" ? "earlier" : "live";
   document.documentElement.dataset.playing = s.playing ? "1" : "0";
+  // The phone's "On air" hero: the station large, a line saying what it is doing, and what's playing beneath.
+  document.documentElement.classList.toggle("idle", !s.playing && s.state !== "starting" && s.mode !== "earlier");
+  const behind = s.footer ? " · " + s.footer.charAt(0).toLowerCase() + s.footer.slice(1) : "";
+  $("eyebrow").textContent = s.muted ? "Bulletin muted" + (s.muteElapsed != null ? " · " + clock(s.muteElapsed) : "")
+    : s.state === "starting" ? "Starting" : s.state === "earlier" ? "Earlier programme" : s.playing ? "On air" + behind : "Not playing";
   document.title = s.playing ? s.headline + " · InterLude" : "InterLude";
 
   if (s.stream) followStream(s);
@@ -749,13 +798,14 @@ function render(s) {
   fillRange($("volume"));
 
   paintBadge($("stationBadge"), station); paintBadge($("quickBadge"), station);
+  $("bigName").textContent = station ? station.name : "InterLude";
   const tint = colourOf(station && station.colour);
   if (tint) document.documentElement.style.setProperty("--station", tint); else document.documentElement.style.removeProperty("--station");
   $("stationLabel").textContent = $("quickStationLabel").textContent = station ? station.name : "Choose a station";
   const speaker = s.speakers.find(x => x.id === s.speaker) || s.speakers[0];
   $("speakerIcon").innerHTML = $("quickIcon").innerHTML = ICONS[speaker ? speaker.kind : "mac"];
   $("speakerLabel").textContent = $("quickSpeakerLabel").textContent = speaker ? speaker.name : "This Mac";
-  $("speakerCaption").textContent = on ? "Playing on" : "Play on";
+  $("speakerCaption").textContent = $("quickSpeakerCaption").textContent = on ? "Playing on" : "Play on";
   $("quickStation").setAttribute("aria-label", "Station: " + $("stationLabel").textContent);
   $("quickSpeaker").setAttribute("aria-label", (on ? "Playing on " : "Play on ") + $("speakerLabel").textContent);
   $("settingsRow").hidden = $("gearBtn").hidden = !s.settings;
@@ -1160,6 +1210,18 @@ function drawQR(el, text) {
   sc.onerror = () => { el.removeAttribute("aria-hidden"); el.style.cssText = "background:none;color:var(--muted);font-size:14px;width:auto;text-align:center"; el.textContent = "The QR code didn't load. Use the link below instead."; };
   document.head.append(sc);
 }
+
+// The dock is fixed to the bottom on phones; the page keeps its height free so nothing hides under it.
+const dock = $("dock");
+function fitDock() {
+  const fixed = getComputedStyle(dock).position === "fixed";
+  const h = fixed ? dock.getBoundingClientRect().height : 0;
+  document.documentElement.style.setProperty("--dock-h", h + "px");
+  document.body.style.paddingBottom = fixed ? (h + 16) + "px" : "";
+}
+if (window.ResizeObserver) new ResizeObserver(fitDock).observe(dock);
+window.addEventListener("resize", fitDock);
+fitDock();
 
 // A plain background, remembered on this device. The phone's Increase Contrast setting applies it too.
 function setPlain(on) {
