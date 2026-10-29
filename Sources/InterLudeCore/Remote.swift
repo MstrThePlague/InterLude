@@ -235,9 +235,10 @@ public enum RemoteRoutes {
     }
 
     /// The page, with `touchIcon` (a PNG) inline as its Home Screen icon: iOS 27 shows a letter tile for a fetched one.
-    public static func page(token: String, touchIcon: Data = Data(), prefix: String = prefix) -> HTTPResponse {
+    /// `html` is the built-in page unless the server has a newer copy (see interlude-server).
+    public static func page(token: String, touchIcon: Data = Data(), prefix: String = prefix, html: String = RemotePage.html) -> HTTPResponse {
         let icon = touchIcon.isEmpty ? "icon.png" : "data:image/png;base64,\(touchIcon.base64EncodedString())"
-        let html = RemotePage.html.replacingOccurrences(of: "__BASE__", with: pagePath(token: token, prefix: prefix))
+        let html = html.replacingOccurrences(of: "__BASE__", with: pagePath(token: token, prefix: prefix))
             .replacingOccurrences(of: "__TOUCH_ICON__", with: icon)
         return HTTPResponse(contentType: "text/html; charset=utf-8", body: Data(html.utf8), noCache: true)
     }
@@ -251,8 +252,8 @@ public enum RemoteRoutes {
 
 /// The remote's single page. Plain HTML, CSS and script with nothing loaded from elsewhere, apart from album art from
 /// the BBC. Every value from the Mac is set as text, never as markup.
-enum RemotePage {
-    static let html = #"""
+public enum RemotePage {
+    public static let html = #"""
 <!doctype html>
 <html lang="en">
 <head>
@@ -277,7 +278,7 @@ enum RemotePage {
   color-scheme: light dark;
   --bg: #f2f2f7; --card: rgba(255,255,255,.74); --glass-line: rgba(255,255,255,.7); --aurora-op: .3;
   --text: #1c1c1e; --muted: #55555a; --line: rgba(60,60,67,.14);
-  --track-hi: rgba(60,60,67,.3); --card-solid: #ffffff; --card-bar: rgba(242,242,247,.88);
+  --track-hi: rgba(60,60,67,.3); --card-solid: #ffffff; --chip: rgba(0,0,0,.06); --play-bg: #1c1c1e; --play-fg: #ffffff;
   --accent: #0068d6; --green: #0b7a73; --orange: #b0005a; --orange-bg: rgba(255,20,147,.14); --blue: #6a00c0; --red: #d70015;
   --warn-bg: rgba(255,149,0,.16); --pink: #ff1493;
   transition: --c1 1.4s, --c2 1.4s, --c3 1.4s;
@@ -287,7 +288,7 @@ enum RemotePage {
   :root {
     --bg: #070a1e; --card: rgba(11,15,42,.6); --glass-line: rgba(255,255,255,.14); --aurora-op: 1;
     --text: #f2f2f7; --muted: #c6c9df; --line: rgba(255,255,255,.14);
-    --track-hi: rgba(255,255,255,.35); --card-solid: #0f1330; --card-bar: rgba(7,10,30,.86);
+    --track-hi: rgba(255,255,255,.3); --card-solid: #0f1330; --chip: rgba(255,255,255,.1); --play-bg: #ffffff; --play-fg: #0b0d1f;
     --accent: #3d9bff; --green: #5fe3d8; --orange: #ff7cc0; --orange-bg: rgba(255,20,147,.22); --blue: #b98cff; --red: #ff6961;
     --warn-bg: rgba(255,159,10,.18);
     --press: rgba(255,255,255,.08); --track: rgba(118,118,128,.24); --seg-on: rgba(255,255,255,.3); --on-orange: #2a0016;
@@ -329,11 +330,14 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 .now { padding: 18px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; }
 .art { --art: min(64vw, 240px, 32vh); position: relative; width: var(--art); aspect-ratio: 1; border-radius: 18px; overflow: hidden; margin-bottom: 12px;
   box-shadow: 0 0 0 1px rgba(255,255,255,.2), 0 12px 40px -10px var(--c1); display: grid; place-items: center; color: #fff; font-weight: 800;
-  font-size: calc(var(--art) * .38); background: var(--accent); }
+  font-size: calc(var(--art) * .3); background: var(--accent); }
+.art::before { content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(circle at 28% 22%, rgba(255,255,255,.22), transparent 55%),
+    repeating-radial-gradient(circle at 50% 130%, rgba(255,255,255,.07) 0 2px, transparent 2px 26px); }
 .art img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .art .shade { position: absolute; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; }
 .art .shade svg { width: 30%; height: 30%; }
-.meta { display: flex; align-items: center; gap: 8px; font-size: 0.824rem; color: var(--muted); font-weight: 600; }
+.meta { display: flex; align-items: center; gap: 8px; font-size: .76rem; color: var(--muted); font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .pill { font-size: .76rem; font-weight: 800; letter-spacing: .04em; padding: 2px 7px; border-radius: 99px; }
 .pill.live { color: var(--green); background: color-mix(in srgb, var(--green) 16%, transparent); }
 .pill.muted { color: var(--orange); background: var(--orange-bg); }
@@ -342,25 +346,28 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 h1 { font-size: 1.294rem; margin: 2px 0 0; line-height: 1.2; overflow-wrap: anywhere; }
 .sub { color: var(--muted); font-size: 0.941rem; overflow-wrap: anywhere; }
 
-.transport { display: flex; align-items: center; gap: 12px; padding: 6px 0 2px; }
-.play { width: min(5rem, 22vw); height: min(5rem, 22vw); flex: none; border-radius: 50%; color: #fff; display: grid; place-items: center;
-  background: conic-gradient(from 200deg, #0080ff, #8b00ff, #ff1493, #0080ff);
-  box-shadow: inset 0 0 0 1px rgba(255,255,255,.3), 0 0 30px -2px color-mix(in srgb, var(--c1) 70%, transparent); transition: transform .12s; }
+.transport { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.play { width: 4.5rem; height: 4.5rem; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--play-bg); color: var(--play-fg);
+  box-shadow: 0 10px 34px -8px color-mix(in srgb, var(--c1) 70%, transparent); transition: transform .12s; }
 .play:active { transform: scale(.94); }
-.play svg { width: 40%; height: 40%; }
+.play svg { width: 38%; height: 38%; }
+#iconPlay { transform: translateX(6%); }
 .play[aria-busy="true"] { opacity: .7; }
-.volume { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; }
-.vbtn { width: min(3rem, 13vw); height: min(3rem, 13vw); min-width: 44px; min-height: 44px; flex: none; display: grid; place-items: center; border-radius: 50%; color: var(--text);
-  background: var(--card); border: 1px solid var(--glass-line); }
+.volume { width: 100%; display: flex; align-items: center; gap: 2px; }
+.vbtn { width: 2.75rem; height: 2.75rem; flex: none; display: grid; place-items: center; border-radius: 50%; color: var(--muted); }
 .vbtn:active { background: var(--press); }
-.vbtn svg { width: 1.2rem; height: 1.2rem; }
+.vbtn svg { width: 1.3rem; height: 1.3rem; }
 input[type=range] { --fill: 50%; flex: 1; min-width: 0; height: 2.75rem; margin: 0; background: transparent; -webkit-appearance: none; appearance: none; }
-input[type=range]::-webkit-slider-runnable-track { height: 10px; border-radius: 99px; background: linear-gradient(90deg, var(--accent) var(--fill), var(--track-hi) var(--fill)); }
-input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 30px; height: 30px; margin-top: -10px; border-radius: 50%; background: #fff;
+input[type=range]::-webkit-slider-runnable-track { height: 6px; border-radius: 99px; background: linear-gradient(90deg, var(--text) var(--fill), var(--track-hi) var(--fill)); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px; height: 24px; margin-top: -9px; border-radius: 50%; background: #fff;
   border: 1px solid rgba(0,0,0,.15); box-shadow: 0 2px 8px rgba(0,0,0,.35); }
-input[type=range]::-moz-range-track { height: 10px; border-radius: 99px; background: var(--track-hi); }
-input[type=range]::-moz-range-progress { height: 10px; border-radius: 99px; background: var(--accent); }
-input[type=range]::-moz-range-thumb { width: 30px; height: 30px; border-radius: 50%; background: #fff; border: 1px solid rgba(0,0,0,.15); box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+input[type=range]::-moz-range-track { height: 6px; border-radius: 99px; background: var(--track-hi); }
+input[type=range]::-moz-range-progress { height: 6px; border-radius: 99px; background: var(--text); }
+input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: #fff; border: 1px solid rgba(0,0,0,.15); box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.topbar .seg { flex: 1; }
+.iconbtn { width: 2.75rem; height: 2.75rem; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--chip); color: var(--text); }
+.iconbtn svg { width: 1.3rem; height: 1.3rem; }
 
 .rows { overflow: hidden; }
 .row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 3.75rem; text-align: left; }
@@ -407,8 +414,8 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .progress-text { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 0.765rem;
   font-variant-numeric: tabular-nums; }
 
-.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; border-radius: 10px; background: var(--track); }
-.seg button { min-height: 3rem; padding: 0; border-radius: 8px; font-size: 0.882rem; font-weight: 600; color: var(--text); }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px; border-radius: 999px; background: var(--chip); }
+.seg button { min-height: 2.75rem; padding: 0 .9rem; border-radius: 999px; font-size: 0.882rem; font-weight: 600; color: var(--text); }
 .seg button[aria-pressed="true"] { background: var(--seg-on); font-weight: 800; box-shadow: 0 1px 4px rgba(0,0,0,.14), inset 0 0 0 1px var(--glass-line); }
 
 .earlier { overflow: hidden; }
@@ -440,25 +447,30 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .quick { display: none; }
 .artwrap { display: contents; }
-/* Phones: one player screen, like a music app. The artwork takes whatever height is left, play and volume sit low where a thumb
-   rests, and station and speaker are buttons at the bottom. Everything else is a scroll away. */
+@media (min-width: 900px) { .phoneonly { display: none !important; } }
+/* Phones: one player screen, like a music app. Live and Earlier at the top with Settings beside them, the artwork in whatever
+   height is left, the title below it, play and volume low where a thumb rests, and station and speaker at the foot.
+   Everything else is a scroll away. */
 @media (max-width: 899px) {
-  .col.player { display: flex; flex-direction: column; gap: 14px; min-height: 100vh; min-height: calc(100svh - max(16px, env(safe-area-inset-top)) - max(24px, env(safe-area-inset-bottom))); }
+  .col.player { display: flex; flex-direction: column; gap: 16px; min-height: 100vh;
+    min-height: calc(100svh - max(16px, env(safe-area-inset-top)) - max(24px, env(safe-area-inset-bottom))); }
+  .topbar .seg { flex: 0 1 14rem; }
   .now.card { flex: 1 1 auto; min-height: 0; background: none; border: 0; -webkit-backdrop-filter: none; backdrop-filter: none; padding: 0;
     align-items: stretch; text-align: left; gap: 4px; }
   .artwrap { display: grid; place-items: center; flex: 1 1 7rem; min-height: 6rem; container-type: size; }
-  .art { --art: min(100cqw, 100cqh, 24rem); width: var(--art); margin: 0; }
-  .meta { justify-content: flex-start; margin-top: 8px; }
+  .art { --art: min(100cqw, 100cqh, 24rem); width: var(--art); margin: 0; border-radius: 16px; }
+  .meta { justify-content: flex-start; margin-top: 14px; }
   h1 { font-size: 1.65rem; }
   .sub { font-size: 1.05rem; }
-  .transport { padding: 8px 0 0; }
-  .quick { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 9.5rem), 1fr)); gap: 10px; }
-  .qbtn { display: flex; align-items: center; gap: 10px; min-width: 0; min-height: 3.75rem; padding: .5rem .75rem; text-align: left; border-radius: 14px; }
-  .qbtn .label { min-width: 0; }
-  .qbtn .label small { display: block; color: var(--muted); font-size: .76rem; }
-  .qbtn .label span { display: block; overflow-wrap: anywhere; font-weight: 600; line-height: 1.2; }
-  .deskonly { display: none; }
-  .rows:not(:has(#settingsRow:not([hidden]))) { display: none; }
+  .quick { display: flex; flex-wrap: wrap; gap: 10px; }
+  .chip { flex: 1 1 9rem; min-width: 0; display: flex; align-items: center; gap: 10px; min-height: 3rem; padding: .35rem 1rem .35rem .4rem;
+    border-radius: 999px; background: var(--chip); font-weight: 600; text-align: left; }
+  .chip:active { background: var(--press); }
+  .chip .badge { width: 2.25rem; height: 2.25rem; border-radius: 50%; font-size: .8rem; }
+  .chip .icon { width: 2.25rem; height: 2.25rem; color: var(--text); }
+  .chip .icon svg { width: 1.3rem; height: 1.3rem; }
+  .chip .name { min-width: 0; line-height: 1.2; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .deskonly, .rows { display: none; }
 }
 @media (max-width: 899px) and (prefers-color-scheme: dark) {
   .aurora::after { content: ""; position: absolute; inset: 0; background: linear-gradient(rgba(5,7,20,.4), rgba(5,7,20,.62)); }
@@ -466,11 +478,9 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 /* A plain background for anyone who finds the gradient hard to read: chosen at the foot of the page, or by the phone's own settings. */
 :root[data-plain] .aurora { display: none; }
 :root[data-plain] .card, :root[data-plain] .vbtn { background: var(--card-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
-:root[data-plain] .transport { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
 @media (prefers-contrast: more), (prefers-reduced-transparency: reduce) {
   .aurora { display: none; }
   .card, .vbtn { background: var(--card-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
-  .transport { background: var(--bg) !important; -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
 }
 @media (min-width: 900px) {
   main { max-width: 980px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 28px; align-items: start; }
@@ -511,6 +521,14 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
   <div class="banner error" id="error" hidden role="alert"></div>
 
   <div class="col player">
+  <div class="topbar">
+    <div class="seg" role="group" aria-label="Listen">
+      <button id="modeLive" aria-pressed="true">Live</button>
+      <button id="modeEarlier" aria-pressed="false">Earlier</button>
+    </div>
+    <button class="iconbtn phoneonly" id="gearBtn" aria-label="Settings" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.7a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg></button>
+  </div>
+
   <section class="card now" aria-live="polite">
     <div class="artwrap"><div class="art" id="art"><span id="artText">R</span><img id="artImg" alt="" hidden><div class="shade" id="artShade" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"/></svg></div></div></div>
     <div class="meta"><span class="pill" id="pill" hidden></span><span id="stationName"></span></div>
@@ -529,20 +547,15 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
       <svg id="iconStop" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" hidden><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
     </button>
     <div class="volume">
-      <button class="vbtn" id="volDown" aria-label="Quieter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+      <button class="vbtn" id="volDown" aria-label="Quieter"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 9v6h4l5 5V4L9 9H5z"/></svg></button>
       <input type="range" id="volume" min="0" max="100" step="1" value="70" aria-label="Volume">
-      <button class="vbtn" id="volUp" aria-label="Louder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+      <button class="vbtn" id="volUp" aria-label="Louder"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg></button>
     </div>
   </section>
 
-  <div class="seg" role="group" aria-label="Listen">
-    <button id="modeLive" aria-pressed="true">Live</button>
-    <button id="modeEarlier" aria-pressed="false">Earlier</button>
-  </div>
-
   <div class="quick">
-    <button class="card qbtn" id="quickStation"><div class="badge" id="quickBadge">R</div><div class="label"><small>Station</small><span id="quickStationLabel">…</span></div></button>
-    <button class="card qbtn" id="quickSpeaker"><div class="icon" id="quickIcon"></div><div class="label"><small id="quickSpeakerCaption">Play on</small><span id="quickSpeakerLabel">…</span></div></button>
+    <button class="chip" id="quickStation"><div class="badge" id="quickBadge">R</div><span class="name" id="quickStationLabel">…</span></button>
+    <button class="chip" id="quickSpeaker"><span class="icon" id="quickIcon"></span><span class="name" id="quickSpeakerLabel">…</span></button>
   </div>
   </div>
 
@@ -711,7 +724,7 @@ function render(s) {
   // A line that repeats the one above is left out, so a station name isn't shown three times.
   $("headline").textContent = s.headline;
   $("stationName").textContent = s.stationName && s.stationName !== s.headline ? s.stationName : "";
-  const showSub = !!s.subheadline && s.subheadline !== s.headline && s.subheadline !== s.stationName;
+  const showSub = !!s.subheadline && s.subheadline !== s.headline && s.subheadline !== s.stationName && !(!s.playing && s.subheadline === "Ready to play");
   $("subheadline").textContent = showSub ? s.subheadline : "";
   $("subheadline").hidden = !showSub;
   $("startNote").hidden = !(s.stream && s.state === "starting");
@@ -742,8 +755,10 @@ function render(s) {
   const speaker = s.speakers.find(x => x.id === s.speaker) || s.speakers[0];
   $("speakerIcon").innerHTML = $("quickIcon").innerHTML = ICONS[speaker ? speaker.kind : "mac"];
   $("speakerLabel").textContent = $("quickSpeakerLabel").textContent = speaker ? speaker.name : "This Mac";
-  $("speakerCaption").textContent = $("quickSpeakerCaption").textContent = on ? "Playing on" : "Play on";
-  $("settingsRow").hidden = !s.settings;
+  $("speakerCaption").textContent = on ? "Playing on" : "Play on";
+  $("quickStation").setAttribute("aria-label", "Station: " + $("stationLabel").textContent);
+  $("quickSpeaker").setAttribute("aria-label", (on ? "Playing on " : "Play on ") + $("speakerLabel").textContent);
+  $("settingsRow").hidden = $("gearBtn").hidden = !s.settings;
   if (s.settings && $("settingsSheet").open) {
     const key = JSON.stringify(s.settings);
     // Not while the delay slider is held, which a rebuild would drop.
@@ -938,7 +953,7 @@ $("volume").addEventListener("input", e => {
 });
 for (const id of ["stationRow", "quickStation"]) $(id).addEventListener("click", () => { if (!state) return; renderStations(); $("stationSheet").showModal(); });
 for (const id of ["speakerRow", "quickSpeaker"]) $(id).addEventListener("click", () => { if (!state) return; renderSpeakers(); $("speakerSheet").showModal(); });
-$("settingsRow").addEventListener("click", () => { if (!state || !state.settings) return; renderSettings(); $("settingsSheet").showModal(); });
+for (const id of ["settingsRow", "gearBtn"]) $(id).addEventListener("click", () => { if (!state || !state.settings) return; renderSettings(); $("settingsSheet").showModal(); });
 for (const d of document.querySelectorAll("dialog")) {
   d.addEventListener("click", e => { if (e.target === d || e.target.hasAttribute("data-close")) d.close(); });
 }
