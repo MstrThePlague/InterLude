@@ -146,9 +146,6 @@ final class AppModel {
     // State
     var isPlaying = false
     var isStarting = false
-    /// Bar heights for what is being heard right now, from the Mac's player or the Cast device's reported position.
-    /// Nil when neither is playing, where the backdrop falls back to its decorative animation.
-    var spectrumSampler: (@MainActor () -> [Float]?)?
     var status = SessionStatus()
     var errorText: String?
     var stationFailed = false
@@ -158,16 +155,6 @@ final class AppModel {
     enum DiscoveryState { case searching, ready, denied }
     var showWelcome: Bool { didSet { UserDefaults.standard.set(!showWelcome, forKey: "welcomeDismissed") } }
     var demoHidesWelcome = false
-    var showRecent: Bool { didSet { UserDefaults.standard.set(showRecent, forKey: "showRecent") } }
-    func jingleStatus(_ id: String) -> String {
-        let p = profile(id)
-        if !p.idents.isEmpty { return "Learned" }
-        switch p.candidates.count {
-        case 0: return "Not learned yet"
-        case 1, 2: return "Learning: \(p.candidates.count) bulletin\(p.candidates.count == 1 ? "" : "s") heard"
-        default: return "No shared jingle yet (\(p.candidates.count) bulletins)"
-        }
-    }
     var learnedNote: String? {
         let p = profile(onAirStation?.serviceId ?? selectedStationID)
         if status.learningJingle { return "Learning the news jingle…" }
@@ -176,23 +163,6 @@ final class AppModel {
         return p.candidates.isEmpty ? nil : "Learning the news jingle"
     }
     var delayDescription: String { "About \(Int((status.delaySeconds / 5).rounded()) * 5) seconds" }
-    var muteSubtitle: String {
-        let p = profile(selectedStationID)
-        if selectedStation?.kind == .speech { return "Off for speech stations, where talk is the programme." }
-        if p.shadowMode { return "Shadow mode: bulletins are noted but not muted." }
-        if !p.muteNews { return "Off. Bulletins will play." }
-        if mode == .earlier {
-            if p.detector.identOnly && p.idents.isEmpty { return "Set to jingle only, but no jingle is learned yet, so nothing is skipped." }
-            return "Cuts bulletins out, so the programme runs on without them."
-        }
-        if p.detector.identOnly {
-            return p.idents.isEmpty ? "Set to jingle only, but no jingle is learned yet, so nothing is muted. Change this in Settings."
-                                    : "Mutes when the station's news jingle plays."
-        }
-        if ambience == "silence" { return "Silences bulletins until the music returns." }
-        let name = Self.ambienceChoices.first { $0.id == ambience }?.name.lowercased() ?? "a soothing sound"
-        return "Plays \(name) over bulletins until the music returns."
-    }
     var footerText: String {
         guard isReplay, let r = status.replay else { return "\(delayDescription) behind live" }
         return "Started at \(r.programme.start.formatted(date: .omitted, time: .shortened)) · \(Self.duration(status.delaySeconds)) behind live"
@@ -224,7 +194,7 @@ final class AppModel {
         }
         if isStarting { return "Starting about a minute behind live…" }
         guard isPlaying else {
-            if mode == .earlier { return "Pick a programme below" }
+            if mode == .earlier { return "Pick a programme to play from its start" }
             return "Ready to play on \(selectedOutput.label)"
         }
         if status.muted { return "Sound returns when the music does" }
@@ -260,6 +230,15 @@ final class AppModel {
     private var volumeTask: Task<Void, Never>?
     private var remoteMonitor: NWPathMonitor?
     private let token: String
+    /// The panel's own address carries this, new each launch, and it is answered only on loopback.
+    private let panelToken = RemoteRoutes.newToken()
+    /// Why the panel can't show, if the local server couldn't start.
+    private(set) var serverError: String?
+    /// The web app as the panel shows it, from this Mac's own server.
+    var panelURL: URL? {
+        guard let p = server?.port else { return nil }
+        return URL(string: "http://127.0.0.1:\(p)\(RemoteRoutes.pagePath(token: panelToken, prefix: RemoteRoutes.panelPrefix))")
+    }
 
     var selectedStation: Station? { stations.first { $0.serviceId == selectedStationID } }
     var selectedOutput: Output { outputs.first { $0.id == selectedOutputID } ?? .thisMac }
@@ -271,11 +250,13 @@ final class AppModel {
         volume = d.object(forKey: "volume") as? Double ?? 0.7
         mode = Mode(rawValue: d.string(forKey: "mode") ?? "") ?? .live
         port = d.object(forKey: "port") as? Int ?? 8642
+        // `--port` uses another port for this run only, for trying a build beside the installed app.
+        if let i = CommandLine.arguments.firstIndex(of: "--port"), i + 1 < CommandLine.arguments.count,
+           let p = Int(CommandLine.arguments[i + 1]), (1024...65535).contains(p) { port = p }
         bitrate = d.object(forKey: "bitrate") as? Int ?? 320_000
         keepAwake = d.object(forKey: "keepAwake") as? Bool ?? true
         ambience = d.string(forKey: "ambience") ?? "silence"
         showWelcome = !d.bool(forKey: "welcomeDismissed")
-        showRecent = d.bool(forKey: "showRecent")
         remoteEnabled = d.bool(forKey: "remoteEnabled")
         let rt = d.string(forKey: "remoteToken") ?? RemoteRoutes.newToken()
         d.set(rt, forKey: "remoteToken"); remoteToken = rt
@@ -287,6 +268,10 @@ final class AppModel {
             d.set(token, forKey: "token")
         }
         startAtLogin = SMAppService.mainApp.status == .enabled
+        // The panel is the web app, served by the same server as the stream, so it starts with the app.
+        do { try ensureServer() } catch {
+            serverError = "InterLude couldn't start its local server on port \(port): \(error.localizedDescription)"
+        }
         loadCatalogue()
         startDiscovery()
         if mode == .earlier { loadSchedule() }
@@ -497,7 +482,7 @@ final class AppModel {
         timer?.cancel(); timer = nil
         pathMonitor?.cancel(); pathMonitor = nil
         castEvents?.cancel(); castEvents = nil
-        player?.pause(); player = nil; spectrumSampler = nil
+        player?.pause(); player = nil
         if let c = cast { await c.stop(); cast = nil }
         await session?.stop(); session = nil
         await holder.set(nil)
@@ -613,13 +598,6 @@ final class AppModel {
             let p = AVPlayer(url: try playlistURL(host: "127.0.0.1"))
             p.automaticallyWaitsToMinimizeStalling = true
             p.volume = Float(volume); p.play(); player = p
-            if let tape = session?.tape {
-                spectrumSampler = { [weak p] in
-                    guard let p else { return nil }
-                    let t = p.currentTime().seconds
-                    return t.isFinite ? tape.bands(at: t) : nil
-                }
-            }
         case .cast(let device):
             guard let ip = LocalServer.lanAddress() else { throw CastError.rejected("the Mac has no network address") }
             lastAddress = ip
@@ -628,9 +606,6 @@ final class AppModel {
             try await c.load(url: try playlistURL(host: ip), title: settingsTitle(station))
             await c.setVolume(volume)
             cast = c
-            if let tape = session?.tape {
-                spectrumSampler = { [weak c] in c?.playbackSeconds.flatMap { tape.bands(at: $0) } }
-            }
             castEvents = Task { [weak self] in
                 for await e in c.events {
                     guard let self else { return }
@@ -784,16 +759,27 @@ final class AppModel {
         UserDefaults.standard.set(remoteToken, forKey: "remoteToken")
     }
 
+    /// The panel's page, only to this Mac, and the phone remote's, only while it is on.
     private func respondToRemote(_ req: HTTPRequest) -> HTTPResponse {
+        if req.fromLoopback, let route = RemoteRoutes.route(req, token: panelToken, prefix: RemoteRoutes.panelPrefix) {
+            return respond(to: route, panel: true)
+        }
         guard remoteEnabled, let route = RemoteRoutes.route(req, token: remoteToken) else { return .notFound }
+        return respond(to: route, panel: false)
+    }
+
+    private func respond(to route: RemoteRoute, panel: Bool) -> HTTPResponse {
         switch route {
-        case .page: return RemoteRoutes.page(token: remoteToken, touchIcon: Self.remoteTouchIcon, files: Self.webFiles)
+        case .page:
+            return panel ? RemoteRoutes.page(token: panelToken, prefix: RemoteRoutes.panelPrefix, files: Self.webFiles)
+                         : RemoteRoutes.page(token: remoteToken, touchIcon: Self.remoteTouchIcon, files: Self.webFiles)
         case .asset(let name): return RemoteRoutes.asset(name, files: Self.webFiles)
+        case .qr: return panel ? remoteQR() : .notFound
         case .manifest: return RemoteRoutes.manifest
         case .icon: return HTTPResponse(contentType: "image/png", body: Self.remoteIcon)
-        case .state: return RemoteRoutes.json(remoteState())
+        case .state: return RemoteRoutes.json(remoteState(panel: panel))
         case .events: return .notFound      // the page polls the Mac instead
-        case .command(let c): perform(c); return RemoteRoutes.json(remoteState())
+        case .command(let c): perform(c, panel: panel); return RemoteRoutes.json(remoteState(panel: panel))
         }
     }
 

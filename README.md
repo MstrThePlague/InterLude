@@ -5,11 +5,11 @@ InterLude is a small macOS menu bar app that plays BBC radio about a minute behi
 I wanted 6 Music in the background all day without the hourly news, so it is tuned for music stations. Speech stations play normally.
 
 <p align="center">
-  <img src="docs/images/mac-playing.png" width="260" alt="The InterLude panel on the Mac playing 6 Music live, with the track, artwork and volume">
-  <img src="docs/images/mac-muted.png" width="260" alt="The panel while a bulletin is muted, with a Not news button">
+  <img src="docs/images/mac-playing.png" width="260" alt="The InterLude panel on the Mac playing 6 Music live: the station name large, the track and artwork, and play, volume, station and speaker at the bottom">
+  <img src="docs/images/mac-muted.png" width="260" alt="The panel while a bulletin is muted, glowing pink, with a Not news button">
   <img src="docs/images/mac-earlier.png" width="260" alt="An earlier programme playing from its start, with two bulletins skipped and the day's other programmes listed below">
 </p>
-<p align="center"><sub>On the Mac: playing live, muting a bulletin, and an earlier programme with the news cut out.</sub></p>
+<p align="center"><sub>On the Mac: playing live, muting a bulletin, and an earlier programme with the news cut out. Phones and the server's web app look the same.</sub></p>
 
 > **Unofficial.** InterLude is not affiliated with the BBC. It relies on stream addresses the BBC does not document and can change at any time. It sends no telemetry: its only network traffic is to BBC servers, and to speakers and browsers on your own network.
 
@@ -19,6 +19,7 @@ I wanted 6 Music in the background all day without the hourly news, so it is tun
 - Recognises each bulletin as it arrives and replaces it with silence, or with ocean waves, a woodland stream or birdsong if you prefer. When the bulletin ends, the station comes back.
 - Plays on the Mac, on a Chromecast, or on a Cast group, and you can switch speaker while it plays.
 - **Earlier** plays a programme from the last 30 days from its start, with the bulletins cut out rather than muted. The last 11 hours come from the live stream; anything older comes from the programme's BBC Sounds episode.
+- One interface everywhere: the Mac's menu bar panel, the phone remote and the server's web app are the same page, so they look and work alike. On a wide window, Earlier and the news sit beside the player.
 - A phone remote: scan a QR code and control InterLude from a phone on the same Wi-Fi, or from anywhere on your tailnet if the Mac runs Tailscale.
 - Learns a station's news theme from the last few hours of broadcast, the first time you play it (so far proven on 6 Music).
 - Keeps a log of every decision, so a wrong mute can be explained and the rules improved.
@@ -51,7 +52,7 @@ The details are in [docs/on-demand.md](docs/on-demand.md).
 
 ### Phone remote
 
-Turn on **Settings › Phone remote** and point a phone's camera at the QR code. The remote opens in the phone's browser, with nothing to install: play and stop, volume, station, speaker, whether a bulletin is muted, and the **Not news** and **News got through** buttons. Its **Earlier** switch lists each day's programmes from the last 30 days; tap one to play it from the start, and the phone shows how far in you are and how much news was skipped. On an iPhone, Share › Add to Home Screen keeps it as an icon.
+Turn on **Settings › Phone remote** and point a phone's camera at the QR code. The remote opens in the phone's browser, with nothing to install, and is the same as the Mac's panel: play and stop, volume, station, speaker, favourites, whether a bulletin is muted, recent mutes, and the **Not news** and **News got through** buttons. Its Settings has the station's news options; the Mac's own (start at login, port, the phone remote itself) stay in the Mac's panel. Its **Earlier** switch lists each day's programmes from the last 30 days; tap one to play it from the start, and the phone shows how far in you are and how much news was skipped. On an iPhone, Share › Add to Home Screen keeps it as an icon.
 
 The remote is served by the same small web server the Chromecasts use. Its address carries a long random code, so other people on the network can't guess it; **Reset link** makes a new one and the old link stops working. The Mac has to be awake with InterLude open. In Live, Play on the phone plays live; in Earlier it plays the programme last picked from its start, or live if none was. If the Mac's firewall is on, macOS asks once whether InterLude may accept incoming connections.
 
@@ -106,7 +107,7 @@ Then:
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test --scratch-path ~/Library/Caches/InterLudeBuild
 ```
 
-To see the panel's states without playing anything, launch with `--demo=playing`, `--demo=muted`, `--demo=upcoming`, `--demo=error`, `--demo=earlier`, `--demo=earlier-past`, `--demo=replay` or `--demo=settings`. Add `--snapshot=<file.png>` to save the window as a picture and quit, as for the screenshots here.
+The Mac's panel is the web app in `Web/`, shown in a web view and served by the app's own local server, so the panel, the phone remote and the server's page are one set of files. To see the panel's states without playing anything, launch with `--demo=playing`, `--demo=muted`, `--demo=upcoming`, `--demo=error`, `--demo=earlier`, `--demo=earlier-past`, `--demo=replay`, `--demo=settings` or `--demo=settings-end`. Add `--snapshot=<file.png>` to save the window as a picture and quit, as for the screenshots here, and `--port <number>` to run beside an installed copy that already uses its port.
 
 ## Running the server
 
@@ -171,7 +172,7 @@ To get `server-events.jsonl`, run `docker compose cp interlude:/var/lib/interlud
 | File | What it holds |
 |---|---|
 | `Application Support/InterLude/stations.json` | The station list and stream address template. Edit a station's pool ID here if the BBC changes it; the change takes effect within a few seconds. |
-| `Application Support/InterLude/web/` | Optional `index.html`, `app.css` or `app.js` to use in place of the phone remote's own, for trying changes without a rebuild. |
+| `Application Support/InterLude/web/` | Optional `index.html`, `app.css` or `app.js` to use in place of the app's own, for trying changes to the panel and phone remote without a rebuild. |
 | `Application Support/InterLude/profiles/` | Per-station settings, bulletin minutes and the learned news theme. |
 | `Application Support/InterLude/events.jsonl` | One line per detected bulletin and per correction. Settings › Export diagnostics zips these up. |
 
@@ -191,8 +192,8 @@ The server keeps the same files in its `data` volume (`/var/lib/interlude` in th
 | `Sources/InterLudeCast` | Casting from Linux: a Chromecast client on SwiftNIO and a multicast DNS browser for finding speakers. |
 | `Sources/COnnxRuntime`, `CWhisper`, `CGGML` | Module maps that let Swift call the ONNX Runtime, whisper.cpp and ggml C libraries. |
 | `Sources/InterLudeServer` | `interlude-server`, InterLude as a web app on a Linux host. `Dockerfile` and `compose.yaml` build and run it; `interlude-server --check <audio>` runs its models on a file. |
-| `Sources/InterLudeApp` | The SwiftUI menu bar app. |
-| `Web` | The web app: `index.html`, `app.css` and `app.js`, served from disk as the Mac's phone remote and the server's page, plus the server's icons. |
+| `Sources/InterLudeApp` | The Mac app: the menu bar item and window, which show the web app in a web view, and the model behind it. |
+| `Web` | The web app, InterLude's one interface: `index.html`, `app.css` and `app.js`, served from disk as the Mac's panel, its phone remote and the server's page, plus the server's icons. |
 | `Tests` | Unit tests for the parts that can be tested without a network or speakers. |
 | `Tools` | Command-line programs used to measure and tune detection (below). |
 | `docs` | Notes on on-demand playback, release notes and screenshots. `docs/archive` holds the findings and manual test checklists from early development. |
