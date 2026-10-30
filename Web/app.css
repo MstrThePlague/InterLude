@@ -131,6 +131,7 @@ dialog:not([open]) { display: none; }
 dialog::backdrop { background: rgba(0,0,0,.4); }
 .sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 16px 16px 8px; }
 .sheet-head h2 { margin: 0; font-size: 1.176rem; }
+.sheet-body:focus { outline: none; }
 .sheet-body { overflow-y: auto; padding: 0 16px max(20px, env(safe-area-inset-bottom)); -webkit-overflow-scrolling: touch; }
 .group-title { color: var(--muted); font-size: 0.765rem; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin: 16px 4px 6px; }
 .check { width: 20px; height: 20px; color: var(--accent); flex: none; }
@@ -175,12 +176,10 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .empty .link { display: block; padding: 8px 0 0; }
 
 .col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-.quick { display: none; }
-.np, .nptext, .artwrap, .dock { display: contents; }
-@media (min-width: 900px) { .phoneonly { display: none !important; } }
-/* Phones: "On air". Live and Earlier at the top, the station's name large over a single glow in its colour, what's playing
-   beneath it, and every control in a dock fixed to the bottom edge, so nothing scrolls away even at large text. */
-@media (max-width: 899px) {
+/* "On air", the one layout everywhere: Live and Earlier at the top, the station's name large over a single glow in its
+   colour, what's playing beneath it, and every control in a dock fixed to the bottom edge, so nothing scrolls away even at
+   large text. Wide screens keep the player as a column and put Earlier and the news beside it (below). */
+.artwrap { display: contents; }
   /* The player fills the first screen and keeps clear of the dock, so whatever follows starts below it. */
   .col.player { display: flex; flex-direction: column; gap: 16px; padding-bottom: calc(var(--dock-h, 15rem) + 8px);
     min-height: calc(100vh - max(16px, env(safe-area-inset-top)));
@@ -230,15 +229,13 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
   .chip .name { min-width: 0; line-height: 1.2; }
   .chip .name small { display: block; font-size: .72rem; font-weight: 500; color: var(--muted); }
   .chip .name span { display: block; overflow-wrap: break-word; }
-  .deskonly, .rows { display: none; }
   /* One soft glow in the station's colour (pink through a bulletin) in place of the drifting fields */
   .aurora i { display: none; }
   .aurora::before { content: ""; position: absolute; left: -30%; right: -30%; top: -25%; height: 80%;
     background: radial-gradient(closest-side, color-mix(in srgb, var(--c1) 48%, transparent), transparent); }
-}
-@media (max-width: 899px) and (prefers-color-scheme: dark) { :root { --bg: #0a0a0f; } }
-/* The glow changes colour at once on phones: some browsers don't repaint a pseudo-element while a registered colour transitions. */
-@media (max-width: 899px) { :root { transition: none; } }
+@media (prefers-color-scheme: dark) { :root { --bg: #0a0a0f; } }
+/* The glow changes colour at once: some browsers don't repaint a pseudo-element while a registered colour transitions. */
+:root { transition: none; }
 @keyframes eq { from { height: 25%; } to { height: 100%; } }
 @media (prefers-reduced-motion: reduce) { .eq i { animation: none !important; } }
 /* A plain background for anyone who finds the gradient hard to read: chosen at the foot of the page, or by the phone's own settings. */
@@ -248,11 +245,16 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
   .aurora { display: none; }
   .card, .vbtn { background: var(--card-solid); -webkit-backdrop-filter: none; backdrop-filter: none; }
 }
+/* Wide screens: the player is a column the height of the window, its dock at the foot, and Earlier, the news and recent
+   mutes run beside it. Sheets open as a panel on the right rather than over the player. */
 @media (min-width: 900px) {
-  main { max-width: 980px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 28px; align-items: start; }
-  main > .banner, main > footer, main > .plainrow { grid-column: 1 / -1; }
-  main > .col.player { position: sticky; top: 16px; }      /* the player stays in view beside a long list */
-  dialog { margin: auto; border-radius: 18px; max-height: 80vh; }
+  main { max-width: 1060px; display: grid; grid-template-columns: minmax(340px, 440px) minmax(0, 1fr); gap: 14px 32px; align-items: start; }
+  main > .banner, main > .welcome { grid-column: 1 / -1; }
+  main > footer, main > .plainrow { grid-column: 2; }
+  .col.player { position: sticky; top: 16px; height: calc(100vh - 32px); height: calc(100svh - 32px); min-height: 0; padding-bottom: 0; }
+  .dock { position: static; transform: none; width: auto; margin-top: auto; border-radius: 1.75rem; border: 1px solid var(--glass-line); }
+  .col.side { padding-top: 3.6rem; }
+  dialog { margin: 0 0 0 auto; height: 100vh; max-height: 100vh; width: min(480px, 46vw); max-width: none; border-radius: 18px 0 0 18px; }
 }
 .set { display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 52px; }
 .set + .set { border-top: 1px solid var(--line); }
@@ -277,3 +279,41 @@ select { font: inherit; color: inherit; background: var(--track); border: 0; bor
 .toast { position: fixed; left: 50%; top: max(16px, env(safe-area-inset-top)); transform: translateX(-50%); background: rgba(40,40,40,.94);
   color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 0.882rem; max-width: calc(100% - 32px); text-align: center; z-index: 10;
   transition: opacity .25s; }
+
+/* Cards the old desktop layout had and phones now share: welcome, ways out of an error, the news switch, recent mutes,
+   and a star for favourites. */
+.welcome { padding: 14px 16px; }
+.welcome p { margin: 6px 0 0; color: var(--muted); font-size: .9rem; }
+.welcome .link { padding-bottom: 0; }
+.banner .actions { justify-content: flex-start; gap: 16px; margin-top: 8px; }
+.banner .actions:empty { display: none; }
+.banner .btn { background: var(--red); color: #fff; }
+.news .set { min-height: 0; }
+.news .set .label span { font-weight: 600; }
+.news .secondary { border-top: 1px solid var(--line); }
+.recent { overflow: hidden; }
+.recent-head { width: 100%; display: flex; align-items: center; gap: 8px; padding: 12px 14px; min-height: 2.9rem; color: var(--muted);
+  font-size: .82rem; font-weight: 700; text-align: left; }
+.recent-head .chev { width: 12px; height: 12px; transition: transform .2s; }
+.recent-head[aria-expanded="true"] .chev { transform: rotate(90deg); }
+.recent-head .count { font-variant-numeric: tabular-nums; background: var(--chip); border-radius: 99px; padding: 0 7px; }
+.mute { display: flex; align-items: center; gap: 10px; padding: 6px 14px; min-height: 2.75rem; border-top: 1px solid var(--line); font-size: .88rem; }
+.mute .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--green); flex: none; }
+.mute.open .dot { background: var(--pink); }
+.mute.notNews .dot { background: var(--muted); }
+.mute .time { font-variant-numeric: tabular-nums; font-weight: 600; }
+.mute .len { color: var(--muted); flex: 1; }
+.mute small { color: var(--muted); }
+.mute .link { font-size: .82rem; padding: 0; }
+.star { width: 2.75rem; height: 2.75rem; flex: none; display: grid; place-items: center; color: var(--muted); }
+.star svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linejoin: round; }
+.star[aria-pressed="true"] { color: #f5b301; }
+.star[aria-pressed="true"] svg { fill: currentColor; }
+input.minutes { font: inherit; color: inherit; width: 7.5rem; text-align: right; background: var(--track); border: 0; border-radius: 8px;
+  padding: 6px 10px; -webkit-user-select: text; user-select: text; }
+.qr img { display: block; width: 100%; height: auto; image-rendering: pixelated; }
+input.toggle:disabled { opacity: .4; cursor: default; }
+/* In the Mac's panel the page is the whole window: no Home Screen hints, and room is tight. */
+:root.panel body { padding-top: 12px; }
+:root.panel { scrollbar-width: none; }
+:root.panel ::-webkit-scrollbar { display: none; }

@@ -22,7 +22,12 @@
 <main>
   <div class="banner offline" id="offline" hidden role="status"><b>Can't reach InterLude</b><span id="offlineText">Check that the Mac is awake, InterLude is open, and this phone is on the same Wi-Fi.</span></div>
   <div class="banner offline" id="gone" hidden role="status"><b>This link has stopped working</b><span id="goneText">The remote was turned off or its link was reset. Open InterLude's Settings on the Mac and scan the code again.</span></div>
-  <div class="banner error" id="error" hidden role="alert"></div>
+  <div class="banner error" id="error" hidden role="alert"><span id="errorText"></span><div class="actions" id="errorActions"></div></div>
+  <section class="card welcome" id="welcome" hidden>
+    <b>Welcome to InterLude</b>
+    <p>Pick a station and a speaker, then press play. InterLude plays about a minute behind live, so it can hear each news bulletin coming and silence it for you. It lives in the menu bar.</p>
+    <button class="link" id="welcomeOk">Got it</button>
+  </section>
 
   <div class="col player">
   <div class="topbar">
@@ -30,13 +35,13 @@
       <button id="modeLive" aria-pressed="true">Live</button>
       <button id="modeEarlier" aria-pressed="false">Earlier</button>
     </div>
-    <button class="iconbtn phoneonly" id="gearBtn" aria-label="Settings" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.7a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg></button>
+    <button class="iconbtn" id="gearBtn" aria-label="Settings" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.7a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg></button>
   </div>
 
   <section class="card now" aria-live="polite">
-    <div class="eq phoneonly" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
-    <div class="eyebrow phoneonly" id="eyebrow"></div>
-    <div class="bigname phoneonly" id="bigName"></div>
+    <div class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="eyebrow" id="eyebrow"></div>
+    <div class="bigname" id="bigName"></div>
     <div class="np">
       <div class="artwrap"><div class="art" id="art"><span id="artText">R</span><img id="artImg" alt="" hidden><div class="shade" id="artShade" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"/></svg></div></div></div>
       <div class="nptext">
@@ -45,7 +50,7 @@
         <div class="sub" id="subheadline">Connecting…</div>
       </div>
     </div>
-    <div class="lede phoneonly">Plays a minute behind live and mutes each news bulletin for you.</div>
+    <div class="lede">Plays a minute behind live and mutes each news bulletin for you.</div>
     <div class="hint" id="startNote" hidden>Starting. The first start takes about 20 seconds while InterLude builds its delay.</div>
     <button class="btn golive" id="goLive" hidden>Play live instead</button>
     <div class="progress" id="progress" hidden aria-label="Position in programme">
@@ -78,30 +83,24 @@
   </div>
   </div>
 
-  <div class="col">
-  <section class="card rows">
-    <button class="row deskonly" id="stationRow">
-      <div class="badge" id="stationBadge">R</div>
-      <div class="label"><small>Station</small><span id="stationLabel">…</span></div>
-      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
-    </button>
-    <button class="row deskonly" id="speakerRow">
-      <div class="icon" id="speakerIcon"></div>
-      <div class="label"><small id="speakerCaption">Play on</small><span id="speakerLabel">…</span></div>
-      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
-    </button>
-    <button class="row" id="settingsRow" hidden>
-      <div class="icon"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.7a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg></div>
-      <div class="label"><span>Settings</span></div>
-      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
-    </button>
-  </section>
-
+  <div class="col side">
   <section class="card news" id="news" hidden>
-    <div class="secondary">
+    <div class="set">
+      <div class="label"><span id="newsTitle">Mute news</span><small id="newsDetail"></small></div>
+      <input type="checkbox" class="toggle" role="switch" id="newsToggle" aria-labelledby="newsTitle">
+    </div>
+    <div class="secondary" id="correct" hidden>
       <button class="link" id="gotThrough">News got through</button>
       <small id="note"></small>
     </div>
+  </section>
+
+  <section class="card recent" id="recent" hidden>
+    <button class="recent-head" id="recentHead" aria-expanded="false" aria-controls="recentList">
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+      <span id="recentTitle">Recent mutes</span><span class="count" id="recentCount"></span>
+    </button>
+    <div id="recentList" hidden></div>
   </section>
 
   <section class="card earlier" id="earlier" hidden>
@@ -120,15 +119,15 @@
 
 <dialog id="stationSheet" aria-labelledby="stationSheetTitle">
   <div class="sheet-head"><h2 id="stationSheetTitle">Station</h2><button class="link" data-close>Done</button></div>
-  <div class="sheet-body" id="stationList"></div>
+  <div class="sheet-body" tabindex="-1" id="stationList"></div>
 </dialog>
 <dialog id="speakerSheet" aria-labelledby="speakerSheetTitle">
   <div class="sheet-head"><h2 id="speakerSheetTitle">Play on</h2><button class="link" data-close>Done</button></div>
-  <div class="sheet-body" id="speakerList"></div>
+  <div class="sheet-body" tabindex="-1" id="speakerList"></div>
 </dialog>
 <dialog id="settingsSheet" aria-labelledby="settingsSheetTitle">
   <div class="sheet-head"><h2 id="settingsSheetTitle">Settings</h2><button class="link" data-close>Done</button></div>
-  <div class="sheet-body" id="settingsList"></div>
+  <div class="sheet-body" tabindex="-1" id="settingsList"></div>
 </dialog>
 <audio id="player" preload="none"></audio>
 <div class="toast" id="toast" hidden role="status"></div>

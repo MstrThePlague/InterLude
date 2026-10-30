@@ -194,8 +194,10 @@ do {
         case .asset(let name): return RemoteRoutes.asset(name, files: files)
         case .manifest: return RemoteRoutes.manifest
         case .icon: return HTTPResponse(contentType: "image/png", body: icon)
+        case .qr: return .notFound      // the page draws its own
         case .state, .events: return RemoteRoutes.json(await controller.state())
         case .command(let c):
+            guard !c.macOnly else { return .notFound }
             guard sameOrigin(req) else { return text(403, "Commands must come from InterLude's own page.\n") }
             await controller.perform(c)
             return RemoteRoutes.json(await controller.state())
