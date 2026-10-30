@@ -40,7 +40,7 @@ Muted segments are replaced one for one with segments carrying the same timestam
 
 ### Earlier programmes
 
-Switch the panel from **Live** to **Earlier**, step back through the days, and pick a programme. It plays from its start:
+Switch the panel from **Live** to **Earlier**, step back through the days, and pick a programme. Looking through Earlier, or another station's programmes, doesn't stop what's playing; back in Live, **Play … live instead** switches to the station live. A picked programme plays from its start:
 
 - **From the live stream** if it began in the last 11 hours or so. The BBC's live origin lists six hours of segments but keeps about eleven, so InterLude fetches them by index.
 - **On demand** if it is older (up to 30 days) and has finished. InterLude asks the BBC's media selector for the episode, opens the HLS stream it offers, and lines the episode's segments up with the time they were broadcast, so the detector works exactly as it does live.
@@ -121,7 +121,7 @@ InterLude also runs as a web app on a Linux machine, so it works with no Mac inv
 It ships as a Docker image for x86-64 Linux. You need Docker with Compose, and about 1 GB of memory free.
 
 ```
-mkdir interlude && cd interlude
+mkdir -p interlude/config && cd interlude
 curl -fsSLO https://raw.githubusercontent.com/MstrThePlague/InterLude/main/compose.yaml
 docker compose pull && docker compose up -d
 docker compose logs | grep "Open the app"
@@ -146,7 +146,9 @@ sudo tailscale serve --bg --https=8443 http://127.0.0.1:8642
 
 Then open `https://<server's tailnet name>:8443/app/<code>/`. Cast speakers still use the LAN address.
 
-**Updating:** `docker compose pull && docker compose up -d`. Each release tag publishes the image as `ghcr.io/mstrtheplague/interlude-server`. To build from a checkout instead: `docker compose up -d --build`.
+**Updating:** `docker compose pull && docker compose up -d`. Each release tag publishes the image as `ghcr.io/mstrtheplague/interlude-server`. Each change to the server on `main` publishes `:edge` too; set `INTERLUDE_TAG=edge` to follow it. To build from a checkout instead: `docker compose up -d --build`. Only the web app's files sit after the Swift build, so a change to the page alone rebuilds in seconds.
+
+**Changing the page or stations without a rebuild.** The `config` folder beside `compose.yaml` can hold a `stations.json` and a `web` folder with `index.html`, `app.css` and `app.js`. Each one there is used in place of the image's own. The server reads them again within a few seconds of a change, carries on playing (unless the playing station's stream address changed, when it starts again), and open pages reload themselves. From a checkout, `scripts/push-config.sh <host>` copies `Web/` and `Data/stations.json` across. Delete a file from `config` to go back to the image's copy.
 
 **Backing up.** Settings, station profiles and learned news jingles live in the `data` volume. To copy them out:
 
@@ -168,19 +170,20 @@ To get `server-events.jsonl`, run `docker compose cp interlude:/var/lib/interlud
 
 | File | What it holds |
 |---|---|
-| `Application Support/InterLude/stations.json` | The station list and stream address template. Edit a station's pool ID here if the BBC changes it. |
+| `Application Support/InterLude/stations.json` | The station list and stream address template. Edit a station's pool ID here if the BBC changes it; the change takes effect within a few seconds. |
+| `Application Support/InterLude/web/` | Optional `index.html`, `app.css` or `app.js` to use in place of the phone remote's own, for trying changes without a rebuild. |
 | `Application Support/InterLude/profiles/` | Per-station settings, bulletin minutes and the learned news theme. |
 | `Application Support/InterLude/events.jsonl` | One line per detected bulletin and per correction. Settings › Export diagnostics zips these up. |
 
 Inside the App Sandbox, `Application Support` is the app's own container under `~/Library/Containers`.
 
-The server keeps the same files in its `data` volume (`/var/lib/interlude` in the container), plus `settings.json`, which holds its settings and the code in the app's link.
+The server keeps the same files in its `data` volume (`/var/lib/interlude` in the container), plus `settings.json`, which holds its settings and the code in the app's link. A station list or web app in its `config` folder (`/etc/interlude`) is used in place of these and the image's own.
 
 ## Project layout
 
 | Folder | Contents |
 |---|---|
-| `Sources/InterLudeCore` | Everything that isn't user interface or tied to Apple's frameworks: stream handling, MPEG-TS, detection, playout, the phone remote's page and the Cast protocol. Builds and tests on Linux too. |
+| `Sources/InterLudeCore` | Everything that isn't user interface or tied to Apple's frameworks: stream handling, MPEG-TS, detection, playout, the phone remote's routes and state, and the Cast protocol. Builds and tests on Linux too. |
 | `Sources/InterLudeApple` | The Mac's implementations of what the core asks the platform for: AAC decoding and encoding, the sound classifier, speech recognition, signal maths, the local server and Cast discovery. |
 | `Sources/InterLudePortable` | Implementations that work away from the Mac, on Linux and Windows: decoding and encoding audio with ffmpeg. |
 | `Sources/InterLudeHTTP` | The web server for macOS and Linux, on Hummingbird. |
@@ -189,11 +192,11 @@ The server keeps the same files in its `data` volume (`/var/lib/interlude` in th
 | `Sources/COnnxRuntime`, `CWhisper`, `CGGML` | Module maps that let Swift call the ONNX Runtime, whisper.cpp and ggml C libraries. |
 | `Sources/InterLudeServer` | `interlude-server`, InterLude as a web app on a Linux host. `Dockerfile` and `compose.yaml` build and run it; `interlude-server --check <audio>` runs its models on a file. |
 | `Sources/InterLudeApp` | The SwiftUI menu bar app. |
-| `Web` | The server's app icons. Its page is the phone remote's, in `Sources/InterLudeCore/Remote.swift`. |
+| `Web` | The web app: `index.html`, `app.css` and `app.js`, served from disk as the Mac's phone remote and the server's page, plus the server's icons. |
 | `Tests` | Unit tests for the parts that can be tested without a network or speakers. |
 | `Tools` | Command-line programs used to measure and tune detection (below). |
 | `docs` | Notes on on-demand playback, release notes and screenshots. `docs/archive` holds the findings and manual test checklists from early development. |
-| `scripts` | Building and packaging the Mac app, installing the server's native libraries on Linux, preparing YAMNet, comparing two event logs, and `push-web.sh`, which puts a changed web page on a running server without rebuilding its image. |
+| `scripts` | Building and packaging the Mac app, installing the server's native libraries on Linux, preparing YAMNet, comparing two event logs, and `push-config.sh`, which puts the web app and station list on a running server without rebuilding its image. |
 
 ### Tools
 
