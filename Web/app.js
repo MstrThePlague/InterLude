@@ -1,5 +1,5 @@
-// InterLude's web app: the Mac's phone remote and interlude-server's page. Served from disk (see WebFiles), so it
-// can change without a rebuild; open pages load themselves again when it does.
+// InterLude's web app, the one interface everywhere: the Mac's menu bar panel, its phone remote, and interlude-server's
+// page. Served from disk (see WebFiles), so it can change without a rebuild; open pages load themselves again when it does.
 // Plain script with nothing loaded from elsewhere, apart from album art from the BBC. Every value from the Mac or
 // server is set as text, never as markup.
 "use strict";
@@ -10,11 +10,17 @@ const ICONS = {
   group: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 4h7a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 10 20H3a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 3 4zm3.5 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM14 4h7a1.5 1.5 0 0 1 1.5 1.5v13A1.5 1.5 0 0 1 21 20h-7a1.5 1.5 0 0 1-1.5-1.5v-13A1.5 1.5 0 0 1 14 4zm3.5 6a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"/></svg>',
   browser: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 3h16a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2zm0 5v11h16V8H4zm1.5-3.5a1 1 0 1 0 0 2 1 1 0 0 0 0-2zm3 0a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>'
 };
-// On a server the page is the whole app, at /app/<token>/; on the Mac it is the phone remote.
+// On a server the page is the whole app, at /app/<token>/; on the Mac it is the menu bar panel at /panel/<token>/, or
+// the phone remote at /remote/<token>/.
 const ON_SERVER = location.pathname.startsWith("/app/");
+const IN_PANEL = location.pathname.startsWith("/panel/");
+document.documentElement.classList.toggle("panel", IN_PANEL);
 if (ON_SERVER) {
   $("offlineText").textContent = "Check that the server is running and this device is on your network or tailnet.";
   $("goneText").textContent = "The link was reset. Open the new one from Settings on a device that has it, or from the server's log.";
+} else if (IN_PANEL) {
+  $("offlineText").textContent = "InterLude isn't answering. Quit and open it again.";
+  $("goneText").textContent = "InterLude has restarted. Close this window and open it again from the menu bar.";
 }
 const CHECK = '<svg class="check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m5 12 5 5 9-10"/></svg>';
 const PROG_ICONS = {
@@ -58,7 +64,7 @@ async function refresh() {
     if (state.stream && window.EventSource) { listen(); return; }
   }
   catch (e) { failures++; if (e.gone) connected(false, true); else if (failures >= 2) connected(false); }
-  if (!document.hidden || here) timer = setTimeout(refresh, failures ? 3000 : 1500);
+  if (!document.hidden || here) timer = setTimeout(refresh, failures ? 3000 : IN_PANEL ? 1000 : 1500);
 }
 let source = null;
 function listen() {
@@ -91,7 +97,9 @@ function render(s) {
   if (s.pageVersion && s.pageVersion !== PAGE_VERSION && !document.querySelector("dialog[open]")) { location.reload(); return; }
   state = s;
   $("error").hidden = !s.error;
-  $("error").textContent = s.error || "";
+  $("errorText").textContent = s.error || "";
+  renderRecover(s.recover || []);
+  $("welcome").hidden = !s.welcome;
 
   const station = s.stations.find(x => x.id === s.station);
   // The player shows the station on air, which can differ from the one chosen for browsing Earlier.
@@ -143,26 +151,35 @@ function render(s) {
   else if (Date.now() > volumeHeldUntil) $("volume").value = Math.round(s.volume * 100);
   fillRange($("volume"));
 
-  paintBadge($("stationBadge"), station); paintBadge($("quickBadge"), station);
+  paintBadge($("quickBadge"), station);
   $("bigName").textContent = onAir ? onAir.name : "InterLude";
   const tint = colourOf(onAir && onAir.colour);
   if (tint) document.documentElement.style.setProperty("--station", tint); else document.documentElement.style.removeProperty("--station");
-  $("stationLabel").textContent = $("quickStationLabel").textContent = station ? station.name : "Choose a station";
+  $("quickStationLabel").textContent = station ? station.name : "Choose a station";
   const speaker = s.speakers.find(x => x.id === s.speaker) || s.speakers[0];
-  $("speakerIcon").innerHTML = $("quickIcon").innerHTML = ICONS[speaker ? speaker.kind : "mac"];
-  $("speakerLabel").textContent = $("quickSpeakerLabel").textContent = speaker ? speaker.name : "This Mac";
-  $("speakerCaption").textContent = $("quickSpeakerCaption").textContent = on ? "Playing on" : "Play on";
-  $("quickStation").setAttribute("aria-label", "Station: " + $("stationLabel").textContent);
-  $("quickSpeaker").setAttribute("aria-label", (on ? "Playing on " : "Play on ") + $("speakerLabel").textContent);
-  $("settingsRow").hidden = $("gearBtn").hidden = !s.settings;
+  $("quickIcon").innerHTML = ICONS[speaker ? speaker.kind : "mac"];
+  $("quickSpeakerLabel").textContent = speaker ? speaker.name : "This Mac";
+  $("quickSpeakerCaption").textContent = on ? "Playing on" : "Play on";
+  $("quickStation").setAttribute("aria-label", "Station: " + $("quickStationLabel").textContent);
+  $("quickSpeaker").setAttribute("aria-label", (on ? "Playing on " : "Play on ") + $("quickSpeakerLabel").textContent);
+  $("gearBtn").hidden = !s.settings;
   if (s.settings && $("settingsSheet").open) {
     const key = JSON.stringify(s.settings);
-    // Not while the delay slider is held, which a rebuild would drop.
-    if (key !== shownSettings && document.activeElement?.type !== "range") renderSettings();
+    // Not while a slider is held or a field typed in, which a rebuild would drop.
+    const busy = document.activeElement && $("settingsList").contains(document.activeElement) && document.activeElement.type !== "checkbox";
+    if (key !== shownSettings && !busy) renderSettings();
   }
   updateMediaSession();
 
-  $("news").hidden = !s.canCorrect;
+  $("news").hidden = !s.news;
+  if (s.news) {
+    $("newsTitle").textContent = s.news.title;
+    $("newsDetail").textContent = s.news.detail;
+    $("newsToggle").checked = s.news.on;
+    $("newsToggle").disabled = !s.news.available;
+  }
+  $("correct").hidden = !s.canCorrect;
+  renderRecent(s);
   const alert = $("alert");
   if (s.justSkipped != null) {
     alert.hidden = false; $("notNews").hidden = true;
@@ -204,6 +221,61 @@ function renderReplay(r) {
   }
   $("position").textContent = r.position;
   $("skipped").textContent = r.skipped || "";
+}
+
+// Ways out of an error, such as playing on this Mac after a speaker failed.
+let shownRecover = "";
+function renderRecover(ways) {
+  const key = ways.join();
+  if (key === shownRecover) return;
+  shownRecover = key;
+  const box = $("errorActions");
+  box.replaceChildren();
+  box.hidden = !ways.length;
+  for (const w of ways) {
+    const b = document.createElement("button"); b.className = w === "retry" ? "btn" : "link";
+    b.textContent = w === "retry" ? "Try again" : "Play on this Mac";
+    b.addEventListener("click", async () => {
+      if (w === "here") await send("speaker", { id: "mac" });
+      if (playsHere() && !here) playHere();
+      await send("play");
+    });
+    box.append(b);
+  }
+}
+
+// The bulletins muted or skipped lately, folded away unless opened; a wrong one can be marked.
+let shownRecent = "";
+function recentOpen() { try { return localStorage.getItem("recentOpen") === "1"; } catch { return false; } }
+function renderRecent(s) {
+  const list = s.recent || [];
+  $("recent").hidden = !list.length;
+  if (!list.length) return;
+  $("recentTitle").textContent = s.recentTitle || "Recent mutes";
+  $("recentCount").textContent = list.filter(r => r.kind !== "notNews").length;
+  const open = recentOpen();
+  $("recentHead").setAttribute("aria-expanded", open ? "true" : "false");
+  $("recentList").hidden = !open;
+  const key = JSON.stringify(list);
+  if (key === shownRecent) return;
+  shownRecent = key;
+  const box = $("recentList");
+  box.replaceChildren();
+  for (const r of list) {
+    const row = document.createElement("div"); row.className = "mute " + r.kind;
+    const dot = document.createElement("span"); dot.className = "dot"; dot.setAttribute("aria-hidden", "true");
+    const t = document.createElement("span"); t.className = "time"; t.textContent = r.time;
+    const l = document.createElement("span"); l.className = "len"; l.textContent = r.length;
+    row.append(dot, t, l);
+    if (r.kind === "notNews") { const n = document.createElement("small"); n.textContent = "Not news"; row.append(n); }
+    else if (r.kind === "done") {
+      const b = document.createElement("button"); b.className = "link"; b.textContent = "Wasn't news";
+      b.setAttribute("aria-label", "The mute at " + r.time + " wasn't news");
+      b.addEventListener("click", async () => { if (await send("wrong", { id: r.id })) toast("Thanks. That one is marked as a mistake."); });
+      row.append(b);
+    }
+    box.append(row);
+  }
 }
 
 // The list is rebuilt only when it changes, so it doesn't flicker or lose a tap while the state refreshes.
@@ -273,8 +345,15 @@ function option(label, detail, selected, lead, onPick) {
 }
 function title(text) { const h = document.createElement("div"); h.className = "group-title"; h.textContent = text; return h; }
 
+function star(st) {
+  const b = document.createElement("button"); b.className = "star"; b.setAttribute("aria-pressed", st.favourite ? "true" : "false");
+  b.setAttribute("aria-label", (st.favourite ? "Remove " : "Add ") + st.name + (st.favourite ? " from favourites" : " to favourites"));
+  b.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2L12 17.3 6.4 20.2l1.1-6.2L3 9.6l6.2-.9z"/></svg>';
+  b.addEventListener("click", async e => { e.stopPropagation(); if (await send("favourite", { id: st.id })) renderStations(); });
+  return b;
+}
 function renderStations() {
-  const list = $("stationList");
+  const list = $("stationList"), scroll = list.scrollTop;
   list.replaceChildren();
   const groups = [];
   const fav = state.stations.filter(x => x.favourite);
@@ -289,14 +368,17 @@ function renderStations() {
     list.append(title(name));
     for (const st of items) {
       const badge = document.createElement("div"); badge.className = "badge"; paintBadge(badge, st);
-      list.append(option(st.name, null, st.id === state.station, badge, async () => {
+      const row = option(st.name, null, st.id === state.station, badge, async () => {
         $("stationSheet").close();
         if (playsHere() && state.mode !== "earlier" && !here) playHere();
         // In Earlier a station shows its programmes; in Live it plays, taking over from an earlier programme.
         if (st.id !== state.station || state.offerLive || (!state.playing && state.mode !== "earlier")) await send("station", { id: st.id });
-      }));
+      });
+      row.append(star(st));
+      list.append(row);
     }
   }
+  list.scrollTop = scroll;
 }
 function renderSpeakers() {
   const list = $("speakerList");
@@ -348,9 +430,24 @@ $("volume").addEventListener("input", e => {
   clearTimeout(volumeTimer);
   volumeTimer = setTimeout(() => send("volume", { v: (e.target.value / 100).toFixed(2) }), 150);
 });
-for (const id of ["stationRow", "quickStation"]) $(id).addEventListener("click", () => { if (!state) return; renderStations(); $("stationSheet").showModal(); });
-for (const id of ["speakerRow", "quickSpeaker"]) $(id).addEventListener("click", () => { if (!state) return; renderSpeakers(); $("speakerSheet").showModal(); });
-for (const id of ["settingsRow", "gearBtn"]) $(id).addEventListener("click", () => { if (!state || !state.settings) return; renderSettings(); $("settingsSheet").showModal(); });
+// Opens a sheet with focus on its contents, so Done isn't ringed as if tabbed to.
+function showSheet(id) { const d = $(id); d.showModal(); d.querySelector(".sheet-body").focus({ preventScroll: true }); }
+$("quickStation").addEventListener("click", () => { if (!state) return; renderStations(); showSheet("stationSheet"); });
+$("quickSpeaker").addEventListener("click", () => { if (!state) return; renderSpeakers(); showSheet("speakerSheet"); });
+function openSettings() { if (!state || !state.settings) return; renderSettings(); showSheet("settingsSheet"); }
+$("gearBtn").addEventListener("click", openSettings);
+$("welcomeOk").addEventListener("click", () => send("welcomed"));
+$("newsToggle").addEventListener("change", e => change("muteNews", e.target.checked ? "1" : "0"));
+$("recentHead").addEventListener("click", () => {
+  try { localStorage.setItem("recentOpen", recentOpen() ? "0" : "1"); } catch {}
+  if (state) renderRecent(state);
+});
+// In the Mac's panel, the Mac's own shortcuts: Command-comma for Settings, Command-Q to quit.
+document.addEventListener("keydown", e => {
+  if (!IN_PANEL || !e.metaKey) return;
+  if (e.key === ",") { e.preventDefault(); openSettings(); }
+  else if (e.key === "q") { e.preventDefault(); send("quit"); }
+});
 for (const d of document.querySelectorAll("dialog")) {
   d.addEventListener("click", e => { if (e.target === d || e.target.hasAttribute("data-close")) d.close(); });
 }
@@ -454,7 +551,7 @@ if ("mediaSession" in navigator) {
   set("stop", () => { stopHere(); if (state) render(state); });
 }
 
-// A server's Settings.
+// Settings: the same sheet on every device. The Mac's own rows appear only in its panel.
 function settingRow(label, detail, control) {
   const r = document.createElement("div"); r.className = "set";
   const l = document.createElement("div"); l.className = "label";
@@ -464,13 +561,27 @@ function settingRow(label, detail, control) {
   if (control) r.append(control);
   return r;
 }
-function toggle(checked, key) {
+function toggle(checked, key, label) {
   const t = document.createElement("input"); t.type = "checkbox"; t.className = "toggle"; t.checked = checked;
   t.setAttribute("role", "switch");
+  if (label) t.setAttribute("aria-label", label);
   t.addEventListener("change", () => change(key, t.checked ? "1" : "0"));
   return t;
 }
-// Sends a setting; if it doesn't take, shows the server's settings again rather than what was tapped.
+// A slider with its value beside the label, sent when let go.
+function slider(label, value, min, max, step, unit, key) {
+  const box = document.createElement("div"); box.className = "set column";
+  const head = settingRow(label, null, document.createElement("output"));
+  head.style.padding = "0"; head.style.minHeight = "0";
+  const out = head.querySelector("output"); out.textContent = value + " " + unit;
+  const range = document.createElement("input"); range.type = "range"; range.min = min; range.max = max; range.step = step; range.value = value;
+  range.setAttribute("aria-label", label); fillRange(range);
+  range.addEventListener("input", () => { out.textContent = range.value + " " + unit; });
+  range.addEventListener("change", () => change(key, range.value));
+  box.append(head, range);
+  return box;
+}
+// Sends a setting; if it doesn't take, shows the settings as they are rather than what was tapped.
 async function change(k, v) {
   if (!await send("setting", v == null ? { k } : { k, v }) && state.settings) renderSettings();
 }
@@ -479,27 +590,18 @@ function hint(text) { const p = document.createElement("p"); p.className = "hint
 function appLink() { return new URL(state.settings.link, location.origin).href; }
 
 function renderSettings() {
-  const st = state.settings, list = $("settingsList");
+  const st = state.settings, mac = st.mac, list = $("settingsList"), scroll = list.scrollTop;
   shownSettings = JSON.stringify(st);
   list.replaceChildren();
 
   list.append(title("Playback"));
-  const delay = document.createElement("div"); delay.className = "set column";
-  const head = settingRow("Delay behind live", null, document.createElement("output"));
-  head.style.padding = "0"; head.style.minHeight = "0";
-  const out = head.querySelector("output"); out.textContent = st.delay + " s";
-  const range = document.createElement("input"); range.type = "range"; range.min = 30; range.max = 600; range.step = 5; range.value = st.delay;
-  range.setAttribute("aria-label", "Delay behind live"); fillRange(range);
-  range.addEventListener("input", () => { out.textContent = range.value + " s"; });
-  range.addEventListener("change", () => change("delay", range.value));
-  delay.append(head, range);
   const rate = document.createElement("div"); rate.className = "seg";
   for (const kbps of [128, 320]) {
     const b = document.createElement("button"); b.textContent = kbps + " kbps"; b.setAttribute("aria-pressed", st.bitrate === kbps ? "true" : "false");
     b.addEventListener("click", () => { if (st.bitrate !== kbps) change("bitrate", String(kbps)); });
     rate.append(b);
   }
-  list.append(card(delay, settingRow("Bitrate", null, rate)));
+  list.append(card(slider("Delay behind live", st.delay, 30, 600, 5, "s", "delay"), settingRow("Bitrate", null, rate)));
   list.append(hint("A longer delay gives InterLude more time to recognise a bulletin before you hear it. Changing the delay or bitrate starts the stream again."));
 
   list.append(title("News detection for " + st.stationName));
@@ -510,11 +612,20 @@ function renderSettings() {
     f.addEventListener("click", () => change("forgetJingle"));
     jingle.append(f);
   }
-  list.append(card(
-    settingRow("Mute news bulletins", null, toggle(st.muteNews, "muteNews")),
-    settingRow("Mute only when the news jingle plays", null, toggle(st.jingleOnly, "jingleOnly")),
-    settingRow("Shadow mode", "Note bulletins, never mute", toggle(st.shadowMode, "shadowMode")),
-    jingle));
+  const rows = [
+    settingRow("Mute news bulletins", null, toggle(st.muteNews, "muteNews", "Mute news bulletins")),
+    settingRow("Mute only when the news jingle plays", null, toggle(st.jingleOnly, "jingleOnly", "Mute only when the news jingle plays")),
+    settingRow("Shadow mode", "Note bulletins, never mute", toggle(st.shadowMode, "shadowMode", "Shadow mode")),
+    jingle];
+  if (st.maxMute != null) rows.push(slider("Longest mute", st.maxMute, 5, 20, 1, "min", "maxMute"));
+  if (st.slots != null) {
+    const box = document.createElement("input"); box.className = "minutes"; box.value = st.slots; box.inputMode = "numeric";
+    box.setAttribute("aria-label", "Bulletin minutes past the hour");
+    box.addEventListener("change", () => change("slots", box.value));
+    rows.push(settingRow("Bulletin minutes", "Minutes past the hour, such as 0, 30", box));
+  }
+  list.append(card(...rows));
+  if (st.slots != null) list.append(hint("Speech from a minute before to three minutes after a bulletin minute counts as news. Once InterLude knows the jingle, muting starts at the jingle, and ends when the newsreader signs off."));
 
   list.append(title("Sound"));
   const pick = document.createElement("select"); pick.setAttribute("aria-label", "During bulletins");
@@ -524,16 +635,50 @@ function renderSettings() {
   pick.addEventListener("change", () => change("ambience", pick.value));
   list.append(card(settingRow("During bulletins", null, pick)));
 
-  list.append(title("Open on another device"));
-  const share = document.createElement("div"); share.className = "set column";
+  if (mac) {
+    list.append(title("Phone remote"));
+    const rows = [settingRow("Control InterLude from a phone", null, toggle(mac.remote, "remote", "Phone remote"))];
+    if (st.link) rows.push(share(st));
+    list.append(card(...rows));
+    if (mac.remoteNote) list.append(hint(mac.remoteNote));
+    if (st.link) list.append(hint("Scan the code with a phone's camera; on iPhone, Share › Add to Home Screen keeps it as an app. Anyone on your network with the link can control playback. Reset link stops old links working."));
+  } else if (st.link) {
+    list.append(title("Open on another device"));
+    list.append(card(share(st)));
+    list.append(hint("Scan the code with a phone's camera to open InterLude there; on iPhone, Share › Add to Home Screen keeps it as an app. Anyone on your network or tailnet with the link can control InterLude."));
+  }
+
+  if (mac) {
+    list.append(title("This Mac"));
+    const port = document.createElement("input"); port.className = "minutes"; port.value = mac.port; port.inputMode = "numeric";
+    port.setAttribute("aria-label", "Server port");
+    port.addEventListener("change", () => change("port", port.value));
+    const diag = document.createElement("button"); diag.className = "link"; diag.textContent = "Export…";
+    diag.addEventListener("click", () => send("diagnostics"));
+    const quit = document.createElement("button"); quit.className = "link danger"; quit.textContent = "Quit";
+    quit.addEventListener("click", () => send("quit"));
+    list.append(card(
+      settingRow("Keep this Mac awake while playing", null, toggle(mac.keepAwake, "keepAwake", "Keep this Mac awake while playing")),
+      settingRow("Start at login", null, toggle(mac.startAtLogin, "startAtLogin", "Start at login")),
+      settingRow("Server port", "Applies after you quit and reopen InterLude", port),
+      settingRow("Diagnostics", "A zip of the event log, station list and profiles", diag),
+      settingRow("Quit InterLude", "⌘Q", quit)));
+    list.append(hint("A MacBook with its lid closed and no external display will still sleep. Nothing is sent anywhere."));
+  }
+  list.scrollTop = scroll;
+}
+
+// The QR code, link and Reset link for opening InterLude on another device.
+function share(st) {
+  const box = document.createElement("div"); box.className = "set column";
   const qr = document.createElement("div"); qr.className = "qr"; qr.setAttribute("aria-hidden", "true");
-  const box = document.createElement("input"); box.className = "linkbox"; box.readOnly = true; box.value = appLink();
-  box.setAttribute("aria-label", "Link to InterLude");
+  const link = document.createElement("input"); link.className = "linkbox"; link.readOnly = true; link.value = appLink();
+  link.setAttribute("aria-label", "Link to InterLude");
   const actions = document.createElement("div"); actions.className = "actions";
   const copy = document.createElement("button"); copy.className = "link"; copy.textContent = "Copy link";
   copy.addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(box.value); }
-    catch { box.select(); document.execCommand("copy"); }
+    try { await navigator.clipboard.writeText(link.value); }
+    catch { link.select(); document.execCommand("copy"); }
     toast("Link copied.");
   });
   const reset = document.createElement("button"); reset.className = "link danger"; reset.textContent = "Reset link";
@@ -547,13 +692,17 @@ function renderSettings() {
       return;
     }
     clearTimeout(armed); armed = null;
-    if (await send("resetlink")) location.replace(state.settings.link);
+    // On a server this page's own address changes with the link; the Mac's panel keeps its own.
+    if (await send("resetlink") && ON_SERVER) location.replace(state.settings.link);
+    else if (state.settings) renderSettings();
   });
   actions.append(copy, reset);
-  share.append(qr, box, actions);
-  list.append(card(share));
-  list.append(hint("Scan the code with a phone's camera to open InterLude there; on iPhone, Share › Add to Home Screen keeps it as an app. Anyone on your network or tailnet with the link can control InterLude."));
-  drawQR(qr, box.value);
+  box.append(qr, link, actions);
+  if (st.qr) {
+    const img = document.createElement("img"); img.alt = ""; img.src = st.qr + "?" + encodeURIComponent(st.link);
+    qr.append(img);
+  } else drawQR(qr, link.value);
+  return box;
 }
 function drawQR(el, text) {
   const draw = () => { const q = qrcode(0, "M"); q.addData(text); q.make(); el.innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); };
@@ -585,3 +734,12 @@ try { setPlain(localStorage.getItem("plain") === "1"); } catch { setPlain(false)
 $("plainBtn").addEventListener("click", () => setPlain(!document.documentElement.hasAttribute("data-plain")));
 
 refresh();
+// A link ending #settings opens Settings once the state has arrived, as the Mac's --demo=settings does for screenshots;
+// #settings-end opens it scrolled to the bottom.
+if (location.hash.startsWith("#settings")) {
+  const t = setInterval(() => {
+    if (!state) return;
+    clearInterval(t); openSettings();
+    if (location.hash === "#settings-end") $("settingsList").scrollTop = 1e6;
+  }, 200);
+}

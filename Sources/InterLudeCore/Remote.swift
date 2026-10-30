@@ -1,6 +1,7 @@
 import Foundation
 
-/// What the phone remote shows, sent as JSON to the page every second or two.
+/// What the web app shows, sent as JSON to the page every second or two. The same page is the Mac's panel, its phone
+/// remote and the server's app, so everything any of them shows is here.
 public struct RemoteState: Codable, Sendable, Equatable {
     public struct StationItem: Codable, Sendable, Equatable {
         public var id: String
@@ -64,6 +65,30 @@ public struct RemoteState: Codable, Sendable, Equatable {
         }
     }
 
+    /// The news card: whether the station's bulletins are muted (skipped in Earlier), and a line saying how.
+    public struct NewsItem: Codable, Sendable, Equatable {
+        public var on: Bool
+        /// "Mute news" or "Skip news".
+        public var title: String
+        public var detail: String
+        /// False for speech stations, where talk is the programme.
+        public var available: Bool
+        public init(on: Bool, title: String, detail: String, available: Bool) {
+            self.on = on; self.title = title; self.detail = detail; self.available = available
+        }
+    }
+    /// A bulletin muted or skipped recently.
+    public struct RecentItem: Codable, Sendable, Equatable {
+        public var id: String
+        /// When it started, as the Mac or server writes it.
+        public var time: String
+        /// "20 s", "4 min 20 s" or "muting now".
+        public var length: String
+        /// "done", "open" (still muting) or "notNews" (a false start, already put right).
+        public var kind: String
+        public init(id: String, time: String, length: String, kind: String) { self.id = id; self.time = time; self.length = length; self.kind = kind }
+    }
+
     /// off, starting, live, earlier, muted or error, as the panel's status badge.
     public var state = "off"
     public var stationName = ""
@@ -105,9 +130,30 @@ public struct RemoteState: Codable, Sendable, Equatable {
     /// new session starts, so a browser playing along knows to load the stream again.
     public var stream: String?
     public var streamID: Int?
-    /// Set by a server: what its Settings sheet shows.
+    /// What the Settings sheet shows.
     public var settings: SettingsItem?
+    public var news: NewsItem?
+    /// "Recent mutes" or "News in this programme", and the bulletins under it, newest first.
+    public var recentTitle: String?
+    public var recent: [RecentItem] = []
+    /// Ways out of `error`: "retry" (start again), "here" (play on this Mac instead of a speaker).
+    public var recover: [String] = []
+    /// A first-run note, until it is dismissed.
+    public var welcome = false
     public init() {}
+
+    /// Settings only the Mac has, shown in its own panel and never on a phone.
+    public struct MacSettings: Codable, Sendable, Equatable {
+        public var startAtLogin: Bool
+        public var keepAwake: Bool
+        public var port: Int
+        public var remote: Bool
+        /// Why the phone remote has no link, or what the phone needs to reach it.
+        public var remoteNote: String?
+        public init(startAtLogin: Bool, keepAwake: Bool, port: Int, remote: Bool, remoteNote: String?) {
+            self.startAtLogin = startAtLogin; self.keepAwake = keepAwake; self.port = port; self.remote = remote; self.remoteNote = remoteNote
+        }
+    }
 
     public struct SettingsItem: Codable, Sendable, Equatable {
         /// The station the news options apply to.
@@ -126,20 +172,39 @@ public struct RemoteState: Codable, Sendable, Equatable {
         public var ambience: String
         /// Pairs of ID and name.
         public var ambienceChoices: [[String]]
-        /// The app's path, such as `/app/<token>/`, for the QR code and the Reset link answer.
+        /// Where another device opens InterLude, for the QR code and the Reset link answer: the server's app path, such
+        /// as `/app/<token>/`, or the Mac's phone remote address. Empty when there is none.
         public var link: String
+        /// A QR code image for `link`, relative to the page, when the page shouldn't draw its own.
+        public var qr: String?
+        /// For music stations: the longest a mute may last, in minutes, and the bulletin minutes past the hour.
+        public var maxMute: Double?
+        public var slots: String?
+        /// Set only in the Mac's own panel.
+        public var mac: MacSettings?
         public init(stationName: String, delay: Double, muteNews: Bool, jingleOnly: Bool, shadowMode: Bool, jingle: String,
-                    canForgetJingle: Bool, newsNote: String?, bitrate: Int, ambience: String, ambienceChoices: [[String]], link: String) {
+                    canForgetJingle: Bool, newsNote: String?, bitrate: Int, ambience: String, ambienceChoices: [[String]], link: String,
+                    qr: String? = nil, maxMute: Double? = nil, slots: String? = nil, mac: MacSettings? = nil) {
             self.stationName = stationName; self.delay = delay; self.muteNews = muteNews; self.jingleOnly = jingleOnly
             self.shadowMode = shadowMode; self.jingle = jingle; self.canForgetJingle = canForgetJingle; self.newsNote = newsNote
             self.bitrate = bitrate; self.ambience = ambience; self.ambienceChoices = ambienceChoices; self.link = link
+            self.qr = qr; self.maxMute = maxMute; self.slots = slots; self.mac = mac
         }
     }
 }
 
-/// A change made in a server's Settings sheet, checked against the same ranges as the Mac's Settings.
+/// A change made in the Settings sheet, checked against the ranges the controls allow.
 public enum RemoteSetting: Equatable, Sendable {
     case delay(Double), muteNews(Bool), jingleOnly(Bool), shadowMode(Bool), forgetJingle, bitrate(Int), ambience(String)
+    /// Music stations: the longest mute in minutes, and the minutes past the hour bulletins start.
+    case maxMute(Double), slots([Int])
+    /// The Mac's own: accepted only from its panel.
+    case startAtLogin(Bool), keepAwake(Bool), port(Int), remote(Bool)
+
+    /// Whether only the Mac's own panel may change it.
+    public var macOnly: Bool {
+        switch self { case .startAtLogin, .keepAwake, .port, .remote: true; default: false }
+    }
 
     public init?(key: String?, value: String?) {
         func flag() -> Bool? { switch value { case "1", "true": true; case "0", "false": false; default: nil } }
@@ -157,6 +222,19 @@ public enum RemoteSetting: Equatable, Sendable {
         case "ambience":
             guard let a = value, Ambience.choices.contains(where: { $0.id == a }) else { return nil }
             self = .ambience(a)
+        case "maxMute":
+            guard let m = value.flatMap(Double.init), m.isFinite, (5...20).contains(m) else { return nil }
+            self = .maxMute(m.rounded())
+        case "slots":
+            let mins = (value ?? "").split(whereSeparator: { ", ".contains($0) }).compactMap { Int($0) }
+            guard !mins.isEmpty, mins.count <= 12, mins.allSatisfy({ (0..<60).contains($0) }) else { return nil }
+            self = .slots(Array(Set(mins)).sorted())
+        case "startAtLogin": guard let f = flag() else { return nil }; self = .startAtLogin(f)
+        case "keepAwake": guard let f = flag() else { return nil }; self = .keepAwake(f)
+        case "remote": guard let f = flag() else { return nil }; self = .remote(f)
+        case "port":
+            guard let p = value.flatMap(Int.init), (1024...65535).contains(p) else { return nil }
+            self = .port(p)
         default: return nil
         }
     }
@@ -168,20 +246,35 @@ public enum RemoteCommand: Equatable, Sendable {
     /// Earlier programmes: switch between Live and Earlier, step through the days, read the schedule again, and
     /// play a programme from its start.
     case earlier(Bool), day(Int), reloadSchedule, programme(String)
-    /// A server's Settings, and a new link that stops the old one working.
+    /// Settings, and a new link that stops the old one working.
     case setting(RemoteSetting), resetLink
+    /// Add or remove a favourite station; mark a recent mute as wrong, by its ID; dismiss the first-run note.
+    case favourite(String), wrong(String), welcomed
+    /// The Mac's own, accepted only from its panel: save a diagnostics zip, and quit.
+    case diagnostics, quit
+
+    /// Whether only the Mac's own panel may send it.
+    public var macOnly: Bool {
+        switch self {
+        case .diagnostics, .quit: true
+        case .setting(let s): s.macOnly
+        default: false
+        }
+    }
 }
 
 public enum RemoteRoute: Equatable, Sendable {
     /// `events` is the state as server-sent events, which only a server offers. `asset` is the page's style or script.
-    case page, asset(String), manifest, icon, state, events, command(RemoteCommand)
+    /// `qr` is a QR code for the link to open InterLude on another device.
+    case page, asset(String), manifest, icon, qr, state, events, command(RemoteCommand)
 }
 
-/// Addresses for the phone remote on the Mac, `/remote/<token>/`, and for the web app on a server, `/app/<token>/`,
-/// and what sits under them.
+/// Addresses for the phone remote on the Mac, `/remote/<token>/`, the Mac's own panel, `/panel/<token>/`, and the web
+/// app on a server, `/app/<token>/`, and what sits under them.
 public enum RemoteRoutes {
     public static let prefix = "/remote/"
     public static let appPrefix = "/app/"
+    public static let panelPrefix = "/panel/"
 
     public static func newToken() -> String {
         UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
@@ -202,6 +295,7 @@ public enum RemoteRoutes {
         case "app.css", "app.js": return post ? nil : .asset(rest)
         case "manifest.webmanifest": return post ? nil : .manifest
         case "icon.png": return post ? nil : .icon
+        case "qr.png": return post ? nil : .qr
         case "api/state": return .state
         case "api/events": return post ? nil : .events
         default: break
@@ -229,6 +323,13 @@ public enum RemoteRoutes {
             return .command(.programme(id))
         case "setting": return RemoteSetting(key: q["k"], value: q["v"]).map { .command(.setting($0)) }
         case "resetlink": return .command(.resetLink)
+        case "favourite": return q["id"].map { .command(.favourite($0)) }
+        case "wrong":
+            guard let id = q["id"], UUID(uuidString: id) != nil else { return nil }
+            return .command(.wrong(id))
+        case "welcomed": return .command(.welcomed)
+        case "diagnostics": return .command(.diagnostics)
+        case "quit": return .command(.quit)
         default: return nil
         }
     }
@@ -271,4 +372,56 @@ public enum RemoteRoutes {
         "background_color":"#070a1e","theme_color":"#070a1e",
         "icons":[{"src":"icon.png","sizes":"512x512","type":"image/png"}]}
         """.utf8))
+}
+
+extension RemoteState.NewsItem {
+    /// The news card for a station, worded the same on the Mac and a server. `earlier` is whether bulletins are
+    /// skipped rather than muted: an earlier programme playing, or Earlier showing with nothing playing.
+    public static func describe(_ p: StationProfile, kind: StationKind?, earlier: Bool, ambience: String) -> Self {
+        let speech = kind == .speech
+        let title = earlier ? "Skip news" : "Mute news"
+        let detail: String
+        if speech { detail = "Off for speech stations, where talk is the programme." }
+        else if p.shadowMode { detail = "Shadow mode: bulletins are noted but not muted." }
+        else if !p.muteNews { detail = "Off. Bulletins will play." }
+        else if earlier {
+            detail = p.detector.identOnly && p.idents.isEmpty ? "Set to jingle only, but no jingle is learned yet, so nothing is skipped."
+                                                              : "Cuts bulletins out, so the programme runs on without them."
+        } else if p.detector.identOnly {
+            detail = p.idents.isEmpty ? "Set to jingle only, but no jingle is learned yet, so nothing is muted. Change this in Settings."
+                                      : "Mutes when the station's news jingle plays."
+        } else if ambience == "silence" { detail = "Silences bulletins until the music returns." }
+        else {
+            let name = Ambience.choices.first { $0.id == ambience }?.name.lowercased() ?? "a soothing sound"
+            detail = "Plays \(name) over bulletins until the music returns."
+        }
+        return .init(on: p.muteNews && !speech, title: title, detail: detail, available: !speech)
+    }
+}
+
+extension RemoteState.RecentItem {
+    /// The newest bulletins first, at most six, as the panel lists them.
+    public static func list(_ blocks: [NewsBlock]) -> [Self] {
+        blocks.prefix(6).map { b in
+            let length: String
+            if let e = b.end {
+                let s = Int(e - b.start)
+                length = s >= 60 ? "\(s / 60) min \(s % 60) s" : "\(s) s"
+            } else { length = "muting now" }
+            return .init(id: b.id.uuidString, time: Date(timeIntervalSince1970: b.start).formatted(date: .omitted, time: .shortened),
+                         length: length, kind: b.falseStart ? "notNews" : (b.isOpen ? "open" : "done"))
+        }
+    }
+}
+
+extension StationProfile {
+    /// Whether the station's news jingle is learned, as Settings words it.
+    public var jingleStatus: String {
+        if !idents.isEmpty { return "Learned" }
+        switch candidates.count {
+        case 0: return "Not learned yet"
+        case 1, 2: return "Learning: \(candidates.count) bulletin\(candidates.count == 1 ? "" : "s") heard"
+        default: return "No shared jingle yet (\(candidates.count) bulletins)"
+        }
+    }
 }

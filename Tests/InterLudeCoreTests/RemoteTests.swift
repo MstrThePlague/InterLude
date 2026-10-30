@@ -202,6 +202,50 @@ import Foundation
         #expect(layered.url("../secret") == nil)
     }
 
+    @Test func newCommandsAndSettings() {
+        let id = "8D3F2C1A-0B4E-4C5D-9E6F-7A8B9C0D1E2F"
+        #expect(route("POST", "/remote/abc123/api/favourite?id=bbc_6music") == .command(.favourite("bbc_6music")))
+        #expect(route("POST", "/remote/abc123/api/wrong?id=\(id)") == .command(.wrong(id)))
+        #expect(route("POST", "/remote/abc123/api/wrong?id=nope") == nil)
+        #expect(route("POST", "/remote/abc123/api/welcomed") == .command(.welcomed))
+        #expect(route("GET", "/remote/abc123/api/quit") == nil)
+        #expect(route("POST", "/remote/abc123/api/setting?k=maxMute&v=12") == .command(.setting(.maxMute(12))))
+        #expect(route("POST", "/remote/abc123/api/setting?k=maxMute&v=30") == nil)
+        #expect(route("POST", "/remote/abc123/api/setting?k=slots&v=30,%200,%2030") == .command(.setting(.slots([0, 30]))))
+        #expect(route("POST", "/remote/abc123/api/setting?k=slots&v=60") == nil)
+        #expect(route("POST", "/remote/abc123/api/setting?k=port&v=9000") == .command(.setting(.port(9000))))
+        #expect(route("GET", "/remote/abc123/qr.png") == .qr)
+    }
+
+    /// Only the Mac's own panel may change the Mac's settings, save diagnostics or quit.
+    @Test func macOnlyCommands() {
+        #expect(RemoteCommand.quit.macOnly && RemoteCommand.diagnostics.macOnly)
+        #expect(RemoteCommand.setting(.port(9000)).macOnly && RemoteCommand.setting(.remote(true)).macOnly)
+        #expect(!RemoteCommand.setting(.delay(60)).macOnly && !RemoteCommand.favourite("x").macOnly && !RemoteCommand.toggle.macOnly)
+        let panel = RemoteRoutes.route(HTTPRequest(requestLine: "POST /panel/abc123/api/quit HTTP/1.1")!, token: token, prefix: RemoteRoutes.panelPrefix)
+        #expect(panel == .command(.quit))
+    }
+
+    @Test func newsCardWording() {
+        var p = StationProfile()
+        #expect(RemoteState.NewsItem.describe(p, kind: .music, earlier: false, ambience: "silence").detail == "Silences bulletins until the music returns.")
+        #expect(RemoteState.NewsItem.describe(p, kind: .music, earlier: true, ambience: "silence").title == "Skip news")
+        let speech = RemoteState.NewsItem.describe(p, kind: .speech, earlier: false, ambience: "silence")
+        #expect(!speech.available && !speech.on)
+        p.muteNews = false
+        #expect(RemoteState.NewsItem.describe(p, kind: .music, earlier: false, ambience: "ocean").detail == "Off. Bulletins will play.")
+    }
+
+    @Test func recentMutesNewestFirstAtMostSix() {
+        var blocks = (0..<8).map { NewsBlock(start: 1_000_000 + Double($0) * 1800, end: 1_000_000 + Double($0) * 1800 + 75, evidence: "t") }
+        blocks[1].falseStart = true
+        blocks[2].end = nil
+        let list = RemoteState.RecentItem.list(blocks)
+        #expect(list.count == 6)
+        #expect(list[0].length == "1 min 15 s" && list[0].kind == "done")
+        #expect(list[1].kind == "notNews" && list[2].kind == "open" && list[2].length == "muting now")
+    }
+
     @Test func tokensAreLongAndFresh() {
         let a = RemoteRoutes.newToken(), b = RemoteRoutes.newToken()
         #expect(a.count == 32 && a != b)

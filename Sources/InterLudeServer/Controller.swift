@@ -428,6 +428,9 @@ actor Controller {
             replaying = p
             await stop(); start()
         case .setting(let s): await apply(s)
+        case .favourite(let id): if catalogue.station(id) != nil { updateProfile(id) { $0.favourite.toggle() } }
+        case .wrong(let id): if let u = UUID(uuidString: id) { await session?.markWrong(id: u) }
+        case .welcomed, .diagnostics, .quit: break      // the Mac's own
         case .resetLink:
             settings.token = RemoteRoutes.newToken(); saveSettings()
             log("link reset; the app is now at \(RemoteRoutes.pagePath(token: settings.token, prefix: RemoteRoutes.appPrefix))")
@@ -452,6 +455,9 @@ actor Controller {
         case .ambience(let a):
             settings.ambience = a; saveSettings()
             await session?.setAmbience(ambienceURL)
+        case .maxMute(let m): updateProfile(id) { $0.detector.maxMuteSeconds = m * 60 }
+        case .slots(let mins): updateProfile(id) { $0.detector.slotMinutes = mins }
+        case .startAtLogin, .keepAwake, .port, .remote: break      // the Mac's own
         }
     }
 
@@ -521,6 +527,13 @@ actor Controller {
         s.stream = "/stream/live.m3u8"
         s.streamID = playing ? streamID : nil
         s.settings = settingsItem(selectedStation)
+        s.news = .describe(profile(settings.station), kind: selectedStation?.kind, earlier: replay || (isEarlier && !playing && !startingNow),
+                           ambience: settings.ambience)
+        if playing && !status.recentBlocks.isEmpty {
+            s.recentTitle = replay ? "News in this programme" : "Recent mutes"
+            s.recent = RemoteState.RecentItem.list(status.recentBlocks)
+        }
+        if errorText != nil && !playing && !startingNow { s.recover = ["retry"] }
         s.pageVersion = pageVersion()
         return s
     }
@@ -535,7 +548,7 @@ actor Controller {
     private func subheadline(_ station: Station?) -> String {
         if isStarting, let p = source?.replay { return "Starting from \(p.start.formatted(date: .omitted, time: .shortened))…" }
         if isStarting { return "Starting about a minute behind live…" }
-        guard isPlaying else { return isEarlier ? "Pick a programme below" : "Ready to play" }
+        guard isPlaying else { return isEarlier ? "Pick a programme to play from its start" : "Ready to play" }
         if status.muted { return "Sound returns when the music does" }
         if let np = status.nowPlaying, np.title != nil { return np.artist }
         return station?.name ?? ""
@@ -572,22 +585,15 @@ actor Controller {
     }
 
     private func settingsItem(_ station: Station?) -> RemoteState.SettingsItem {
-        let p = profile(settings.station)
-        let jingle: String
-        if !p.idents.isEmpty { jingle = "Learned" }
-        else {
-            switch p.candidates.count {
-            case 0: jingle = "Not learned yet"
-            case 1, 2: jingle = "Learning: \(p.candidates.count) bulletin\(p.candidates.count == 1 ? "" : "s") heard"
-            default: jingle = "No shared jingle yet (\(p.candidates.count) bulletins)"
-            }
-        }
+        let p = profile(settings.station), music = station?.kind == .music
         return .init(stationName: station?.name ?? settings.station, delay: p.delaySeconds, muteNews: p.muteNews,
-                     jingleOnly: p.detector.identOnly, shadowMode: p.shadowMode, jingle: jingle,
+                     jingleOnly: p.detector.identOnly, shadowMode: p.shadowMode, jingle: p.jingleStatus,
                      canForgetJingle: !p.idents.isEmpty || !p.candidates.isEmpty, newsNote: detects ? nil : Self.newsNote,
                      bitrate: settings.bitrate / 1000, ambience: settings.ambience,
                      ambienceChoices: Ambience.choices.map { [$0.id, $0.name] },
-                     link: RemoteRoutes.pagePath(token: settings.token, prefix: RemoteRoutes.appPrefix))
+                     link: RemoteRoutes.pagePath(token: settings.token, prefix: RemoteRoutes.appPrefix),
+                     maxMute: music ? p.detector.maxMuteSeconds / 60 : nil,
+                     slots: music ? p.detector.slotMinutes.map(String.init).joined(separator: ", ") : nil)
     }
 
     /// The state as server-sent events: sent when it changes, checked every second, with a comment every 15 s so

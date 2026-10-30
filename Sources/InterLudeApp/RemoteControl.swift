@@ -4,17 +4,18 @@ import CoreImage.CIFilterBuiltins
 import InterLudeCore
 import InterLudeApple
 
-/// What the phone remote sees and does. The page is served by the local server from `webFiles`.
+/// What the web app shows and does, in the Mac's own panel (`panel`) and on the phone remote. The page is served by
+/// the local server from `webFiles`.
 extension AppModel {
-    /// The phone remote's page: from a `web` folder in Application Support if one is there, for trying changes without
-    /// a rebuild, otherwise the app's own copy (or the checkout's, when run with `swift run`).
+    /// The web app: from a `web` folder in Application Support if one is there, for trying changes without a rebuild,
+    /// otherwise the app's own copy (or the checkout's, when run with `swift run`).
     static let webFiles = WebFiles(folders: [
         try? AppPaths.supportDirectory().appendingPathComponent("web", isDirectory: true),
         Bundle.main.resourceURL?.appendingPathComponent("Web", isDirectory: true),
         URL(fileURLWithPath: "Web", isDirectory: true),
     ].compactMap { $0 })
 
-    func remoteState() -> RemoteState {
+    func remoteState(panel: Bool = false) -> RemoteState {
         var s = RemoteState()
         s.state = playState.rawValue
         s.stationName = statusCaption
@@ -57,7 +58,48 @@ extension AppModel {
         s.pageVersion = Self.webFiles.version
         if mode == .earlier { s.earlier = remoteEarlier() }
         if isReplay, let r = status.replay { s.replay = remoteReplay(r) }
+        s.news = .describe(profile(selectedStationID), kind: selectedStation?.kind, earlier: isReplay || (mode == .earlier && !isPlaying && !isStarting),
+                           ambience: ambience)
+        if isPlaying && !status.recentBlocks.isEmpty {
+            s.recentTitle = isReplay ? "News in this programme" : "Recent mutes"
+            s.recent = RemoteState.RecentItem.list(status.recentBlocks)
+        }
+        if errorText != nil && !isPlaying && !isStarting {
+            s.recover = (castFailed ? ["here"] : []) + (castFailed || stationFailed ? ["retry"] : [])
+        }
+        s.welcome = panel && showWelcome && !demoHidesWelcome
+        s.settings = remoteSettings(panel: panel)
         return s
+    }
+
+    /// Settings for the chosen station. The phone remote gets the shared ones; the panel also gets the Mac's own and
+    /// the phone remote's link, which a phone could otherwise reset from under itself.
+    private func remoteSettings(panel: Bool) -> RemoteState.SettingsItem {
+        let st = selectedStation, p = profile(selectedStationID), music = st?.kind == .music
+        let link = panel ? remoteURL?.absoluteString ?? "" : ""
+        var item = RemoteState.SettingsItem(
+            stationName: st?.name ?? selectedStationID, delay: p.delaySeconds, muteNews: p.muteNews, jingleOnly: p.detector.identOnly,
+            shadowMode: p.shadowMode, jingle: p.jingleStatus, canForgetJingle: !p.idents.isEmpty || !p.candidates.isEmpty, newsNote: nil,
+            bitrate: bitrate / 1000, ambience: ambience, ambienceChoices: Self.ambienceChoices.map { [$0.id, $0.name] }, link: link,
+            qr: link.isEmpty ? nil : "qr.png", maxMute: music ? p.detector.maxMuteSeconds / 60 : nil,
+            slots: music ? p.detector.slotMinutes.map(String.init).joined(separator: ", ") : nil)
+        if panel {
+            let note: String?
+            if !remoteEnabled { note = nil }
+            else if let e = remoteError { note = e }
+            else if remoteURL == nil { note = "Connect this Mac to Wi-Fi or Ethernet to use the remote." }
+            else if remoteOnTailscale { note = "The link uses Tailscale, so the phone needs Tailscale on. The Mac must be awake with InterLude open." }
+            else { note = "The phone needs to be on the same Wi-Fi as this Mac, and the Mac awake with InterLude open." }
+            item.mac = .init(startAtLogin: startAtLogin, keepAwake: keepAwake, port: port, remote: remoteEnabled, remoteNote: note)
+        }
+        return item
+    }
+
+    /// The phone remote's link as a QR code.
+    func remoteQR() -> HTTPResponse {
+        guard let url = remoteURL, let img = qrImage(for: url.absoluteString), let tiff = img.tiffRepresentation,
+              let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return .notFound }
+        return HTTPResponse(contentType: "image/png", body: png, noCache: true)
     }
 
     /// The day's programmes as the panel's list shows them.
@@ -91,7 +133,9 @@ extension AppModel {
                      position: "\(clock(r.heard.timeIntervalSince(p.start))) of \(Self.duration(total))", skipped: skipped)
     }
 
-    func perform(_ c: RemoteCommand) {
+    /// Does what the page asked. A phone can't change the Mac's own settings, save diagnostics, quit, or reset its link.
+    func perform(_ c: RemoteCommand, panel: Bool = false) {
+        if !panel { if c.macOnly || c == .resetLink { return } }
         switch c {
         case .toggle:
             if isPlaying || isStarting { stop() }
@@ -110,7 +154,51 @@ extension AppModel {
         case .day(let d): if mode == .earlier { scheduleDay = d }
         case .reloadSchedule: if mode == .earlier { loadSchedule(force: true) }
         case .programme(let id): if mode == .earlier, let p = programmes.first(where: { $0.id == id }) { play(p) }
-        case .setting, .resetLink: break       // the Mac's own Settings window has these
+        case .setting(let s): apply(s)
+        case .resetLink: resetRemoteLink()
+        case .favourite(let id): if stations.contains(where: { $0.serviceId == id }) { updateProfile(id) { $0.favourite.toggle() } }
+        case .wrong(let id): if let u = UUID(uuidString: id) { markWrong(u) }
+        case .welcomed: showWelcome = false
+        case .diagnostics: exportDiagnostics()
+        case .quit: NSApplication.shared.terminate(nil)
+        }
+    }
+
+    private func apply(_ s: RemoteSetting) {
+        let id = selectedStationID
+        switch s {
+        case .delay(let d):
+            updateProfile(id) { $0.delaySeconds = d }
+            if isPlaying && !isReplay && source?.station.serviceId == id { restart() }
+        case .muteNews(let on): updateProfile(id) { $0.muteNews = on }
+        case .jingleOnly(let on): updateProfile(id) { $0.detector.identOnly = on }
+        case .shadowMode(let on): updateProfile(id) { $0.shadowMode = on }
+        case .forgetJingle: updateProfile(id) { $0.idents = []; $0.candidates = []; $0.candidateSources = [] }
+        case .bitrate(let b):
+            guard b != bitrate else { return }
+            bitrate = b
+            if isPlaying { restart() }
+        case .ambience(let a): ambience = a
+        case .maxMute(let m): updateProfile(id) { $0.detector.maxMuteSeconds = m * 60 }
+        case .slots(let mins): updateProfile(id) { $0.detector.slotMinutes = mins }
+        case .startAtLogin(let on): setStartAtLogin(on)
+        case .keepAwake(let on): keepAwake = on
+        case .port(let p): port = p
+        case .remote(let on): remoteEnabled = on
+        }
+    }
+
+    /// Asks where to save a zip of the event log, station list and profiles.
+    func exportDiagnostics() {
+        guard let folder = diagnosticsFolder() else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "InterLude-diagnostics.zip"
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        var err: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: folder, options: .forUploading, error: &err) { zip in
+            try? FileManager.default.removeItem(at: dest)
+            try? FileManager.default.copyItem(at: zip, to: dest)
         }
     }
 
@@ -146,4 +234,10 @@ func qrImage(for text: String) -> NSImage? {
     guard let out = f.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)),
           let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
     return NSImage(cgImage: cg, size: NSSize(width: out.extent.width, height: out.extent.height))
+}
+
+/// Minutes and seconds, such as 6:11.
+func clock(_ seconds: Double) -> String {
+    let s = max(0, Int(seconds.rounded()))
+    return "\(s / 60):" + String(format: "%02d", s % 60)
 }
