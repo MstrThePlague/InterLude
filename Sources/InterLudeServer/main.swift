@@ -124,7 +124,7 @@ do {
         exit(0)
     }
     AppPaths.root = opt.data
-    let catalogue = try Catalogue.load(from: Catalogue.editableURL(bundled: opt.stations))
+    let catalogue = try Catalogue.loadEditable(bundled: opt.stations)
     let controller = Controller(catalogue: catalogue, settingsURL: try AppPaths.supportDirectory().appendingPathComponent("settings.json"),
                                 detects: detects, ambienceDirectory: opt.ambience, keepRunning: opt.keepRunning,
                                 castBase: (opt.castHost ?? LocalAddress.lan()).map { "http://\($0):\(opt.port)" })
