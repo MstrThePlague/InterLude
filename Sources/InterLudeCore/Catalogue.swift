@@ -44,6 +44,22 @@ public struct Catalogue: Codable, Sendable {
         return URL(string: t)
     }
 
+    /// The user's editable list, brought up to date with the bundled one: stations added since the copy was made are
+    /// appended, and fields older copies lack are filled in. The user's own edits, such as a changed pool ID, win.
+    public static func loadEditable(bundled: URL) throws -> Catalogue {
+        var c = try load(from: editableURL(bundled: bundled))
+        guard let b = try? load(from: bundled) else { return c }
+        for i in c.stations.indices {
+            guard let m = b.station(c.stations[i].serviceId) else { continue }
+            if c.stations[i].short == nil { c.stations[i].short = m.short }
+            if c.stations[i].colour == nil { c.stations[i].colour = m.colour }
+            if c.stations[i].group == nil { c.stations[i].group = m.group }
+        }
+        let known = Set(c.stations.map(\.serviceId))
+        c.stations += b.stations.filter { !known.contains($0.serviceId) }
+        return c
+    }
+
     /// Copies the bundled catalogue to Application Support on first run and returns the editable file.
     public static func editableURL(bundled: URL) throws -> URL {
         let dir = try AppPaths.supportDirectory()
