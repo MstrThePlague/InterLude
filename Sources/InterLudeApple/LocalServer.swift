@@ -31,9 +31,13 @@ public final class LocalServer: @unchecked Sendable {
         c.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [handler] data, _, _, err in
             guard let data, err == nil, let text = String(data: data, encoding: .utf8) else { c.cancel(); return }
             let first = text.split(separator: "\r\n", maxSplits: 1).first.map(String.init) ?? ""
-            guard let req = HTTPRequest(requestLine: first) else {
+            guard var req = HTTPRequest(requestLine: first) else {
                 c.send(content: Data("HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8), completion: .contentProcessed { _ in c.cancel() })
                 return
+            }
+            if case .hostPort(let host, _) = c.endpoint {
+                let h = "\(host)"
+                req.fromLoopback = h == "127.0.0.1" || h == "::1" || h.hasPrefix("::1%") || h == "::ffff:127.0.0.1"
             }
             let head = req.method == "HEAD"
             Task {

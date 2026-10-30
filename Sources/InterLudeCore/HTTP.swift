@@ -17,6 +17,8 @@ public struct HTTPRequest: Sendable {
     public var query: [String: String]
     /// Header fields with lowercased names. The Mac's server leaves them empty.
     public var headers: [String: String] = [:]
+    /// Whether it came from this machine. The Mac's server sets it from the connection, so a page can't claim it.
+    public var fromLoopback = false
     public init(method: String = "GET", path: String, query: [String: String] = [:], headers: [String: String] = [:]) {
         self.method = method; self.path = path; self.query = query; self.headers = headers
     }
