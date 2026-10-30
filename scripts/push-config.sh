@@ -13,11 +13,13 @@ WHAT=${3:-all}
 ssh "$HOST" "mkdir -p '$DIR/config/web' && test -w '$DIR/config/web'" || {
   echo "Can't write to $DIR/config on $HOST. If Docker made it, run: ssh $HOST sudo chown -R \$USER '$DIR/config'" >&2; exit 1; }
 if [[ $WHAT == all || $WHAT == web ]]; then
-  rsync -a --chmod=F644 Web/index.html Web/app.css Web/app.js "$HOST:$DIR/config/web/"
+  rsync -a Web/index.html Web/app.css Web/app.js "$HOST:$DIR/config/web/"
+  ssh "$HOST" "chmod a+r '$DIR'/config/web/*"
   echo "Updated the web app on $HOST. Open pages reload themselves."
 fi
 if [[ $WHAT == all || $WHAT == stations ]]; then
   python3 -c 'import json, sys; json.load(open(sys.argv[1]))' Data/stations.json
-  rsync -a --chmod=F644 Data/stations.json "$HOST:$DIR/config/stations.json"
+  rsync -a Data/stations.json "$HOST:$DIR/config/stations.json"
+  ssh "$HOST" "chmod a+r '$DIR/config/stations.json'"
   echo "Updated the station list on $HOST. The server reads it within a few seconds."
 fi
