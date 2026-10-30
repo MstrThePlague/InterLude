@@ -17,6 +17,11 @@ struct PanelView: View {
             if let e = model.errorText { ErrorBanner(model: model, text: e) }
             NowPlayingHeader(model: model)
             if model.isReplay, let r = model.status.replay { ReplayProgress(replay: r) }
+            if model.offersLive, let st = model.selectedStation {
+                Button { model.playLive(st.serviceId) } label: { Label("Play \(st.name) live instead", systemImage: "dot.radiowaves.left.and.right").foregroundStyle(Aurora.onPink) }
+                    .buttonStyle(.borderedProminent).controlSize(.small).tint(Aurora.pink)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
             TransportRow(model: model)
             VStack(spacing: 8) {
                 Picker("Listen", selection: $model.mode) {
@@ -28,7 +33,7 @@ struct PanelView: View {
                 StationMenu(model: model)
                 OutputMenu(model: model)
             }
-            if model.mode == .earlier && !model.isReplay { ProgrammeList(model: model) }
+            if model.mode == .earlier { ProgrammeList(model: model) }
             NewsCard(model: model)
             if model.isPlaying && !model.status.recentBlocks.isEmpty { RecentBlocks(model: model) }
             FooterRow(model: model, openSettings: {
@@ -50,6 +55,7 @@ struct PanelView: View {
         .animation(.snappy(duration: 0.25), value: model.errorText)
         .animation(.snappy(duration: 0.25), value: model.showWelcome)
         .animation(.snappy(duration: 0.25), value: model.mode)
+        .animation(.snappy(duration: 0.25), value: model.offersLive)
         .animation(.snappy(duration: 0.25), value: model.status.replay?.justSkipped != nil)
     }
 }
@@ -61,7 +67,7 @@ private struct NowPlayingHeader: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Artwork(url: model.artworkURL, station: model.selectedStation, muted: model.isPlaying && model.status.muted)
+            Artwork(url: model.artworkURL, station: model.onAirStation, muted: model.isPlaying && model.status.muted)
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 6) {
                     StatusBadge(state: model.playState)
@@ -207,6 +213,7 @@ private struct ProgrammeRow: View {
         let playable = AppModel.canPlay(programme)
         let onNow = programme.end > Date()
         let chosen = model.replaying?.id == programme.id
+        let playing = model.isReplay && model.source?.replay?.id == programme.id
         Button { model.play(programme) } label: {
             HStack(alignment: .top, spacing: 10) {
                 Text(programme.start.formatted(date: .omitted, time: .shortened))
@@ -224,8 +231,8 @@ private struct ProgrammeRow: View {
                 .foregroundStyle(playable ? .primary : .tertiary)
                 Spacer(minLength: 0)
                 if playable {
-                    Image(systemName: chosen ? "checkmark" : "play.fill").font(.caption2).foregroundStyle(.secondary)
-                        .opacity(hover || chosen ? 1 : 0)
+                    Image(systemName: playing ? "speaker.wave.2.fill" : chosen ? "checkmark" : "play.fill").font(.caption2).foregroundStyle(.secondary)
+                        .opacity(hover || chosen || playing ? 1 : 0)
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 7)
