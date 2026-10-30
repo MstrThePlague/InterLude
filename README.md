@@ -7,7 +7,7 @@ I wanted 6 Music in the background all day without the hourly news, so it is tun
 <p align="center">
   <img src="docs/images/mac-playing.png" width="260" alt="The InterLude panel on the Mac playing 6 Music live, with the track, artwork and volume">
   <img src="docs/images/mac-muted.png" width="260" alt="The panel while a bulletin is muted, with a Not news button">
-  <img src="docs/images/mac-earlier.png" width="260" alt="An earlier programme playing from its start, with two bulletins skipped">
+  <img src="docs/images/mac-earlier.png" width="260" alt="An earlier programme playing from its start, with two bulletins skipped and the day's other programmes listed below">
 </p>
 <p align="center"><sub>On the Mac: playing live, muting a bulletin, and an earlier programme with the news cut out.</sub></p>
 
