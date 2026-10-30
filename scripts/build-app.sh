@@ -14,6 +14,8 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Data/stations.json "$APP/Contents/Resources/stations.json"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 cp -R Resources/Ambience "$APP/Contents/Resources/Ambience"
+mkdir "$APP/Contents/Resources/Web"
+cp Web/index.html Web/app.css Web/app.js "$APP/Contents/Resources/Web/"
 ID=$(security find-identity -v -p codesigning | awk -F'"' '/Apple Development/ {print $2; exit}')
 ENT=Resources/InterLude.entitlements
 if [[ "${SANDBOX:-1}" == "0" ]]; then

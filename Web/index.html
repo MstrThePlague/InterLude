@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<base href="__BASE__">
+<meta name="interlude-version" content="__VERSION__">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="InterLude">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#070a1e" media="(prefers-color-scheme: dark)">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" sizes="180x180" href="__TOUCH_ICON__">
+<link rel="icon" href="icon.png">
+<title>InterLude</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="aurora" aria-hidden="true"><i></i><i></i><i></i></div>
+<main>
+  <div class="banner offline" id="offline" hidden role="status"><b>Can't reach InterLude</b><span id="offlineText">Check that the Mac is awake, InterLude is open, and this phone is on the same Wi-Fi.</span></div>
+  <div class="banner offline" id="gone" hidden role="status"><b>This link has stopped working</b><span id="goneText">The remote was turned off or its link was reset. Open InterLude's Settings on the Mac and scan the code again.</span></div>
+  <div class="banner error" id="error" hidden role="alert"></div>
+
+  <div class="col player">
+  <div class="topbar">
+    <div class="seg" role="group" aria-label="Listen">
+      <button id="modeLive" aria-pressed="true">Live</button>
+      <button id="modeEarlier" aria-pressed="false">Earlier</button>
+    </div>
+    <button class="iconbtn phoneonly" id="gearBtn" aria-label="Settings" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.7a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg></button>
+  </div>
+
+  <section class="card now" aria-live="polite">
+    <div class="eq phoneonly" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+    <div class="eyebrow phoneonly" id="eyebrow"></div>
+    <div class="bigname phoneonly" id="bigName"></div>
+    <div class="np">
+      <div class="artwrap"><div class="art" id="art"><span id="artText">R</span><img id="artImg" alt="" hidden><div class="shade" id="artShade" hidden><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.6 3 2.7-2.7-1.4-1.4-2.7 2.7-2.7-2.7-1.4 1.4 2.7 2.7-2.7 2.7 1.4 1.4 2.7-2.7 2.7 2.7 1.4-1.4z"/></svg></div></div></div>
+      <div class="nptext">
+        <div class="meta"><span class="pill" id="pill" hidden></span><span id="stationName"></span></div>
+        <h1 id="headline">InterLude</h1>
+        <div class="sub" id="subheadline">Connecting…</div>
+      </div>
+    </div>
+    <div class="lede phoneonly">Plays a minute behind live and mutes each news bulletin for you.</div>
+    <div class="hint" id="startNote" hidden>Starting. The first start takes about 20 seconds while InterLude builds its delay.</div>
+    <button class="btn golive" id="goLive" hidden>Play live instead</button>
+    <div class="progress" id="progress" hidden aria-label="Position in programme">
+      <div class="bar" id="bar"><i class="analysed" id="analysed"></i><i class="heard" id="heard"></i></div>
+      <div class="progress-text"><span id="position"></span><span id="skipped"></span></div>
+    </div>
+  </section>
+
+  <div class="dock" id="dock">
+      <div class="alert" id="alert" hidden>
+        <div class="label"><b id="alertTitle"></b><small id="alertDetail"></small></div>
+        <button class="btn" id="notNews" hidden>Not news</button>
+      </div>
+  <section class="transport">
+    <button class="play" id="play" aria-label="Play">
+      <svg id="iconPlay" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>
+      <svg id="iconStop" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" hidden><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+    </button>
+    <div class="volume">
+      <button class="vbtn" id="volDown" aria-label="Quieter"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M5 9v6h4l5 5V4L9 9H5z"/></svg></button>
+      <input type="range" id="volume" min="0" max="100" step="1" value="70" aria-label="Volume">
+      <button class="vbtn" id="volUp" aria-label="Louder"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3A4.5 4.5 0 0 0 14 7.97v8.05A4.47 4.47 0 0 0 16.5 12zM14 3.23v2.06a7 7 0 0 1 0 13.42v2.06A9 9 0 0 0 14 3.23z"/></svg></button>
+    </div>
+  </section>
+
+  <div class="quick">
+    <button class="chip" id="quickStation"><div class="badge" id="quickBadge">R</div><span class="name"><small>Station</small><span id="quickStationLabel">…</span></span></button>
+    <button class="chip" id="quickSpeaker"><span class="icon" id="quickIcon"></span><span class="name"><small id="quickSpeakerCaption">Play on</small><span id="quickSpeakerLabel">…</span></span></button>
+  </div>
+  </div>
+  </div>
+
+  <div class="col">
+  <section class="card rows">
+    <button class="row deskonly" id="stationRow">
+      <div class="badge" id="stationBadge">R</div>
+      <div class="label"><small>Station</small><span id="stationLabel">…</span></div>
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+    </button>
+    <button class="row deskonly" id="speakerRow">
+      <div class="icon" id="speakerIcon"></div>
+      <div class="label"><small id="speakerCaption">Play on</small><span id="speakerLabel">…</span></div>
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+    </button>
+    <button class="row" id="settingsRow" hidden>
+      <div class="icon"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3h-4l-.4 2.7a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1L11 21h4l.4-2.7a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5L19.4 13zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg></div>
+      <div class="label"><span>Settings</span></div>
+      <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg>
+    </button>
+  </section>
+
+  <section class="card news" id="news" hidden>
+    <div class="secondary">
+      <button class="link" id="gotThrough">News got through</button>
+      <small id="note"></small>
+    </div>
+  </section>
+
+  <section class="card earlier" id="earlier" hidden>
+    <div class="days">
+      <button class="step" id="dayBack" aria-label="Earlier day"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m15 5-7 7 7 7"/></svg></button>
+      <b id="dayTitle" aria-live="polite">Today</b>
+      <button class="step" id="dayNext" aria-label="Later day"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></button>
+    </div>
+    <div id="programmes"></div>
+  </section>
+  </div>
+
+  <footer id="footer"></footer>
+  <div class="plainrow"><button class="link" id="plainBtn">Plain background</button></div>
+</main>
+
+<dialog id="stationSheet" aria-labelledby="stationSheetTitle">
+  <div class="sheet-head"><h2 id="stationSheetTitle">Station</h2><button class="link" data-close>Done</button></div>
+  <div class="sheet-body" id="stationList"></div>
+</dialog>
+<dialog id="speakerSheet" aria-labelledby="speakerSheetTitle">
+  <div class="sheet-head"><h2 id="speakerSheetTitle">Play on</h2><button class="link" data-close>Done</button></div>
+  <div class="sheet-body" id="speakerList"></div>
+</dialog>
+<dialog id="settingsSheet" aria-labelledby="settingsSheetTitle">
+  <div class="sheet-head"><h2 id="settingsSheetTitle">Settings</h2><button class="link" data-close>Done</button></div>
+  <div class="sheet-body" id="settingsList"></div>
+</dialog>
+<audio id="player" preload="none"></audio>
+<div class="toast" id="toast" hidden role="status"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
