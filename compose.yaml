@@ -3,15 +3,20 @@
 #   docker compose pull && docker compose up -d     the released image
 #   docker compose up -d --build                    built from this checkout instead
 #
+# INTERLUDE_TAG=edge picks the image built from the latest commit on main rather than the latest release.
+# ./config holds a station list and web app to use in place of the image's (scripts/push-config.sh puts them there).
+# The server reads them again when they change, with no restart.
+#
 # Host networking, so Chromecasts and mDNS reach it without NAT. The app's link is in `docker compose logs`.
 services:
   interlude:
-    image: ghcr.io/mstrtheplague/interlude-server:latest
+    image: ghcr.io/mstrtheplague/interlude-server:${INTERLUDE_TAG:-latest}
     build: .
     network_mode: host
     restart: unless-stopped
     volumes:
       - data:/var/lib/interlude
+      - ./config:/etc/interlude:ro
     environment:
       TZ: Europe/London
       # Run the live session all the time, for a week of comparing with the Mac app. Remove afterwards: it streams

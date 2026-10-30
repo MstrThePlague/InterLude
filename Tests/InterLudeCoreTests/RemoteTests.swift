@@ -4,6 +4,8 @@ import Foundation
 
 @Suite struct RemoteTests {
     let token = "abc123"
+    /// The checkout's own web app.
+    let files = WebFiles(folders: [URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Web").standardized])
     private func route(_ method: String, _ target: String) -> RemoteRoute? {
         RemoteRoutes.route(HTTPRequest(requestLine: "\(method) \(target) HTTP/1.1")!, token: token)
     }
@@ -132,7 +134,7 @@ import Foundation
         #expect(app("POST", "/app/abc123/api/play") == .command(.play))
         #expect(app("GET", "/remote/abc123/") == nil)
         #expect(route("GET", "/app/abc123/") == nil)
-        let html = String(decoding: RemoteRoutes.page(token: token, prefix: RemoteRoutes.appPrefix).body, as: UTF8.self)
+        let html = String(decoding: RemoteRoutes.page(token: token, prefix: RemoteRoutes.appPrefix, files: files).body, as: UTF8.self)
         #expect(html.contains(#"<base href="/app/abc123/">"#))
     }
 
@@ -157,19 +159,47 @@ import Foundation
     }
 
     @Test func pageCarriesItsBase() {
-        let html = String(decoding: RemoteRoutes.page(token: token).body, as: UTF8.self)
+        let html = String(decoding: RemoteRoutes.page(token: token, files: files).body, as: UTF8.self)
         #expect(html.contains(#"<base href="/remote/abc123/">"#))
         #expect(!html.contains("__BASE__"))
     }
 
     /// iOS 27 shows a letter tile for a fetched apple-touch-icon, so the page carries it inline.
     @Test func pageCarriesItsTouchIcon() {
-        let html = String(decoding: RemoteRoutes.page(token: token, touchIcon: Data([1, 2, 3])).body, as: UTF8.self)
+        let html = String(decoding: RemoteRoutes.page(token: token, touchIcon: Data([1, 2, 3]), files: files).body, as: UTF8.self)
         #expect(html.contains(#"<link rel="apple-touch-icon" sizes="180x180" href="data:image/png;base64,AQID">"#))
         #expect(html.contains(#"<link rel="icon" href="icon.png">"#))
         #expect(!html.contains("__TOUCH_ICON__"))
-        let plain = String(decoding: RemoteRoutes.page(token: token).body, as: UTF8.self)
+        let plain = String(decoding: RemoteRoutes.page(token: token, files: files).body, as: UTF8.self)
         #expect(plain.contains(#"<link rel="apple-touch-icon" sizes="180x180" href="icon.png">"#))
+    }
+
+    @Test func pageAndAssetsComeFromFiles() throws {
+        #expect(route("GET", "/remote/abc123/app.js") == .asset("app.js"))
+        #expect(route("GET", "/remote/abc123/app.css") == .asset("app.css"))
+        #expect(route("POST", "/remote/abc123/app.js") == nil)
+        #expect(route("GET", "/remote/abc123/other.js") == nil)
+        let html = String(decoding: RemoteRoutes.page(token: token, files: files).body, as: UTF8.self)
+        #expect(html.contains(#"<meta name="interlude-version" content="\#(files.version)">"#))
+        #expect(RemoteRoutes.asset("app.css", files: files).contentType.hasPrefix("text/css"))
+        #expect(RemoteRoutes.asset("app.js", files: files).status == 200)
+    }
+
+    /// An override folder replaces a file, a change to it shows in the version, and removing it brings the bundled one back.
+    @Test func overridesWinAndChangeTheVersion() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let layered = WebFiles(folders: [dir] + files.folders)
+        let before = layered.version
+        let css = dir.appendingPathComponent("app.css")
+        try Data("body{}".utf8).write(to: css)
+        #expect(layered.data("app.css") == Data("body{}".utf8))
+        #expect(layered.version != before)
+        try FileManager.default.removeItem(at: css)
+        #expect(layered.data("app.css") == files.data("app.css"))
+        #expect(layered.version == before)
+        #expect(layered.url("../secret") == nil)
     }
 
     @Test func tokensAreLongAndFresh() {
