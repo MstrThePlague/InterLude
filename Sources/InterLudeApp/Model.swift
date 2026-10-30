@@ -53,20 +53,23 @@ final class AppModel {
 
     // Earlier programmes
     enum Mode: String { case live, earlier }
-    /// Live, or an earlier programme from the start with the news skipped. Changing it stops playback.
+    /// Which the panel shows: Live, or the programmes to play from the start with the news skipped. Only the view
+    /// changes: what plays carries on until something else is picked.
     var mode: Mode {
         didSet {
             guard mode != oldValue else { return }
             UserDefaults.standard.set(mode.rawValue, forKey: "mode")
-            if isPlaying || isStarting { stop() }
             if mode == .earlier { loadSchedule() }
         }
     }
     var programmes: [Programme] = []
     enum ScheduleState: Equatable { case idle, loading, failed(String) }
     var scheduleState: ScheduleState = .idle
-    /// The earlier programme chosen to play, and playing once `isPlaying`.
+    /// The earlier programme last picked, which Play starts in Earlier.
     var replaying: Programme?
+    /// What is playing or starting: its station, and the programme if it is an earlier one. Kept apart from `mode` and
+    /// the station chosen, so Earlier can be browsed while live plays, and another station while either does.
+    private(set) var source: (station: Station, replay: Programme?)?
     private var scheduleFor: (station: String, day: Int, at: Date)?
     /// Which day's schedule the list shows: 0 is today, up to `OnDemand.days - 1` days back.
     var scheduleDay = 0 {
@@ -83,7 +86,13 @@ final class AppModel {
             return d.formatted(.dateTime.weekday(.wide).day().month(.abbreviated))
         }
     }
-    var isReplay: Bool { mode == .earlier && (isPlaying || isStarting) }
+    var isReplay: Bool { (isPlaying || isStarting) && source?.replay != nil }
+    /// The station playing or starting, or the one chosen when nothing is.
+    var onAirStation: Station? { source?.station ?? selectedStation }
+    /// Live is showing, but what plays is an earlier programme or another station browsed away from in Earlier.
+    var offersLive: Bool {
+        mode == .live && (isPlaying || isStarting) && (source.map { $0.replay != nil || $0.station.serviceId != selectedStationID } ?? false)
+    }
 
     // Settings
     /// The local server's port. Takes effect after a relaunch, since the server keeps running between sessions.
@@ -160,7 +169,7 @@ final class AppModel {
         }
     }
     var learnedNote: String? {
-        let p = profile(selectedStationID)
+        let p = profile(onAirStation?.serviceId ?? selectedStationID)
         if status.learningJingle { return "Learning the news jingle…" }
         if status.speechModel == "checking" { return "Getting speech recognition ready…" }
         if !p.idents.isEmpty { return "Knows the news jingle" }
@@ -201,16 +210,16 @@ final class AppModel {
     }
     /// The small line above the headline: the station while playing, otherwise whether it stopped.
     var statusCaption: String {
-        isPlaying || isStarting ? (selectedStation?.name ?? "") : (errorText != nil ? "Stopped" : "Not playing")
+        isPlaying || isStarting ? (onAirStation?.name ?? "") : (errorText != nil ? "Stopped" : "Not playing")
     }
     var headline: String {
-        if isStarting, mode == .earlier, let p = replaying { return p.title }
+        if isStarting, let p = source?.replay { return p.title }
         guard isPlaying else { return selectedStation?.name ?? "InterLude" }
         if status.muted { return "News muted" }
-        return status.nowPlaying?.title ?? status.nowPlaying?.artist ?? selectedStation?.name ?? "Playing"
+        return status.nowPlaying?.title ?? status.nowPlaying?.artist ?? onAirStation?.name ?? "Playing"
     }
     var subheadline: String {
-        if isStarting, mode == .earlier, let p = replaying {
+        if isStarting, let p = source?.replay {
             return "Starting from \(p.start.formatted(date: .omitted, time: .shortened))…"
         }
         if isStarting { return "Starting about a minute behind live…" }
@@ -222,7 +231,9 @@ final class AppModel {
         if let np = status.nowPlaying, np.title != nil { return np.artist }
         return "On \(selectedOutput.label)"
     }
-    var artworkURL: URL? { isPlaying ? status.nowPlaying?.imageURL : (mode == .earlier ? replaying?.imageURL : nil) }
+    var artworkURL: URL? {
+        isPlaying ? status.nowPlaying?.imageURL : isStarting ? source?.replay?.imageURL : (mode == .earlier ? replaying?.imageURL : nil)
+    }
 
     var menuIcon: String {
         if isPlaying && status.muted { return "speaker.slash.fill" }
@@ -313,6 +324,7 @@ final class AppModel {
             let prog = Programme(id: "demo", title: "Radcliffe and Maconie", subtitle: "Music, chat and Isobel Campbell",
                                  start: start, end: start.addingTimeInterval(7200), imageURL: URL(string: "https://ichef.bbci.co.uk/images/ic/480x480/p0lxz91z.jpg"))
             replaying = prog
+            if let st = selectedStation { source = (st, prog) }
             var r = ReplayStatus(programme: prog, heard: start.addingTimeInterval(2400), analysedThrough: start.addingTimeInterval(3000))
             r.skipCount = 2; r.skippedSeconds = 371; r.justSkipped = 188
             r.news = [start.addingTimeInterval(-20)...start.addingTimeInterval(163), start.addingTimeInterval(1790)...start.addingTimeInterval(1978)]
@@ -332,17 +344,51 @@ final class AppModel {
     private func loadCatalogue() {
         let bundled = Bundle.main.url(forResource: "stations", withExtension: "json") ?? URL(fileURLWithPath: "Data/stations.json")
         do {
-            let c = try Catalogue.loadEditable(bundled: bundled)
-            catalogue = c; stations = c.stations
-            for s in c.stations { profiles[s.serviceId] = StationProfile.load(s) }
+            use(try Catalogue.loadEditable(bundled: bundled))
+            watchCatalogue(bundled: bundled)
         } catch { errorText = "Could not read the station list: \(error.localizedDescription)" }
+    }
+
+    /// Reads the station list again whenever it, or the bundled one, changes, so an edit takes effect without a relaunch.
+    private func watchCatalogue(bundled: URL) {
+        guard let file = try? Catalogue.editableURL(bundled: bundled) else { return }
+        Task { [weak self] in
+            var last = FileStamp.of([file, bundled])
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(3))
+                let now = FileStamp.of([file, bundled])
+                guard now != last else { continue }
+                last = now
+                guard let self else { return }
+                do { self.use(try Catalogue.loadEditable(bundled: bundled)) }
+                catch { self.errorText = "The station list changed but couldn't be read, so the old one stays: \(error.localizedDescription)" }
+            }
+        }
+    }
+
+    /// Takes a station list. What plays carries on, unless its stream's address changed or it was removed.
+    private func use(_ c: Catalogue) {
+        let old = catalogue
+        catalogue = c; stations = c.stations
+        for s in c.stations where profiles[s.serviceId] == nil { profiles[s.serviceId] = StationProfile.load(s) }
+        if selectedStation == nil, let first = c.stations.first {
+            selectedStationID = first.serviceId
+            replaying = nil; programmes = []
+            if mode == .earlier { loadSchedule() }
+        }
+        guard let src = source, let old else { return }
+        guard let now = c.station(src.station.serviceId) else {
+            stop(); errorText = "\(src.station.name) was removed from the station list."; return
+        }
+        source = (now, src.replay)
+        if c.playlistURL(now) != old.playlistURL(src.station) { restart() }
     }
 
     func profile(_ id: String) -> StationProfile { profiles[id] ?? StationProfile() }
     func updateProfile(_ id: String, _ f: (inout StationProfile) -> Void) {
         var p = profile(id); f(&p); profiles[id] = p
         if let s = stations.first(where: { $0.serviceId == id }) { p.save(s) }
-        if isPlaying, id == selectedStationID { Task { await session?.setLiveOptions(muteNews: p.muteNews, shadowMode: p.shadowMode) } }
+        if isPlaying, id == source?.station.serviceId { Task { await session?.setLiveOptions(muteNews: p.muteNews, shadowMode: p.shadowMode) } }
     }
     var favouriteStations: [Station] { stations.filter { profile($0.serviceId).favourite } }
     var otherStations: [Station] { stations.filter { !profile($0.serviceId).favourite } }
@@ -384,12 +430,23 @@ final class AppModel {
 
     func togglePlay() { if isPlaying || isStarting { stop() } else { start() } }
 
-    func start() {
-        guard let catalogue, let station = selectedStation, !isStarting else { return }
-        if mode == .earlier && replaying == nil {
-            guard let p = programmes.first(where: { Self.canPlay($0) }) else { loadSchedule(); return }
-            replaying = p
+    /// Starts what the panel shows: the chosen station live, or in Earlier the programme picked (the first playable
+    /// one if none was).
+    func start() { start(nil) }
+
+    private func start(_ what: (station: Station, replay: Programme?)?) {
+        guard let catalogue, !isStarting else { return }
+        let station: Station, replay: Programme?
+        if let what { (station, replay) = (catalogue.station(what.station.serviceId) ?? what.station, what.replay) }
+        else {
+            guard let st = selectedStation else { return }
+            if mode == .earlier && replaying == nil {
+                guard let p = programmes.first(where: { Self.canPlay($0) }) else { loadSchedule(); return }
+                replaying = p
+            }
+            (station, replay) = (st, mode == .earlier ? replaying : nil)
         }
+        source = (station, replay)
         errorText = nil; stationFailed = false; castFailed = false; notifiedFailure = false
         isStarting = true; shownNotices = 0
         if !askedForNotifications {
@@ -400,7 +457,7 @@ final class AppModel {
         var settings = SessionSettings(station: station, profile: profile(station.serviceId))
         settings.bitrate = bitrate
         settings.ambience = ambienceURL
-        if mode == .earlier, let p = replaying {
+        if let p = replay {
             settings.replay = p
             settings.onDemand = !Schedule.isPlayable(p)
         }
@@ -417,7 +474,7 @@ final class AppModel {
                 isPlaying = true; isStarting = false
                 updateActivity(); startTimer(); watchNetwork()
             } catch {
-                isStarting = false; isPlaying = false
+                isStarting = false; isPlaying = false; source = nil
                 errorText = friendly(error, station: station)
                 if error is CastError || output.isCast && !(error is FetchError) { castFailed = true } else { stationFailed = true }
                 await tearDown()
@@ -425,12 +482,14 @@ final class AppModel {
         }
     }
 
+    /// Starts what was playing again, whichever view is showing.
     func restart() {
-        Task { await tearDown(); isPlaying = false; isStarting = false; start() }
+        let what = source
+        Task { await tearDown(); isPlaying = false; isStarting = false; start(what) }
     }
 
     func stop() {
-        isPlaying = false; isStarting = false
+        isPlaying = false; isStarting = false; source = nil
         Task { await tearDown() }
     }
 
@@ -450,7 +509,7 @@ final class AppModel {
     func switchOutput(to id: String) {
         guard id != selectedOutputID else { return }
         selectedOutputID = id
-        guard isPlaying, let station = selectedStation else { return }
+        guard isPlaying, let station = source?.station else { return }
         let output = selectedOutput
         Task {
             await stopOutput()
@@ -482,26 +541,27 @@ final class AppModel {
     }
 
     /// Plays a station live from wherever things stand: stopped, playing another station, or playing an earlier
-    /// programme. The phone remote's station list and Play button use it.
+    /// programme. The panel's "live instead" button and the phone remote's station list and Play button use it.
     func playLive(_ id: String) {
         guard stations.contains(where: { $0.serviceId == id }) else { return }
         let active = isPlaying || isStarting
-        if mode == .live && id == selectedStationID && active { return }
-        if mode == .live && !active { selectedStationID = id; start(); return }
+        if mode == .live && id == selectedStationID && active && !offersLive { return }
+        if !active { mode = .live; selectedStationID = id; start(); return }
         Task {
-            if active { await tearDown(); isPlaying = false; isStarting = false }
+            await tearDown(); isPlaying = false; isStarting = false; source = nil
             mode = .live; selectedStationID = id; start()
         }
     }
 
+    /// In Earlier, shows the station's programmes and leaves what plays alone; in Live, plays the station.
     func switchStation(to id: String) {
-        selectedStationID = id
         if mode == .earlier {
+            guard id != selectedStationID else { return }
+            selectedStationID = id
             replaying = nil; programmes = []
-            if isPlaying || isStarting { stop() }
             loadSchedule(); return
         }
-        if isPlaying || isStarting { Task { await tearDown(); isPlaying = false; isStarting = false; start() } }
+        if isPlaying || isStarting { playLive(id) } else { selectedStationID = id }
     }
 
     // MARK: Earlier programmes
@@ -523,11 +583,11 @@ final class AppModel {
         }
     }
 
-    /// Plays an earlier programme from its start, stopping whatever is playing.
+    /// Plays an earlier programme of the chosen station from its start, stopping whatever is playing.
     func play(_ p: Programme) {
-        guard Self.canPlay(p) else { return }
+        guard Self.canPlay(p), let st = selectedStation else { return }
         replaying = p
-        if isPlaying || isStarting { Task { await tearDown(); isPlaying = false; isStarting = false; start() } } else { start() }
+        if isPlaying || isStarting { Task { await tearDown(); isPlaying = false; isStarting = false; start((st, p)) } } else { start((st, p)) }
     }
 
     private func ensureServer() throws {
@@ -585,7 +645,7 @@ final class AppModel {
     }
 
     private func settingsTitle(_ station: Station) -> String {
-        if mode == .earlier, let p = replaying { return "\(p.title) · \(station.name)" }
+        if let p = source?.replay { return "\(p.title) · \(station.name)" }
         return station.name
     }
 
@@ -616,9 +676,9 @@ final class AppModel {
         let m = NWPathMonitor()
         m.pathUpdateHandler = { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.isPlaying, let ip = LocalServer.lanAddress(), ip != self.lastAddress, let c = self.cast, let st = self.selectedStation else { return }
+                guard let self, self.isPlaying, let ip = LocalServer.lanAddress(), ip != self.lastAddress, let c = self.cast, let st = self.source?.station else { return }
                 self.lastAddress = ip
-                if let url = try? self.playlistURL(host: ip) { try? await c.load(url: url, title: st.name) }
+                if let url = try? self.playlistURL(host: ip) { try? await c.load(url: url, title: self.settingsTitle(st)) }
             }
         }
         m.start(queue: .main); pathMonitor = m
@@ -634,7 +694,7 @@ final class AppModel {
                 let st = await s.status()
                 if st.recentBlocks.count != self.status.recentBlocks.count || st.recentBlocks.first?.end != self.status.recentBlocks.first?.end
                     || st.learningJingle != self.status.learningJingle,
-                   let station = self.selectedStation {
+                   let station = self.source?.station {
                     self.profiles[station.serviceId] = StationProfile.load(station)
                 }
                 self.status = st
@@ -664,7 +724,7 @@ final class AppModel {
     func newsGotThrough() {
         Task {
             await session?.newsGotThrough()
-            profiles[selectedStationID] = selectedStation.map { StationProfile.load($0) } ?? profile(selectedStationID)
+            if let st = onAirStation { profiles[st.serviceId] = StationProfile.load(st) }
         }
     }
     func restartToApply() { if isPlaying { restart() } }
@@ -727,7 +787,8 @@ final class AppModel {
     private func respondToRemote(_ req: HTTPRequest) -> HTTPResponse {
         guard remoteEnabled, let route = RemoteRoutes.route(req, token: remoteToken) else { return .notFound }
         switch route {
-        case .page: return RemoteRoutes.page(token: remoteToken, touchIcon: Self.remoteTouchIcon)
+        case .page: return RemoteRoutes.page(token: remoteToken, touchIcon: Self.remoteTouchIcon, files: Self.webFiles)
+        case .asset(let name): return RemoteRoutes.asset(name, files: Self.webFiles)
         case .manifest: return RemoteRoutes.manifest
         case .icon: return HTTPResponse(contentType: "image/png", body: Self.remoteIcon)
         case .state: return RemoteRoutes.json(remoteState())

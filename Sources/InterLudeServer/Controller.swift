@@ -43,7 +43,10 @@ struct ServerSettings: Codable {
 /// The server's counterpart of the Mac app's AppModel: owns the one session every browser shares, the station and
 /// Earlier choices, and the settings, and describes them all as the remote's state.
 actor Controller {
-    private let catalogue: Catalogue
+    /// Replaced while running when the station list's file changes; see `use(_:)`.
+    private var catalogue: Catalogue
+    /// The web app's files' version, which open pages compare with their own.
+    private var pageVersion: @Sendable () -> String? = { nil }
     private var profiles: [String: StationProfile] = [:]
     private var settings: ServerSettings
     private let settingsURL: URL
@@ -76,7 +79,12 @@ actor Controller {
     private var scheduleLoading = false
     private var scheduleProblem: String?
     private var scheduleFor: (station: String, day: Int, at: Date)?
+    /// The programme last picked in Earlier, which Play starts there.
     private var replaying: Programme?
+    /// What the session playing or starting was started for: its station, and the programme if it is an earlier one.
+    /// Kept apart from the Live / Earlier choice and the station being browsed, so either view can be looked through
+    /// without stopping what plays.
+    private var source: (station: Station, replay: Programme?)?
 
     /// A session stops after this long with no requests for its stream.
     static let idleLimit: TimeInterval = 600
@@ -93,6 +101,29 @@ actor Controller {
         if s.mode == "earlier" { Task { await self.loadSchedule() } }
         if keepRunning { Task { await self.keepAlive() } }
         Task { await self.discover() }
+    }
+
+    func setPageVersion(_ f: @escaping @Sendable () -> String?) { pageVersion = f }
+
+    /// Takes a changed station list. What plays carries on, unless its stream's address changed or it was removed.
+    func use(_ c: Catalogue) async {
+        let old = catalogue
+        catalogue = c
+        for st in c.stations where profiles[st.serviceId] == nil { profiles[st.serviceId] = StationProfile.load(st) }
+        if c.station(settings.station) == nil, let first = c.stations.first {
+            settings.station = first.serviceId; saveSettings()
+            replaying = nil; programmes = []
+            if isEarlier { loadSchedule() }
+        }
+        guard let src = source else { return }
+        guard let now = c.station(src.station.serviceId) else { await stop("\(src.station.name) was removed from the station list"); return }
+        if c.playlistURL(now) != old.playlistURL(src.station) {
+            log("\(now.name)'s stream address changed, starting it again")
+            source = (now, src.replay)
+            await restart()
+        } else {
+            source = (now, src.replay)
+        }
     }
 
     // MARK: Speakers
@@ -158,8 +189,8 @@ actor Controller {
     }
 
     private var castTitle: String {
-        if isEarlier, let p = replaying { return "\(p.title) · \(selectedStation?.name ?? "")" }
-        return selectedStation?.name ?? "InterLude"
+        if let p = source?.replay { return "\(p.title) · \(playingStation?.name ?? "")" }
+        return playingStation?.name ?? "InterLude"
     }
 
     /// With keepRunning, starts the live session and starts it again within a minute whenever it stops.
@@ -174,7 +205,14 @@ actor Controller {
     private var selectedStation: Station? { catalogue.station(settings.station) }
     private var isPlaying: Bool { session != nil }
     private var isStarting: Bool { starting != nil }
+    /// Whether the Earlier view is showing, which says nothing about what plays.
     private var isEarlier: Bool { settings.mode == "earlier" }
+    /// Whether the session playing or starting is an earlier programme.
+    private var isReplay: Bool { source?.replay != nil }
+    /// Live is showing, but what plays is an earlier programme or another station, browsed away from in Earlier.
+    private var offersLive: Bool { !isEarlier && source.map { $0.replay != nil || $0.station.serviceId != settings.station } ?? false }
+    /// The station playing or starting, or the one chosen when nothing is.
+    private var playingStation: Station? { source?.station ?? selectedStation }
     private func profile(_ id: String) -> StationProfile { profiles[id] ?? StationProfile() }
 
     private func updateProfile(_ id: String, _ change: (inout StationProfile) -> Void) {
@@ -206,22 +244,29 @@ actor Controller {
 
     // MARK: Playback
 
-    /// Starts a session for the current choice: the station live, or in Earlier the programme picked (the first
-    /// playable one if none was). Returns the start in progress, or nil if there is nothing to play.
+    /// Starts a session for `what`, or for the current choice: the station live, or in Earlier the programme picked
+    /// (the first playable one if none was). Returns the start in progress, or nil if there is nothing to play.
     @discardableResult
-    private func start() -> Task<PlayerSession, Error>? {
+    private func start(_ what: (station: Station, replay: Programme?)? = nil) -> Task<PlayerSession, Error>? {
         if let starting { return starting }
-        guard session == nil, let station = selectedStation else { return nil }
-        if isEarlier && replaying == nil {
-            guard let p = programmes.first(where: Self.canPlay) else { loadSchedule(); return nil }
-            replaying = p
+        guard session == nil else { return nil }
+        let station: Station, replay: Programme?
+        if let what { (station, replay) = what }
+        else {
+            guard let st = selectedStation else { return nil }
+            if isEarlier && replaying == nil {
+                guard let p = programmes.first(where: Self.canPlay) else { loadSchedule(); return nil }
+                replaying = p
+            }
+            (station, replay) = (st, isEarlier ? replaying : nil)
         }
+        source = (station, replay)
         errorText = nil
         var s = SessionSettings(station: station, profile: profile(station.serviceId))
         s.bitrate = settings.bitrate
         s.ambience = ambienceURL
         if !detects { s.muteNews = false }
-        if isEarlier, let p = replaying { s.replay = p; s.onDemand = !Schedule.isPlayable(p) }
+        if let p = replay { s.replay = p; s.onDemand = !Schedule.isPlayable(p) }
         generation += 1
         let gen = generation, catalogue = catalogue, sessionSettings = s
         let t = Task { () throws -> PlayerSession in
@@ -232,7 +277,7 @@ actor Controller {
         }
         starting = t
         lastRequest = Date()
-        log(isEarlier ? "starting \(replaying?.title ?? "") on \(station.name)" : "starting \(station.name), \(Int(s.delaySeconds)) s behind live")
+        log(replay != nil ? "starting \(replay?.title ?? "") on \(station.name)" : "starting \(station.name), \(Int(s.delaySeconds)) s behind live")
         Task { await self.started(t, generation: gen) }
         return t
     }
@@ -248,6 +293,7 @@ actor Controller {
             guard gen == generation else { return }
             starting = nil
             errorText = friendly(error)
+            source = nil
             log("couldn't start: \(errorText ?? "")")
         }
     }
@@ -260,13 +306,16 @@ actor Controller {
         watcher?.cancel(); watcher = nil
         let s = session
         session = nil
+        source = nil
         status = SessionStatus()
         if let s { await s.stop(); log("stopped\(reason.map { ": \($0)" } ?? "")") }
     }
 
+    /// Starts what was playing again, whichever view is showing.
     private func restart() async {
+        let what = source
         await stop()
-        start()
+        start(what)
     }
 
     /// Follows the session once a second, as the Mac's status timer does, and stops it when nobody is listening.
@@ -285,7 +334,7 @@ actor Controller {
     private func tick(_ s: PlayerSession) async -> Bool {
         guard session === s else { return false }
         let st = await s.status()
-        if st.recentBlocks.count != status.recentBlocks.count || st.learningJingle != status.learningJingle, let station = selectedStation {
+        if st.recentBlocks.count != status.recentBlocks.count || st.learningJingle != status.learningJingle, let station = playingStation {
             profiles[station.serviceId] = StationProfile.load(station)
         }
         status = st
@@ -300,7 +349,7 @@ actor Controller {
 
     private func friendly(_ e: Error) -> String {
         if case FetchError.unhealthy(let m) = e { return m }
-        return "Could not start \(selectedStation?.name ?? "the station"): \(e.localizedDescription)"
+        return "Could not start \(playingStation?.name ?? "the station"): \(e.localizedDescription)"
     }
 
     // MARK: Earlier programmes
@@ -340,12 +389,14 @@ actor Controller {
         case .station(let id):
             guard catalogue.station(id) != nil else { return }
             if isEarlier {
+                // Earlier shows the station's programmes, and whatever plays carries on until one is picked.
                 guard id != settings.station else { return }
                 settings.station = id; saveSettings()
                 replaying = nil; programmes = []
-                await stop(); loadSchedule()
+                loadSchedule()
             } else {
-                if id == settings.station && active { return }
+                // Live plays the station, taking over from an earlier programme or another station browsed from.
+                if id == settings.station && active && !offersLive { return }
                 settings.station = id; saveSettings()
                 await stop(); start()
             }
@@ -360,12 +411,12 @@ actor Controller {
         case .notNews: await session?.notNews()
         case .newsGotThrough:
             await session?.newsGotThrough()
-            if let st = selectedStation { profiles[st.serviceId] = StationProfile.load(st) }
+            if let st = playingStation { profiles[st.serviceId] = StationProfile.load(st) }
         case .earlier(let on):
             let mode = on ? "earlier" : "live"
             guard mode != settings.mode else { return }
+            // Only the view changes: what plays carries on until something else is picked.
             settings.mode = mode; saveSettings()
-            await stop()
             if on { loadSchedule() }
         case .day(let d):
             guard isEarlier, d != scheduleDay else { return }
@@ -389,7 +440,7 @@ actor Controller {
         switch s {
         case .delay(let d):
             updateProfile(id) { $0.delaySeconds = d }
-            if active && !isEarlier { await restart() }
+            if active && !isReplay && source?.station.serviceId == id { await restart() }
         case .muteNews(let on): updateProfile(id) { $0.muteNews = on }; await applyLiveOptions()
         case .jingleOnly(let on): updateProfile(id) { $0.detector.identOnly = on }
         case .shadowMode(let on): updateProfile(id) { $0.shadowMode = on }; await applyLiveOptions()
@@ -413,7 +464,7 @@ actor Controller {
 
     /// Passes the station's mute options to a running session, as the Mac does.
     private func applyLiveOptions() async {
-        guard detects, let st = selectedStation else { return }
+        guard detects, let st = playingStation else { return }
         let p = profile(st.serviceId)
         await session?.setLiveOptions(muteNews: p.muteNews, shadowMode: p.shadowMode)
     }
@@ -422,8 +473,8 @@ actor Controller {
 
     func state() -> RemoteState {
         var s = RemoteState()
-        let station = selectedStation
-        let playing = isPlaying, startingNow = isStarting, replay = isEarlier && (playing || startingNow)
+        let station = playingStation
+        let playing = isPlaying, startingNow = isStarting, replay = isReplay
         s.state = startingNow ? "starting" : playing ? (status.muted ? "muted" : (replay ? "earlier" : "live")) : (errorText != nil ? "error" : "off")
         s.stationName = playing || startingNow ? (station?.name ?? "") : (errorText != nil ? "Stopped" : "Not playing")
         s.headline = headline(station)
@@ -431,7 +482,7 @@ actor Controller {
         if isEarlier && !playing && !startingNow, let p = replaying, Self.canPlay(p) {
             s.subheadline = "Play starts \(p.title) from \(p.start.formatted(date: .omitted, time: .shortened))"
         }
-        s.artwork = (playing ? status.nowPlaying?.imageURL : (isEarlier ? replaying?.imageURL : nil))?.absoluteString
+        s.artwork = (playing ? status.nowPlaying?.imageURL : startingNow ? source?.replay?.imageURL : (isEarlier ? replaying?.imageURL : nil))?.absoluteString
         s.error = errorText
         s.playing = playing || startingNow
         s.muted = playing && status.muted
@@ -463,23 +514,26 @@ actor Controller {
             s.speakerNote = "No Chromecast speakers found. The server needs to see multicast DNS from the speakers' network."
         }
         s.mode = settings.mode
-        if isEarlier { s.earlier = earlier(station) }
+        if isEarlier { s.earlier = earlier(selectedStation) }
+        s.offerLive = offersLive
+        if let id = source?.station.serviceId, id != settings.station { s.onAir = id }
         if replay, let r = status.replay { s.replay = replayItem(r) }
         s.stream = "/stream/live.m3u8"
         s.streamID = playing ? streamID : nil
-        s.settings = settingsItem(station)
+        s.settings = settingsItem(selectedStation)
+        s.pageVersion = pageVersion()
         return s
     }
 
     private func headline(_ station: Station?) -> String {
-        if isStarting, isEarlier, let p = replaying { return p.title }
+        if isStarting, let p = source?.replay { return p.title }
         guard isPlaying else { return station?.name ?? "InterLude" }
         if status.muted { return "News muted" }
         return status.nowPlaying?.title ?? status.nowPlaying?.artist ?? station?.name ?? "Playing"
     }
 
     private func subheadline(_ station: Station?) -> String {
-        if isStarting, isEarlier, let p = replaying { return "Starting from \(p.start.formatted(date: .omitted, time: .shortened))…" }
+        if isStarting, let p = source?.replay { return "Starting from \(p.start.formatted(date: .omitted, time: .shortened))…" }
         if isStarting { return "Starting about a minute behind live…" }
         guard isPlaying else { return isEarlier ? "Pick a programme below" : "Ready to play" }
         if status.muted { return "Sound returns when the music does" }
@@ -497,13 +551,13 @@ actor Controller {
         }
         e.loading = scheduleLoading && programmes.isEmpty
         if programmes.isEmpty { e.problem = scheduleProblem }
-        let now = Date(), active = isPlaying || isStarting
+        let now = Date(), playingID = source?.replay?.id
         e.programmes = programmes.map { p in
             let playable = Self.canPlay(p), onNow = p.end > now, chosen = replaying?.id == p.id
             let length = Self.duration(p.end.timeIntervalSince(p.start))
             return .init(id: p.id, title: p.title, detail: playable ? (p.subtitle ?? length) : (onNow ? "On now" : "Not available"),
                          time: p.start.formatted(date: .omitted, time: .shortened), image: p.imageURL?.absoluteString,
-                         playable: playable, onNow: onNow, chosen: chosen, playing: chosen && active)
+                         playable: playable, onNow: onNow, chosen: chosen, playing: playingID == p.id)
         }
         return e
     }
