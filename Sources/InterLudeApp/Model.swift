@@ -332,20 +332,7 @@ final class AppModel {
     private func loadCatalogue() {
         let bundled = Bundle.main.url(forResource: "stations", withExtension: "json") ?? URL(fileURLWithPath: "Data/stations.json")
         do {
-            let url = try Catalogue.editableURL(bundled: bundled)
-            var c = try Catalogue.load(from: url)
-            // Copies made by older versions lack the badge fields: take them from the bundled list.
-            if let b = try? Catalogue.load(from: bundled) {
-                for i in c.stations.indices {
-                    guard let m = b.station(c.stations[i].serviceId) else { continue }
-                    if c.stations[i].short == nil { c.stations[i].short = m.short }
-                    if c.stations[i].colour == nil { c.stations[i].colour = m.colour }
-                    if c.stations[i].group == nil { c.stations[i].group = m.group }
-                }
-                // Stations added since the copy was made.
-                let known = Set(c.stations.map(\.serviceId))
-                c.stations += b.stations.filter { !known.contains($0.serviceId) }
-            }
+            let c = try Catalogue.loadEditable(bundled: bundled)
             catalogue = c; stations = c.stations
             for s in c.stations { profiles[s.serviceId] = StationProfile.load(s) }
         } catch { errorText = "Could not read the station list: \(error.localizedDescription)" }

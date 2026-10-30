@@ -14,6 +14,7 @@
     {"name": "Radio 1 Dance", "serviceId": "bbc_radio_one_dance", "poolId": "62063831", "kind": "music", "short": "1D", "colour": "#E5007E", "group": "National"},
     {"name": "Radio 1 Anthems", "serviceId": "bbc_radio_one_anthems", "poolId": "11351741", "kind": "music", "short": "1A", "colour": "#E5007E", "group": "National"},
     {"name": "Radio 3 Unwind", "serviceId": "bbc_radio_three_unwind", "poolId": "30624046", "kind": "music", "short": "3U", "colour": "#9B1D74", "group": "National"},
+    {"name": "6 Music Indie Forever", "serviceId": "bbc_radio_six_indie_forever", "poolId": "07012008", "kind": "music", "short": "6I", "colour": "#1A9E5F", "group": "National"},
     {"name": "Radio 5 Sports Extra", "serviceId": "bbc_radio_five_live_sports_extra", "poolId": "47700285", "kind": "speech", "short": "5X", "colour": "#00A0D6", "group": "National"},
     {"name": "Radio Scotland", "serviceId": "bbc_radio_scotland_fm", "poolId": "43322914", "kind": "speech", "short": "S", "colour": "#0F4C9A", "group": "Nations"},
     {"name": "Radio Scotland MW", "serviceId": "bbc_radio_scotland_mw", "poolId": "59378121", "kind": "speech", "short": "SM", "colour": "#0F4C9A", "group": "Nations"},
