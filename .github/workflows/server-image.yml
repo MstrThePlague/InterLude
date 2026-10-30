@@ -1,11 +1,14 @@
 # Builds the server image for each release tag (v1.2.3) and pushes it to GitHub's container registry, as
-# ghcr.io/mstrtheplague/interlude-server:1.2.3 and :latest. The Mac app's zip is still made locally with
-# scripts/package-release.sh, since it is signed with a certificate on the Mac.
+# ghcr.io/mstrtheplague/interlude-server:1.2.3 and :latest. Each push to main that changes the server publishes :edge
+# and :sha-<commit>, for trying a change on the server without building it there. The Mac app's zip is still made
+# locally with scripts/package-release.sh, since it is signed with a certificate on the Mac.
 name: Server image
 
 on:
   push:
     tags: ["v*"]
+    branches: [main]
+    paths-ignore: ["docs/**", "**.md", "Sources/InterLudeApp/**", "Sources/InterLudeApple/**", "Tools/**", "Tests/**"]
   workflow_dispatch:
 
 permissions:
@@ -31,6 +34,7 @@ jobs:
             type=semver,pattern={{version}}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=sha,enable=${{ !startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
       - uses: docker/build-push-action@v6
         with:
           context: .

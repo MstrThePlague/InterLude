@@ -8,12 +8,16 @@ import InterLudeCast
 // interlude-server: InterLude without a Mac. The web app at /app/<token>/ plays, controls and configures one shared
 // session, which starts when a browser asks for the stream and stops when nobody has for 10 minutes.
 //
-//   interlude-server [--port 8642] [--data DIR] [--stations FILE] [--web DIR] [--models DIR] [--ambience DIR] [--ffmpeg PATH]
-//                    [--keep-running] [--cast-host ADDRESS]
+//   interlude-server [--port 8642] [--data DIR] [--config DIR] [--stations FILE] [--web DIR] [--models DIR] [--ambience DIR]
+//                    [--ffmpeg PATH] [--keep-running] [--cast-host ADDRESS]
 //   interlude-server --check AUDIOFILE [--models DIR]     runs both models on a file, prints what they hear, and exits
 //
 // --keep-running (or INTERLUDE_KEEP_RUNNING=1) runs the live session all the time, for comparing with the Mac.
 // --cast-host is the address Cast speakers fetch the stream from; by default, this machine's LAN address.
+//
+// --config (default /etc/interlude) holds what can change while the server runs, all optional: stations.json, used in
+// place of the list kept in --data, and web/ with index.html, app.css or app.js to use in place of the built-in ones.
+// Both are read again when they change (scripts/push-config.sh puts them there), and open pages reload themselves.
 //
 // --models holds yamnet.onnx and its class map (scripts/yamnet/convert.sh), and whisper.cpp's ggml-base.en.bin for the
 // newsreader's opening and sign-off. Without YAMNet the server plays but can't recognise bulletins.
@@ -24,6 +28,7 @@ func log(_ line: String) { FileHandle.standardOutput.write(Data((line + "\n").ut
 struct Options {
     var port = 8642
     var data = URL(fileURLWithPath: "/var/lib/interlude", isDirectory: true)
+    var config = URL(fileURLWithPath: "/etc/interlude", isDirectory: true)
     var stations = URL(fileURLWithPath: "/usr/share/interlude/stations.json")
     var web = URL(fileURLWithPath: "/usr/share/interlude/web", isDirectory: true)
     var models = URL(fileURLWithPath: "/usr/share/interlude/models", isDirectory: true)
@@ -44,6 +49,7 @@ struct Options {
             switch args[i] {
             case "--port": guard let p = Int(try value()), (1024...65535).contains(p) else { throw UsageError("--port must be 1024 to 65535") }; port = p
             case "--data": data = URL(fileURLWithPath: try value(), isDirectory: true)
+            case "--config": config = URL(fileURLWithPath: try value(), isDirectory: true)
             case "--stations": stations = URL(fileURLWithPath: try value())
             case "--web": web = URL(fileURLWithPath: try value(), isDirectory: true)
             case "--models": models = URL(fileURLWithPath: try value(), isDirectory: true)
@@ -79,6 +85,32 @@ func sameOrigin(_ req: HTTPRequest) -> Bool {
     guard let u = URLComponents(string: origin), let host = u.host else { return false }
     let authority = u.port.map { "\(host):\($0)" } ?? host
     return [req.headers["host"], req.headers["x-forwarded-host"]].contains(authority)
+}
+
+/// The station list: the config folder's if it has one, otherwise the one kept in the data folder, with stations new
+/// to the bundled list added either way.
+func loadStations(bundled: URL, config: URL) throws -> Catalogue {
+    let editable = FileManager.default.fileExists(atPath: config.path) ? config : nil
+    let c = try Catalogue.loadEditable(bundled: bundled, editable: editable)
+    log("\(c.stations.count) stations from \(try (editable ?? Catalogue.editableURL(bundled: bundled)).path)")
+    return c
+}
+
+/// Reads the station list again whenever it changes, or one appears in or goes from the config folder, and hands it to
+/// the controller.
+func watchStations(bundled: URL, config: URL, controller: Controller) throws {
+    let files = [config, try Catalogue.editableURL(bundled: bundled), bundled]
+    Task {
+        var last = FileStamp.of(files)
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(3))
+            let now = FileStamp.of(files)
+            guard now != last else { continue }
+            last = now
+            do { await controller.use(try loadStations(bundled: bundled, config: config)) }
+            catch { log("couldn't read the changed station list, so the old one stays: \(error)") }
+        }
+    }
 }
 
 func text(_ status: Int, _ s: String) -> HTTPResponse {
@@ -124,7 +156,9 @@ do {
         exit(0)
     }
     AppPaths.root = opt.data
-    let catalogue = try Catalogue.load(from: Catalogue.editableURL(bundled: opt.stations))
+    // A station list in the config folder replaces the one kept in the data folder, and new bundled stations join it.
+    let configStations = opt.config.appendingPathComponent("stations.json")
+    let catalogue = try loadStations(bundled: opt.stations, config: configStations)
     let controller = Controller(catalogue: catalogue, settingsURL: try AppPaths.supportDirectory().appendingPathComponent("settings.json"),
                                 detects: detects, ambienceDirectory: opt.ambience, keepRunning: opt.keepRunning,
                                 castBase: (opt.castHost ?? LocalAddress.lan()).map { "http://\($0):\(opt.port)" })
@@ -133,15 +167,16 @@ do {
     let icon = (try? Data(contentsOf: web.appendingPathComponent("icon.png"))) ?? Data()
     let touchIcon = (try? Data(contentsOf: web.appendingPathComponent("touch-icon.png"))) ?? Data()
     let prefix = RemoteRoutes.appPrefix
-    // A page in the data folder that is newer than this program replaces the built-in one, so the interface can be
-    // updated without rebuilding the image (scripts/push-web.sh). An image built after it wins again.
-    let pageFile = opt.data.appendingPathComponent("web/index.html")
-    let built = (Bundle.main.executablePath).flatMap { try? FileManager.default.attributesOfItem(atPath: $0)[.modificationDate] as? Date } ?? .distantPast
-    @Sendable func pageHTML() -> String {
-        guard let changed = try? FileManager.default.attributesOfItem(atPath: pageFile.path)[.modificationDate] as? Date, changed > built,
-              let html = try? String(contentsOf: pageFile, encoding: .utf8) else { return RemotePage.html }
-        return html
+    let files = WebFiles(folders: [opt.config.appendingPathComponent("web", isDirectory: true), web])
+    await controller.setPageVersion { files.version }
+    for name in WebFiles.names where files.url(name)?.deletingLastPathComponent().standardizedFileURL != web.standardizedFileURL {
+        log("\(name) from \(files.url(name)?.path ?? "nowhere")")
     }
+    let oldPage = opt.data.appendingPathComponent("web/index.html")
+    if FileManager.default.fileExists(atPath: oldPage.path) {
+        log("ignoring \(oldPage.path), from an older push-web.sh: pages now come from \(opt.config.path)/web")
+    }
+    try watchStations(bundled: opt.stations, config: configStations, controller: controller)
 
     let server = HTTPServer(port: opt.port, events: { req in
         guard RemoteRoutes.route(req, token: await controller.token, prefix: prefix) == .events else { return nil }
@@ -155,7 +190,8 @@ do {
             return req.path == "/" ? text(404, "InterLude: open the link shown in the server's log.\n") : .notFound
         }
         switch route {
-        case .page: return RemoteRoutes.page(token: token, touchIcon: touchIcon, prefix: prefix, html: pageHTML())
+        case .page: return RemoteRoutes.page(token: token, touchIcon: touchIcon, prefix: prefix, files: files)
+        case .asset(let name): return RemoteRoutes.asset(name, files: files)
         case .manifest: return RemoteRoutes.manifest
         case .icon: return HTTPResponse(contentType: "image/png", body: icon)
         case .state, .events: return RemoteRoutes.json(await controller.state())

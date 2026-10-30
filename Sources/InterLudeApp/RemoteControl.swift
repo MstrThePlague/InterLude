@@ -4,8 +4,16 @@ import CoreImage.CIFilterBuiltins
 import InterLudeCore
 import InterLudeApple
 
-/// What the phone remote sees and does. The page is served by the local server; see `RemotePage`.
+/// What the phone remote sees and does. The page is served by the local server from `webFiles`.
 extension AppModel {
+    /// The phone remote's page: from a `web` folder in Application Support if one is there, for trying changes without
+    /// a rebuild, otherwise the app's own copy (or the checkout's, when run with `swift run`).
+    static let webFiles = WebFiles(folders: [
+        try? AppPaths.supportDirectory().appendingPathComponent("web", isDirectory: true),
+        Bundle.main.resourceURL?.appendingPathComponent("Web", isDirectory: true),
+        URL(fileURLWithPath: "Web", isDirectory: true),
+    ].compactMap { $0 })
+
     func remoteState() -> RemoteState {
         var s = RemoteState()
         s.state = playState.rawValue
@@ -24,10 +32,12 @@ extension AppModel {
         s.muteElapsed = status.muteElapsed
         s.muteStartsIn = status.muteStartsIn
         s.justSkipped = status.replay?.justSkipped
-        s.canCorrect = isPlaying && selectedStation?.kind != .speech
+        s.canCorrect = isPlaying && onAirStation?.kind != .speech
         s.note = learnedNote
         s.footer = isPlaying ? footerText : nil
         s.station = selectedStationID
+        if let id = source?.station.serviceId, id != selectedStationID { s.onAir = id }
+        s.offerLive = offersLive
         s.speaker = selectedOutputID
         s.stations = orderedStations.map {
             .init(id: $0.serviceId, name: $0.name, short: $0.short, colour: $0.colour, group: $0.group, favourite: profile($0.serviceId).favourite)
@@ -44,6 +54,7 @@ extension AppModel {
         case .ready: if speakers.isEmpty && groups.isEmpty { s.speakerNote = "No Chromecast speakers found." }
         }
         s.mode = mode.rawValue
+        s.pageVersion = Self.webFiles.version
         if mode == .earlier { s.earlier = remoteEarlier() }
         if isReplay, let r = status.replay { s.replay = remoteReplay(r) }
         return s
@@ -59,13 +70,13 @@ extension AppModel {
         case .failed(let m): if programmes.isEmpty { e.problem = m }
         case .idle: break
         }
-        let now = Date()
+        let now = Date(), playingID = isReplay ? source?.replay?.id : nil
         e.programmes = programmes.map { p in
             let playable = Self.canPlay(p), onNow = p.end > now, chosen = replaying?.id == p.id
             let length = Self.duration(p.end.timeIntervalSince(p.start))
             return .init(id: p.id, title: p.title, detail: playable ? (p.subtitle ?? length) : (onNow ? "On now" : "Not available"),
                          time: p.start.formatted(date: .omitted, time: .shortened), image: p.imageURL?.absoluteString,
-                         playable: playable, onNow: onNow, chosen: chosen, playing: chosen && isReplay)
+                         playable: playable, onNow: onNow, chosen: chosen, playing: playingID == p.id)
         }
         return e
     }
@@ -89,7 +100,7 @@ extension AppModel {
         case .play: if !isPlaying && !isStarting { perform(.toggle) }
         case .station(let id):
             // In Earlier a station shows its schedule, as on the Mac; in Live it plays.
-            if mode == .earlier { if id != selectedStationID, stations.contains(where: { $0.serviceId == id }) { switchStation(to: id) } }
+            if mode == .earlier { if stations.contains(where: { $0.serviceId == id }) { switchStation(to: id) } }
             else { playLive(id) }
         case .speaker(let id): if outputs.contains(where: { $0.id == id }) { switchOutput(to: id) }
         case .volume(let v): volume = v

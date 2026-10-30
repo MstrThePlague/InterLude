@@ -26,7 +26,7 @@ struct SettingsView: View {
                             model.updateProfile(stationID) { $0.detector.maxMuteSeconds = v * 60 }
                         }
                     }
-                    if model.isPlaying && stationID == model.selectedStationID {
+                    if model.isPlaying && stationID == model.onAirStation?.serviceId {
                         LabeledContent("Changes apply when playback restarts") {
                             Button("Restart now") { model.restartToApply() }.controlSize(.small)
                         }
