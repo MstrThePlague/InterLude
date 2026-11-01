@@ -61,11 +61,7 @@ The speaker's own buttons and the Sonos app work alongside InterLude, which asks
 - **Play** there starts InterLude again, if that speaker is the one chosen. It plays what InterLude's Play would, starting afresh about a minute behind live rather than where it was paused, so it takes a few seconds.
 - **Playing something else** there, or regrouping the room away, ends InterLude's playback and says so.
 
-If a Sonos speaker is on another network whose Bonjour announcements don't reach the Mac, such as a separate VLAN for smart devices, give the Mac one speaker's address and it finds the rest from that one:
-
-```
-defaults write org.benbull.InterLude sonosHosts 192.168.1.60
-```
+If a Sonos speaker is on another network whose Bonjour announcements don't reach the Mac, such as a separate VLAN for smart devices, give the Mac one speaker's address and it finds the rest from that one.
 
 ### Phone remote
 
