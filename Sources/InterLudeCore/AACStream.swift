@@ -8,6 +8,9 @@ public enum AACStream {
     /// The path speakers ask for, beside `live.m3u8`.
     public static let path = "live.aac"
 
+    /// What `fetch` answers once the session the stream began with has gone, which ends the stream at once.
+    public static let ended = HTTPResponse(status: 410, contentType: "text/plain", body: Data("The session ended.\n".utf8))
+
     /// A response that streams until the speaker hangs up or an earlier programme ends.
     public static func response(fetch: @escaping @Sendable (String) async -> HTTPResponse) -> HTTPResponse {
         HTTPResponse(contentType: "audio/aac", stream: frames(fetch: fetch))
@@ -22,6 +25,7 @@ public enum AACStream {
             var failures = 0
             while !Task.isCancelled {
                 let r = await fetch("live.m3u8")
+                if r.status == ended.status { break }
                 guard r.status == 200 else {
                     // The session may be starting again; give up only if it stays away.
                     failures += 1

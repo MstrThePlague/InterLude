@@ -46,6 +46,10 @@ actor SessionHolder {
     var session: PlayerSession?
     func set(_ s: PlayerSession?) { session = s }
     func respond(_ path: String) async -> HTTPResponse { await session?.respond(to: path) ?? .notFound }
+    /// For a speaker's AAC stream, which ends with the session it began with.
+    func respond(_ path: String, from s: PlayerSession) async -> HTTPResponse {
+        session === s ? await s.respond(to: path) : AACStream.ended
+    }
 }
 
 /// Everything the panel and Settings show, and the actions they take. One instance for the life of the app.
@@ -633,7 +637,10 @@ final class AppModel {
             let prefix = "/\(t)/"
             if req.path.hasPrefix(prefix) {
                 let relative = String(req.path.dropFirst(prefix.count))
-                if relative == AACStream.path { return AACStream.response { await h.respond($0) } }
+                if relative == AACStream.path {
+                    guard let s = await h.session else { return .notFound }
+                    return AACStream.response { await h.respond($0, from: s) }
+                }
                 return await h.respond(relative)
             }
             return await self?.respondToRemote(req) ?? .notFound
