@@ -45,6 +45,11 @@ public struct HTTPServer: Sendable {
                                 body: ResponseBody(asyncSequence: stream.map { ByteBuffer(string: $0) }))
             }
             let r = await handler(req)
+            if let stream = r.stream {
+                let headers: HTTPFields = [.contentType: r.contentType, .cacheControl: "no-cache"]
+                return Response(status: .ok, headers: headers,
+                                body: req.method == "HEAD" ? ResponseBody() : ResponseBody(asyncSequence: stream.map { ByteBuffer(bytes: $0) }))
+            }
             var headers: HTTPFields = [.contentType: r.contentType, .accessControlAllowOrigin: "*"]
             if r.noCache { headers[.cacheControl] = "no-cache" }
             headers[.contentLength] = String(r.body.count)

@@ -11,9 +11,9 @@ struct ServerSettings: Codable {
     var mode = "live"
     var bitrate = 320_000
     var ambience = "silence"
-    /// "browser", or "cast:" and a speaker's ID.
+    /// "browser", or "cast:" or "sonos:" and a speaker's ID.
     var speaker = "browser"
-    /// The volume for Cast speakers. Each browser keeps its own.
+    /// The volume for speakers. Each browser keeps its own.
     var volume = 0.7
 
     init() {}
@@ -26,7 +26,7 @@ struct ServerSettings: Codable {
         if let m = try? c.decode(String.self, forKey: .mode), m == "live" || m == "earlier" { mode = m }
         if let b = try? c.decode(Int.self, forKey: .bitrate), b == 128_000 || b == 320_000 { bitrate = b }
         if let a = try? c.decode(String.self, forKey: .ambience), Ambience.choices.contains(where: { $0.id == a }) { ambience = a }
-        if let s = try? c.decode(String.self, forKey: .speaker), s == "browser" || s.hasPrefix("cast:") { speaker = s }
+        if let s = try? c.decode(String.self, forKey: .speaker), s == "browser" || s.hasPrefix("cast:") || s.hasPrefix("sonos:") { speaker = s }
         if let v = try? c.decode(Double.self, forKey: .volume), (0...1).contains(v) { volume = v }
     }
 
@@ -56,11 +56,17 @@ actor Controller {
     private let ambienceDirectory: URL
     /// Keeps the live session running whether or not anyone listens, for a shadow week beside the Mac.
     private let keepRunning: Bool
-    /// How a Cast device reaches the stream: this machine's LAN address and port.
+    /// How a speaker reaches the stream: this machine's LAN address and port.
     private let castBase: String?
+    /// Sonos speakers to ask about the household besides those multicast DNS finds, for a speaker on another VLAN.
+    private let sonosHosts: [String]
     private var speakers: [CastSpeaker] = []
+    private var sonosGroups: [SonosGroup] = []
+    /// Sonos speakers' addresses as multicast DNS last found them.
+    private var sonosFound: [String] = []
+    private var sonosAsks = 0
     private var searched = false
-    private var cast: CastClient?
+    private var cast: (any CastController)?
     private var castEvents: Task<Void, Never>?
 
     private var session: PlayerSession?
@@ -90,9 +96,9 @@ actor Controller {
     static let idleLimit: TimeInterval = 600
     static let newsNote = "This server has no speech model, so it can't recognise bulletins and news plays. These settings are kept for when it does."
 
-    init(catalogue: Catalogue, settingsURL: URL, detects: Bool, ambienceDirectory: URL, keepRunning: Bool = false, castBase: String?) {
+    init(catalogue: Catalogue, settingsURL: URL, detects: Bool, ambienceDirectory: URL, keepRunning: Bool = false, castBase: String?, sonosHosts: [String] = []) {
         self.catalogue = catalogue; self.settingsURL = settingsURL; self.detects = detects; self.ambienceDirectory = ambienceDirectory
-        self.keepRunning = keepRunning; self.castBase = castBase
+        self.keepRunning = keepRunning; self.castBase = castBase; self.sonosHosts = sonosHosts
         var s = ServerSettings.load(settingsURL)
         if catalogue.station(s.station) == nil { s.station = catalogue.stations.first?.serviceId ?? s.station }
         settings = s
@@ -128,48 +134,86 @@ actor Controller {
 
     // MARK: Speakers
 
-    /// Looks for Cast speakers now and every two minutes.
+    /// Follows Cast and Sonos speakers as they join and leave the network. Sonos rooms are also grouped and ungrouped
+    /// in the Sonos app without any announcement, so the household is asked about every 30 seconds as well.
     private func discover() async {
-        while !Task.isCancelled {
-            let found = await Task.detached { MDNS.browseCast(timeout: 3) }.value
-            if found != speakers || !searched { log("Cast speakers: \(found.isEmpty ? "none found" : found.map(\.name).joined(separator: ", "))") }
-            speakers = found; searched = true
-            try? await Task.sleep(for: .seconds(120))
+        let watcher = MDNSWatcher()
+        watcher.start()
+        Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                await self?.refreshSonos()
+            }
+        }
+        for await found in watcher.updates {
+            if found.cast != speakers || !searched {
+                log("Cast speakers: \(found.cast.isEmpty ? "none found" : found.cast.map(\.name).joined(separator: ", "))")
+            }
+            speakers = found.cast
+            sonosFound = found.sonos
+            await refreshSonos()
         }
     }
 
-    private var chosenSpeaker: CastSpeaker? {
-        guard settings.speaker.hasPrefix("cast:") else { return nil }
-        let id = String(settings.speaker.dropFirst(5))
-        return speakers.first { $0.id == id }
+    /// Asks a Sonos speaker, found or named with --sonos-host, for the household's rooms and groups.
+    private func refreshSonos() async {
+        sonosAsks += 1
+        let ask = sonosAsks, hosts = Array(Set(sonosFound + sonosHosts)).sorted()
+        let groups = hosts.isEmpty ? [] : await Sonos.groups(hosts: hosts)
+        guard ask == sonosAsks else { return }      // a newer question was asked while this one waited
+        if groups != sonosGroups || !searched {
+            log("Sonos speakers: \(groups.isEmpty ? "none found" : groups.map(\.name).joined(separator: ", "))")
+        }
+        sonosGroups = groups; searched = true
+    }
+
+    /// The chosen speaker's controller, name and stream: Sonos can't play HLS, so it gets the AAC stream.
+    private var chosenSpeaker: (controller: () -> any CastController, name: String, stream: String)? {
+        if settings.speaker.hasPrefix("cast:") {
+            let id = String(settings.speaker.dropFirst(5))
+            return speakers.first { $0.id == id }.map { sp in ({ CastClient(speaker: sp) }, sp.name, "live.m3u8") }
+        }
+        if settings.speaker.hasPrefix("sonos:") {
+            let id = String(settings.speaker.dropFirst(6))
+            return sonosGroups.first { $0.id == id }.map { g in ({ SonosController(group: g) }, g.name, AACStream.path) }
+        }
+        return nil
     }
 
     /// Plays the session's stream on the chosen speaker.
     private func startCast() async {
         guard let sp = chosenSpeaker, session != nil else { return }
-        guard let base = castBase, let url = URL(string: "\(base)/stream/live.m3u8") else {
-            errorText = "Can't cast: this server's network address isn't known. Start it with --cast-host."; return
+        guard let base = castBase, let url = URL(string: "\(base)/stream/\(sp.stream)") else {
+            errorText = "Can't play on a speaker: this server's network address isn't known. Start it with --cast-host."; return
         }
         await stopCast()
-        let c = CastClient(speaker: sp)
+        let c = sp.controller()
         cast = c
         do {
             try await c.connect()
-            try await c.load(url: url, title: castTitle)
-            await c.setVolume(settings.volume)
-            log("casting to \(sp.name)")
+            if let sonos = c as? SonosController, await sonos.adopt(url: url) {
+                // Its own Play button asked for the stream, so it is playing already, at its own volume.
+                log("playing on \(sp.name), started from the speaker")
+            } else {
+                try await c.load(url: url, title: castTitle)
+                await c.setVolume(settings.volume)
+                log("playing on \(sp.name)")
+            }
         } catch {
             guard cast === c else { return }
             castProblem("Couldn't play on \(sp.name): \(error.localizedDescription)")
             return
         }
+        let name = sp.name
         castEvents = Task { [weak self] in
             for await e in c.events {
                 guard let self else { return }
                 switch e {
-                case .lost: await self.castProblem("Cast connection lost: \(sp.name) stopped responding.")
-                case .takenOver: await self.castProblem("Another app took over \(sp.name).")
-                case .loadFailed(let m): await self.castProblem("\(sp.name) refused the stream: \(m)")
+                case .lost: await self.castProblem("Speaker connection lost: \(name) stopped responding.")
+                case .takenOver: await self.castProblem("Another app took over \(name).")
+                case .stoppedOnDevice: await self.speakerStopped(c, name)
+                case .volume(let v): await self.speakerVolume(c, v)
+                case .loadFailed(let m): await self.castProblem("\(name) refused the stream: \(m)")
                 }
             }
         }
@@ -179,6 +223,18 @@ actor Controller {
         castEvents?.cancel(); castEvents = nil
         let c = cast; cast = nil
         await c?.stop()
+    }
+
+    /// Paused or stopped on the speaker itself: stop, as Stop here would. Its Play button starts it again (`stream`).
+    private func speakerStopped(_ c: any CastController, _ name: String) async {
+        guard cast === c else { return }
+        await stop("paused on \(name)")
+    }
+
+    /// The volume changed on the speaker itself, so the slider follows it.
+    private func speakerVolume(_ c: any CastController, _ v: Double) {
+        guard cast === c else { return }
+        settings.volume = v; saveSettings()
     }
 
     private func castProblem(_ message: String) {
@@ -229,6 +285,20 @@ actor Controller {
     /// Answers the player's requests under /stream/: only the playlist and its segments, never the session's
     /// diagnostics, since these addresses carry no token. Starts the session if it isn't running.
     func stream(_ relative: String) async -> HTTPResponse {
+        // A speaker that can't play HLS reads the session's playlist as any player would, which also keeps the session
+        // from stopping as idle. The stream belongs to the session playing when the speaker asked: once that one stops
+        // it ends, rather than starting another and so playing on the speaker again.
+        if relative == AACStream.path {
+            // With nothing playing, this is the speaker's own Play button: start, and the speaker is taken over as it
+            // is (`startCast`). Only the stream's first request can start anything.
+            if session == nil, starting == nil, settings.speaker.hasPrefix("sonos:") { start() }
+            guard session != nil || starting != nil else {
+                return HTTPResponse(status: 503, contentType: "text/plain", body: Data("Nothing playing.\n".utf8))
+            }
+            lastRequest = Date()
+            let binding = AACStream.Binding()
+            return AACStream.response { [weak self] path in await self?.respond(path, for: binding) ?? AACStream.ended }
+        }
         guard relative == "live.m3u8" || (relative.hasPrefix("seg/") && relative.hasSuffix(".ts")) else { return .notFound }
         lastRequest = Date()
         if let session { return await session.respond(to: relative) }
@@ -240,6 +310,18 @@ actor Controller {
         }
         do { return try await t.value.respond(to: relative) }
         catch { return HTTPResponse(status: 503, contentType: "text/plain", body: Data("\(friendly(error))\n".utf8), noCache: true) }
+    }
+
+    /// Answers a request from a speaker's AAC stream, from the session it belongs to while that one plays. Until
+    /// the first session is there (it is starting) the stream waits; once its session has gone, it ends.
+    private func respond(_ relative: String, for binding: AACStream.Binding) async -> HTTPResponse {
+        guard let s = session else {
+            return binding.session == nil ? HTTPResponse(status: 503, contentType: "text/plain", body: Data()) : AACStream.ended
+        }
+        if binding.session == nil { binding.session = s }
+        guard binding.session === s else { return AACStream.ended }
+        lastRequest = Date()
+        return await s.respond(to: relative)
     }
 
     // MARK: Playback
@@ -401,7 +483,8 @@ actor Controller {
                 await stop(); start()
             }
         case .speaker(let id):
-            guard id == "browser" || (id.hasPrefix("cast:") && speakers.contains { "cast:" + $0.id == id }), id != settings.speaker else { return }
+            let known = id == "browser" || speakers.contains { "cast:" + $0.id == id } || sonosGroups.contains { "sonos:" + $0.id == id }
+            guard known, id != settings.speaker else { return }
             settings.speaker = id; saveSettings()
             await stopCast()
             if session != nil { await startCast() }
@@ -510,14 +593,16 @@ actor Controller {
         let single = speakers.filter { !$0.isGroup }, groups = speakers.filter(\.isGroup)
         s.speakers = [.init(id: "browser", name: "This browser", detail: nil, kind: "browser")]
             + single.map { .init(id: "cast:" + $0.id, name: $0.name, detail: $0.model.isEmpty ? nil : $0.model, kind: "speaker") }
+            + sonosGroups.filter { !$0.isGroup }.map { .init(id: "sonos:" + $0.id, name: $0.name, detail: $0.detail, kind: "speaker") }
             + groups.map { .init(id: "cast:" + $0.id, name: $0.name, detail: "Speaker group", kind: "group") }
-        if settings.speaker.hasPrefix("cast:"), chosenSpeaker == nil {
+            + sonosGroups.filter(\.isGroup).map { .init(id: "sonos:" + $0.id, name: $0.name, detail: $0.detail, kind: "group") }
+        if settings.speaker != "browser", chosenSpeaker == nil {
             // A speaker chosen before but not seen since: keep showing it, so the choice isn't silently lost.
             s.speakers.append(.init(id: settings.speaker, name: "Speaker not found", detail: nil, kind: "speaker"))
         }
         if !searched { s.speakerNote = "Looking for speakers…" }
-        else if speakers.isEmpty {
-            s.speakerNote = "No Chromecast speakers found. The server needs to see multicast DNS from the speakers' network."
+        else if speakers.isEmpty && sonosGroups.isEmpty {
+            s.speakerNote = "No Chromecast or Sonos speakers found. The server needs to see multicast DNS from the speakers' network, or a Sonos speaker's address in --sonos-host."
         }
         s.mode = settings.mode
         if isEarlier { s.earlier = earlier(selectedStation) }
