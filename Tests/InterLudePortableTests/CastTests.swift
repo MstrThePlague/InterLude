@@ -63,7 +63,7 @@ private func announcement(_ id: String, _ service: String, host: String, address
     let cast = MDNS.service, sonos = MDNS.sonosService
     cache.add(announcement("Kitchen", cast, host: "k.local", address: "192.168.1.40")
               + announcement("Lounge", cast, host: "l.local", address: "192.168.1.41")
-              + announcement("RINCON_1@Roam", sonos, host: "r.local", address: "192.168.1.30"), at: t0)
+              + announcement("RINCON_1@Study", sonos, host: "r.local", address: "192.168.1.30"), at: t0)
     #expect(MDNS.speakers(from: cache.records).map(\.name) == ["Kitchen", "Lounge"])
     #expect(MDNS.instances(of: sonos, from: cache.records).map(\.host) == ["192.168.1.30"])
 
@@ -71,12 +71,12 @@ private func announcement(_ id: String, _ service: String, host: String, address
     cache.add([.goodbye(name: cast, target: "Kitchen.\(cast)")], at: t0 + 5)
     #expect(MDNS.speakers(from: cache.records).map(\.name) == ["Lounge"])
 
-    // The Roam moves to a new address: the newer one wins straight away.
-    cache.add(announcement("RINCON_1@Roam", sonos, host: "r.local", address: "192.168.1.31"), at: t0 + 10)
+    // The Study speaker moves to a new address: the newer one wins straight away.
+    cache.add(announcement("RINCON_1@Study", sonos, host: "r.local", address: "192.168.1.31"), at: t0 + 10)
     #expect(MDNS.instances(of: sonos, from: cache.records).map(\.host) == ["192.168.1.31"])
 
-    // Lounge is unplugged and stops answering; the Roam keeps answering. Lounge is forgotten after the lifetime.
-    cache.add(announcement("RINCON_1@Roam", sonos, host: "r.local", address: "192.168.1.31"), at: t0 + 70)
+    // Lounge is unplugged and stops answering; the Study speaker keeps answering. Lounge is forgotten after the lifetime.
+    cache.add(announcement("RINCON_1@Study", sonos, host: "r.local", address: "192.168.1.31"), at: t0 + 70)
     cache.expire(t0 + 74)
     #expect(MDNS.speakers(from: cache.records).map(\.name) == ["Lounge"])
     cache.expire(t0 + 76)

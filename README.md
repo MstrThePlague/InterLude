@@ -50,12 +50,6 @@ Because the whole programme already exists, the analysis runs about ten minutes 
 
 The details are in [docs/on-demand.md](docs/on-demand.md).
 
-### Phone remote
-
-Turn on **Settings › Phone remote** and point a phone's camera at the QR code. The remote opens in the phone's browser, with nothing to install, and is the same as the Mac's panel: play and stop, volume, station, speaker, favourites, whether a bulletin is muted, recent mutes, and the **Not news** and **News got through** buttons. Its Settings has the station's news options; the Mac's own (start at login, port, the phone remote itself) stay in the Mac's panel. Its **Earlier** switch lists each day's programmes from the last 30 days; tap one to play it from the start, and the phone shows how far in you are and how much news was skipped. On an iPhone, Share › Add to Home Screen keeps it as an icon.
-
-The remote is served by the same small web server the speakers use. Its address carries a long random code, so other people on the network can't guess it; **Reset link** makes a new one and the old link stops working. The Mac has to be awake with InterLude open. In Live, Play on the phone plays live; in Earlier it plays the programme last picked from its start, or live if none was. If the Mac's firewall is on, macOS asks once whether InterLude may accept incoming connections.
-
 ### Sonos speakers
 
 Sonos speakers can't play the HLS playlist a Chromecast or a browser plays, so InterLude gives them one continuous AAC stream made from it, `live.aac` beside `live.m3u8`, and starts it on the speaker as an internet radio station. The stream reads InterLude's own playlist as any player does, so the delay and the muted or skipped news are the same on every speaker. Volume is the group's volume, and a room grouped in the Sonos app plays through its group.
@@ -67,11 +61,17 @@ The speaker's own buttons and the Sonos app work alongside InterLude, which asks
 - **Play** there starts InterLude again, if that speaker is the one chosen. It plays what InterLude's Play would, starting afresh about a minute behind live rather than where it was paused, so it takes a few seconds.
 - **Playing something else** there, or regrouping the room away, ends InterLude's playback and says so.
 
-On the Mac, a Sonos speaker on another VLAN whose Bonjour announcements don't reach the Mac can be named by its address:
+If a Sonos speaker is on another network whose Bonjour announcements don't reach the Mac, such as a separate VLAN for smart devices, give the Mac one speaker's address and it finds the rest from that one:
 
 ```
-defaults write org.benbull.InterLude sonosHosts 192.168.1.30
+defaults write org.benbull.InterLude sonosHosts 192.168.1.60
 ```
+
+### Phone remote
+
+Turn on **Settings › Phone remote** and point a phone's camera at the QR code. The remote opens in the phone's browser, with nothing to install, and is the same as the Mac's panel: play and stop, volume, station, speaker, favourites, whether a bulletin is muted, recent mutes, and the **Not news** and **News got through** buttons. Its Settings has the station's news options; the Mac's own (start at login, port, the phone remote itself) stay in the Mac's panel. Its **Earlier** switch lists each day's programmes from the last 30 days; tap one to play it from the start, and the phone shows how far in you are and how much news was skipped. On an iPhone, Share › Add to Home Screen keeps it as an icon.
+
+The remote is served by the same small web server the speakers use. Its address carries a long random code, so other people on the network can't guess it; **Reset link** makes a new one and the old link stops working. The Mac has to be awake with InterLude open. In Live, Play on the phone plays live; in Earlier it plays the programme last picked from its start, or live if none was. If the Mac's firewall is on, macOS asks once whether InterLude may accept incoming connections.
 
 The design, the measurements behind each rule and the mistakes along the way are written up in [docs/archive/findings.md](docs/archive/findings.md).
 
