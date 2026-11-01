@@ -46,9 +46,12 @@ actor SessionHolder {
     var session: PlayerSession?
     func set(_ s: PlayerSession?) { session = s }
     func respond(_ path: String) async -> HTTPResponse { await session?.respond(to: path) ?? .notFound }
-    /// For a speaker's AAC stream, which ends with the session it began with.
-    func respond(_ path: String, from s: PlayerSession) async -> HTTPResponse {
-        session === s ? await s.respond(to: path) : AACStream.ended
+    /// For a speaker's AAC stream: from the session it belongs to while that one plays. Until the first session is
+    /// there (it is starting) the stream waits; once its session has gone, it ends.
+    func respond(_ path: String, for binding: AACStream.Binding) async -> HTTPResponse {
+        guard let s = session else { return binding.session == nil ? .notFound : AACStream.ended }
+        if binding.session == nil { binding.session = s }
+        return binding.session === s ? await s.respond(to: path) : AACStream.ended
     }
 }
 
@@ -239,6 +242,8 @@ final class AppModel {
     private var sonosGroups: [SonosGroup] = []
     private var sonosHosts: [String] = []
     private var sonosAsks = 0
+    /// Set while taking a volume from the speaker, so it isn't sent straight back.
+    private var volumeFromSpeaker = false
     private var activity: NSObjectProtocol?
     private var pathMonitor: NWPathMonitor?
     private var lastAddress: String?
@@ -638,8 +643,10 @@ final class AppModel {
             if req.path.hasPrefix(prefix) {
                 let relative = String(req.path.dropFirst(prefix.count))
                 if relative == AACStream.path {
-                    guard let s = await h.session else { return .notFound }
-                    return AACStream.response { await h.respond($0, from: s) }
+                    // With nothing playing, this is the speaker's own Play button: start for it.
+                    if await h.session == nil, await self?.startFromSpeaker() != true { return .notFound }
+                    let binding = AACStream.Binding()
+                    return AACStream.response { await h.respond($0, for: binding) }
                 }
                 return await h.respond(relative)
             }
@@ -673,8 +680,13 @@ final class AppModel {
             }
             let name = output.label
             try await c.connect()
-            try await c.load(url: try playlistURL(host: ip, for: output), title: settingsTitle(station))
-            await c.setVolume(volume)
+            let url = try playlistURL(host: ip, for: output)
+            if let sonos = c as? SonosController, await sonos.adopt(url: url) {
+                // Its own Play button asked for the stream, so it is playing already, at its own volume.
+            } else {
+                try await c.load(url: url, title: settingsTitle(station))
+                await c.setVolume(volume)
+            }
             cast = c
             castEvents = Task { [weak self] in
                 for await e in c.events {
@@ -682,7 +694,9 @@ final class AppModel {
                     switch e {
                     case .lost: self.castProblem("Speaker connection lost", "\(name) stopped responding.")
                     case .takenOver: self.castProblem("Another app took over", "\(name) is now playing something else.")
-                    case .stoppedOnDevice: self.castProblem("Stopped on the speaker", "\(name) was stopped from its own app.")
+                    // Paused or stopped on the speaker itself: stop, as Stop here would. Its Play button starts it again.
+                    case .stoppedOnDevice: if self.isPlaying { self.stop() }
+                    case .volume(let v): self.volumeFromSpeaker = true; self.volume = v; self.volumeFromSpeaker = false
                     case .loadFailed(let m): self.castProblem("The speaker refused the stream", m)
                     }
                 }
@@ -701,9 +715,17 @@ final class AppModel {
         notify(title, body); stop()
     }
 
+    /// Asked for the AAC stream with nothing playing: the chosen Sonos speaker's own Play button. Starts what Play
+    /// here would. False if the speaker isn't the one chosen.
+    func startFromSpeaker() -> Bool {
+        guard case .sonos = selectedOutput else { return false }
+        if !isPlaying && !isStarting { start() }
+        return true
+    }
+
     private func applyVolume() {
         player?.volume = Float(volume)
-        guard let c = cast else { return }
+        guard let c = cast, !volumeFromSpeaker else { return }
         // Dragging the slider would send dozens of messages a second; send the latest after a short pause.
         volumeTask?.cancel()
         let v = volume
