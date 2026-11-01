@@ -2,8 +2,9 @@ import Foundation
 
 // What a Cast sender needs that doesn't depend on the network library: the controller interface and the wire format.
 
-/// `stoppedOnDevice`: someone stopped or paused it on the speaker itself, which Sonos lets its own app do.
-public enum CastEvent: Sendable { case lost, takenOver, stoppedOnDevice, loadFailed(String) }
+/// `stoppedOnDevice`: someone stopped or paused it on the speaker itself or in its own app, which Sonos allows.
+/// `volume`: its volume was changed there, from 0 to 1.
+public enum CastEvent: Sendable { case lost, takenOver, stoppedOnDevice, volume(Double), loadFailed(String) }
 
 /// Everything the app needs from a Cast implementation, so the library can be swapped.
 public protocol CastController: AnyObject, Sendable {
