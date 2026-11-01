@@ -9,11 +9,13 @@ import InterLudeCast
 // session, which starts when a browser asks for the stream and stops when nobody has for 10 minutes.
 //
 //   interlude-server [--port 8642] [--data DIR] [--config DIR] [--stations FILE] [--web DIR] [--models DIR] [--ambience DIR]
-//                    [--ffmpeg PATH] [--keep-running] [--cast-host ADDRESS]
+//                    [--ffmpeg PATH] [--keep-running] [--cast-host ADDRESS] [--sonos-host ADDRESS[,ADDRESS…]]
 //   interlude-server --check AUDIOFILE [--models DIR]     runs both models on a file, prints what they hear, and exits
 //
 // --keep-running (or INTERLUDE_KEEP_RUNNING=1) runs the live session all the time, for comparing with the Mac.
-// --cast-host is the address Cast speakers fetch the stream from; by default, this machine's LAN address.
+// --cast-host is the address Cast and Sonos speakers fetch the stream from; by default, this machine's LAN address.
+// --sonos-host (or INTERLUDE_SONOS_HOSTS) names Sonos speakers to ask for the household's rooms, for when multicast DNS
+// doesn't reach them, such as on another VLAN. One is enough: it describes all the others.
 //
 // --config (default /etc/interlude) holds what can change while the server runs, all optional: stations.json, used in
 // place of the list kept in --data, and web/ with index.html, app.css or app.js to use in place of the built-in ones.
@@ -36,6 +38,7 @@ struct Options {
     var ffmpeg: URL?
     var keepRunning = ProcessInfo.processInfo.environment["INTERLUDE_KEEP_RUNNING"] == "1"
     var castHost = ProcessInfo.processInfo.environment["INTERLUDE_CAST_HOST"]
+    var sonosHosts = Options.addresses(ProcessInfo.processInfo.environment["INTERLUDE_SONOS_HOSTS"] ?? "")
     var check: URL?
 
     init(_ args: [String]) throws {
@@ -57,11 +60,16 @@ struct Options {
             case "--ffmpeg": ffmpeg = URL(fileURLWithPath: try value())
             case "--keep-running": keepRunning = true
             case "--cast-host": castHost = try value()
+            case "--sonos-host": sonosHosts += Options.addresses(try value())
             case "--check": check = URL(fileURLWithPath: try value())
             default: throw UsageError("unknown option \(args[i])")
             }
             i += 1
         }
+    }
+
+    static func addresses(_ list: String) -> [String] {
+        list.split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init)
     }
 }
 
@@ -161,7 +169,7 @@ do {
     let catalogue = try loadStations(bundled: opt.stations, config: configStations)
     let controller = Controller(catalogue: catalogue, settingsURL: try AppPaths.supportDirectory().appendingPathComponent("settings.json"),
                                 detects: detects, ambienceDirectory: opt.ambience, keepRunning: opt.keepRunning,
-                                castBase: (opt.castHost ?? LocalAddress.lan()).map { "http://\($0):\(opt.port)" })
+                                castBase: (opt.castHost ?? LocalAddress.lan()).map { "http://\($0):\(opt.port)" }, sonosHosts: opt.sonosHosts)
     if opt.keepRunning { log("keeping the live session running") }
     let web = opt.web
     let icon = (try? Data(contentsOf: web.appendingPathComponent("icon.png"))) ?? Data()

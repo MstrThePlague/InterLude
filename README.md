@@ -1,6 +1,6 @@
 # InterLude
 
-InterLude is a small macOS menu bar app that plays BBC radio about a minute behind live and quietly mutes the news bulletins. It plays on the Mac itself or on Chromecast speakers and groups. It also runs as a web app on a Linux server (see [Running the server](#running-the-server)).
+InterLude is a small macOS menu bar app that plays BBC radio about a minute behind live and quietly mutes the news bulletins. It plays on the Mac itself, on Chromecast speakers and groups, or on Sonos speakers and groups. It also runs as a web app on a Linux server (see [Running the server](#running-the-server)).
 
 I wanted 6 Music in the background all day without the hourly news, so it is tuned for music stations. Speech stations play normally.
 
@@ -17,13 +17,13 @@ I wanted 6 Music in the background all day without the hourly news, so it is tun
 
 - Plays any of 64 BBC stations (national, nations and local) a fixed time behind live (60 seconds by default).
 - Recognises each bulletin as it arrives and replaces it with silence, or with ocean waves, a woodland stream or birdsong if you prefer. When the bulletin ends, the station comes back.
-- Plays on the Mac, on a Chromecast, or on a Cast group, and you can switch speaker while it plays.
+- Plays on the Mac, on a Chromecast or Cast group, or on a Sonos room or group, and you can switch speaker while it plays. Speakers appear and disappear in the list as they join and leave the network, and Sonos groups follow what you set up in the Sonos app.
 - **Earlier** plays a programme from the last 30 days from its start, with the bulletins cut out rather than muted. The last 11 hours come from the live stream; anything older comes from the programme's BBC Sounds episode.
 - One interface everywhere: the Mac's menu bar panel, the phone remote and the server's web app are the same page, so they look and work alike. On a wide window, Earlier and the news sit beside the player.
 - A phone remote: scan a QR code and control InterLude from a phone on the same Wi-Fi, or from anywhere on your tailnet if the Mac runs Tailscale.
 - Learns a station's news theme from the last few hours of broadcast, the first time you play it (so far proven on 6 Music).
 - Keeps a log of every decision, so a wrong mute can be explained and the rules improved.
-- Runs as a server too: a Docker image for Linux that does all of the above with no Mac, played and controlled from any browser, and casting to Chromecasts itself.
+- Runs as a server too: a Docker image for Linux that does all of the above with no Mac, played and controlled from any browser, and playing on Chromecast and Sonos speakers itself.
 
 ## How it works
 
@@ -54,7 +54,17 @@ The details are in [docs/on-demand.md](docs/on-demand.md).
 
 Turn on **Settings › Phone remote** and point a phone's camera at the QR code. The remote opens in the phone's browser, with nothing to install, and is the same as the Mac's panel: play and stop, volume, station, speaker, favourites, whether a bulletin is muted, recent mutes, and the **Not news** and **News got through** buttons. Its Settings has the station's news options; the Mac's own (start at login, port, the phone remote itself) stay in the Mac's panel. Its **Earlier** switch lists each day's programmes from the last 30 days; tap one to play it from the start, and the phone shows how far in you are and how much news was skipped. On an iPhone, Share › Add to Home Screen keeps it as an icon.
 
-The remote is served by the same small web server the Chromecasts use. Its address carries a long random code, so other people on the network can't guess it; **Reset link** makes a new one and the old link stops working. The Mac has to be awake with InterLude open. In Live, Play on the phone plays live; in Earlier it plays the programme last picked from its start, or live if none was. If the Mac's firewall is on, macOS asks once whether InterLude may accept incoming connections.
+The remote is served by the same small web server the speakers use. Its address carries a long random code, so other people on the network can't guess it; **Reset link** makes a new one and the old link stops working. The Mac has to be awake with InterLude open. In Live, Play on the phone plays live; in Earlier it plays the programme last picked from its start, or live if none was. If the Mac's firewall is on, macOS asks once whether InterLude may accept incoming connections.
+
+### Sonos speakers
+
+Sonos speakers can't play the HLS playlist a Chromecast or a browser plays, so InterLude gives them one continuous AAC stream made from it, `live.aac` beside `live.m3u8`, and starts it on the speaker as an internet radio station. The stream reads InterLude's own playlist as any player does, so the delay and the muted or skipped news are the same on every speaker. Volume is the group's volume, and a room grouped in the Sonos app plays through its group. If someone stops it from the Sonos app, or plays something else there, InterLude says so.
+
+On the Mac, a Sonos speaker on another VLAN whose Bonjour announcements don't reach the Mac can be named by its address:
+
+```
+defaults write org.benbull.InterLude sonosHosts 10.30.30.30
+```
 
 The design, the measurements behind each rule and the mistakes along the way are written up in [docs/archive/findings.md](docs/archive/findings.md).
 
@@ -74,7 +84,7 @@ InterLude is signed but not notarised by Apple (that needs a paid developer acco
 2. Open **System Settings › Privacy & Security** and scroll down to the message about InterLude.
 3. Click **Open Anyway**, confirm with your password or Touch ID, then click **Open**.
 
-You only need to do this once. The first time you look for speakers, macOS also asks to let InterLude find devices on your local network; allow it, or Chromecasts won't appear.
+You only need to do this once. The first time you look for speakers, macOS also asks to let InterLude find devices on your local network; allow it, or Chromecasts and Sonos speakers won't appear.
 
 If you'd rather not run an app downloaded from the internet, build it yourself instead.
 
@@ -111,7 +121,7 @@ The Mac's panel is the web app in `Web/`, shown in a web view and served by the 
 
 ## Running the server
 
-InterLude also runs as a web app on a Linux machine, so it works with no Mac involved: any phone, tablet or computer plays and controls it in a browser, and it can cast to Chromecasts itself. It uses open models in place of Apple's: YAMNet for speech and music and whisper.cpp for the newsreader, both running on the server's CPU. Nothing is sent to a speech service.
+InterLude also runs as a web app on a Linux machine, so it works with no Mac involved: any phone, tablet or computer plays and controls it in a browser, and it can play on Chromecast and Sonos speakers itself. It uses open models in place of Apple's: YAMNet for speech and music and whisper.cpp for the newsreader, both running on the server's CPU. Nothing is sent to a speech service.
 
 <p align="center">
   <img src="docs/images/web-phone.png" width="250" alt="The web app on a phone playing 6 Music live: the station name large, with play, volume, station and speaker in a dock at the bottom">
@@ -130,12 +140,13 @@ docker compose logs | grep "Open the app"
 
 The log gives the app's address, `http://<server>:8642/app/<code>/`. The long code keeps other people on your network out; **Settings › Reset link** makes a new one. Open it on a phone and add it to the Home Screen to keep it as an app. Settings also shows a QR code for opening it on another device.
 
-The server starts playing when a browser asks for it and stops 10 minutes after the last one stops listening. Play and Stop act on the browser you press them in. With a Cast speaker chosen, they start and stop the speaker instead.
+The server starts playing when a browser asks for it and stops 10 minutes after the last one stops listening. Play and Stop act on the browser you press them in. With a speaker chosen, they start and stop the speaker instead.
 
-**Your network.** Browsers on your LAN reach the server on TCP 8642. Cast speakers need two more things:
+**Your network.** Browsers on your LAN reach the server on TCP 8642. Speakers need two more things:
 
 - **The stream:** the speakers must be allowed to fetch it from the server on TCP 8642.
-- **Discovery:** the server must see the speakers' multicast DNS, port 5353. On a network split into VLANs, add the server's network to the gateway's mDNS proxy or reflector.
+- **Discovery:** the server must see the speakers' multicast DNS, port 5353. On a network split into VLANs, add the server's network to the gateway's mDNS proxy or reflector. The server listens all the time, so speakers appear as they join the network and go when they leave.
+- **Sonos control:** the server talks to Sonos speakers on their TCP port 1400. If multicast DNS can't reach a Sonos speaker, name one with `INTERLUDE_SONOS_HOSTS` in `compose.yaml` (or `--sonos-host`): any one speaker describes all the household's rooms and groups.
 
 If the server runs a firewall such as ufw, allow those ports in from your networks.
 
@@ -145,7 +156,7 @@ If the server runs a firewall such as ufw, allow those ports in from your networ
 sudo tailscale serve --bg --https=8443 http://127.0.0.1:8642
 ```
 
-Then open `https://<server's tailnet name>:8443/app/<code>/`. Cast speakers still use the LAN address.
+Then open `https://<server's tailnet name>:8443/app/<code>/`. Speakers still use the LAN address.
 
 **Updating:** `docker compose pull && docker compose up -d`. Each release tag publishes the image as `ghcr.io/mstrtheplague/interlude-server`. Each change to the server on `main` publishes `:edge` too; set `INTERLUDE_TAG=edge` to follow it. To build from a checkout instead: `docker compose up -d --build`. Only the web app's files sit after the Swift build, so a change to the page alone rebuilds in seconds.
 
@@ -184,12 +195,12 @@ The server keeps the same files in its `data` volume (`/var/lib/interlude` in th
 
 | Folder | Contents |
 |---|---|
-| `Sources/InterLudeCore` | Everything that isn't user interface or tied to Apple's frameworks: stream handling, MPEG-TS, detection, playout, the phone remote's routes and state, and the Cast protocol. Builds and tests on Linux too. |
-| `Sources/InterLudeApple` | The Mac's implementations of what the core asks the platform for: AAC decoding and encoding, the sound classifier, speech recognition, signal maths, the local server and Cast discovery. |
+| `Sources/InterLudeCore` | Everything that isn't user interface or tied to Apple's frameworks: stream handling, MPEG-TS, detection, playout, the phone remote's routes and state, the Cast protocol, and Sonos control and its AAC stream. Builds and tests on Linux too. |
+| `Sources/InterLudeApple` | The Mac's implementations of what the core asks the platform for: AAC decoding and encoding, the sound classifier, speech recognition, signal maths, the local server, and Cast and Sonos discovery. |
 | `Sources/InterLudePortable` | Implementations that work away from the Mac, on Linux and Windows: decoding and encoding audio with ffmpeg. |
 | `Sources/InterLudeHTTP` | The web server for macOS and Linux, on Hummingbird. |
 | `Sources/InterLudeML` | The server's speech models: YAMNet on ONNX Runtime for speech and music, whisper.cpp for the newsreader. `scripts/yamnet` converts and calibrates YAMNet. |
-| `Sources/InterLudeCast` | Casting from Linux: a Chromecast client on SwiftNIO and a multicast DNS browser for finding speakers. |
+| `Sources/InterLudeCast` | Casting from Linux: a Chromecast client on SwiftNIO, and a multicast DNS watcher that follows Chromecasts and Sonos speakers as they come and go. |
 | `Sources/COnnxRuntime`, `CWhisper`, `CGGML` | Module maps that let Swift call the ONNX Runtime, whisper.cpp and ggml C libraries. |
 | `Sources/InterLudeServer` | `interlude-server`, InterLude as a web app on a Linux host. `Dockerfile` and `compose.yaml` build and run it; `interlude-server --check <audio>` runs its models on a file. |
 | `Sources/InterLudeApp` | The Mac app: the menu bar item and window, which show the web app in a web view, and the model behind it. |
@@ -210,7 +221,7 @@ Run with `swift run --scratch-path ~/Library/Caches/InterLudeBuild <name>`. Reco
 | `evaluate <csv> [labels.json] [profile.json]` | Replay the speech rule over scores and report accuracy against labelled bulletins. |
 | `ident-check` | Find and test a station's news theme in recordings. `PLATFORM=portable` decodes with ffmpeg and uses the server's signal maths. |
 | `signoff-check` | Transcribe bulletins and report where the newsreader opens and signs off. `WHISPER=<model file>` uses whisper.cpp, as the server does. |
-| `serve <serviceId> [delay] [port]` | A session without the app, for testing with ffmpeg or curl. `REPLAY=<ISO time>` plays from that broadcast time instead; add `VERSION=<pid>` to play that BBC Sounds version on demand and `OFFSET=<seconds>` to start part way in. |
+| `serve <serviceId> [delay] [port]` | A session without the app, for testing with ffmpeg or curl, at `/test/live.m3u8`, or `/test/live.aac` as a Sonos speaker plays it. `REPLAY=<ISO time>` plays from that broadcast time instead; add `VERSION=<pid>` to play that BBC Sounds version on demand and `OFFSET=<seconds>` to start part way in. |
 | `cast-spike list` / `play <device> <url>` | List Cast speakers and groups, or play a stream on one. |
 
 ## Sounds

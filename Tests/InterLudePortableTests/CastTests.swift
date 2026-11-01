@@ -41,3 +41,57 @@ func mdnsFindsSpeakersHere() {
     print("found", found.map { "\($0.name) [\($0.model)] \($0.host):\($0.port)" })
     #expect(!found.isEmpty)
 }
+
+/// A speaker's records as an announcement or answer carries them.
+private func announcement(_ id: String, _ service: String, host: String, address: String) -> [MDNS.Record] {
+    let instance = "\(id).\(service)"
+    return [.ptr(name: service, target: instance), .srv(name: instance, target: host, port: 8009),
+            .txt(name: instance, values: ["fn": id]), .a(name: host, address: address)]
+}
+
+@Test func mdnsReadsAGoodbye() {
+    // A PTR answer with a time to live of zero.
+    var m: [UInt8] = [0, 0, 0x84, 0, 0, 0, 0, 1, 0, 0, 0, 0]
+    let instance = [UInt8(7)] + Array("Kitchen".utf8) + MDNS.encodeName("_googlecast._tcp.local")
+    m += MDNS.encodeName("_googlecast._tcp.local") + [0, 12, 0x80, 1, 0, 0, 0, 0, 0, UInt8(instance.count)] + instance
+    #expect(MDNS.parse(m) == [.goodbye(name: "_googlecast._tcp.local", target: "Kitchen._googlecast._tcp.local")])
+}
+
+@Test func mdnsCacheFollowsSpeakersComingAndGoing() {
+    var cache = MDNSCache(lifetime: 75)
+    let t0 = Date(timeIntervalSince1970: 1_000_000)
+    let cast = MDNS.service, sonos = MDNS.sonosService
+    cache.add(announcement("Kitchen", cast, host: "k.local", address: "10.30.30.40")
+              + announcement("Lounge", cast, host: "l.local", address: "10.30.30.41")
+              + announcement("RINCON_1@Roam", sonos, host: "r.local", address: "10.30.30.30"), at: t0)
+    #expect(MDNS.speakers(from: cache.records).map(\.name) == ["Kitchen", "Lounge"])
+    #expect(MDNS.instances(of: sonos, from: cache.records).map(\.host) == ["10.30.30.30"])
+
+    // Kitchen says goodbye: gone at once.
+    cache.add([.goodbye(name: cast, target: "Kitchen.\(cast)")], at: t0 + 5)
+    #expect(MDNS.speakers(from: cache.records).map(\.name) == ["Lounge"])
+
+    // The Roam moves to a new address: the newer one wins straight away.
+    cache.add(announcement("RINCON_1@Roam", sonos, host: "r.local", address: "10.30.30.31"), at: t0 + 10)
+    #expect(MDNS.instances(of: sonos, from: cache.records).map(\.host) == ["10.30.30.31"])
+
+    // Lounge is unplugged and stops answering; the Roam keeps answering. Lounge is forgotten after the lifetime.
+    cache.add(announcement("RINCON_1@Roam", sonos, host: "r.local", address: "10.30.30.31"), at: t0 + 70)
+    cache.expire(t0 + 74)
+    #expect(MDNS.speakers(from: cache.records).map(\.name) == ["Lounge"])
+    cache.expire(t0 + 76)
+    #expect(MDNS.speakers(from: cache.records).isEmpty)
+    #expect(MDNS.instances(of: sonos, from: cache.records).map(\.host) == ["10.30.30.31"])
+}
+
+/// Watches for real speakers on this network, when asked to with INTERLUDE_LIVE_CAST=1.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["INTERLUDE_LIVE_CAST"] == "1"))
+func mdnsWatcherFindsSpeakersHere() async {
+    let w = MDNSWatcher()
+    w.start()
+    defer { w.stop() }
+    var first: MDNSWatcher.Found?
+    for await f in w.updates { first = f; break }
+    print("cast", first?.cast.map(\.name) ?? [], "sonos", first?.sonos ?? [])
+    #expect(!(first?.cast.isEmpty ?? true) || !(first?.sonos.isEmpty ?? true))
+}

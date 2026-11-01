@@ -10,26 +10,35 @@ import InterLudeApple
 enum Output: Hashable, Identifiable {
     case thisMac
     case cast(CastDevice)
-    var id: String { switch self { case .thisMac: "mac"; case .cast(let d): "cast:" + d.id } }
+    case sonos(SonosGroup)
+    var id: String {
+        switch self { case .thisMac: "mac"; case .cast(let d): "cast:" + d.id; case .sonos(let g): "sonos:" + g.id }
+    }
+    var isGroup: Bool {
+        switch self { case .thisMac: false; case .cast(let d): d.isGroup; case .sonos(let g): g.isGroup }
+    }
     var icon: String {
         switch self {
         case .thisMac: "laptopcomputer"
-        case .cast(let d): d.isGroup ? "hifispeaker.2" : "hifispeaker"
+        case .cast, .sonos: isGroup ? "hifispeaker.2" : "hifispeaker"
         }
     }
     var label: String {
         switch self {
         case .thisMac: "This Mac"
         case .cast(let d): d.name
+        case .sonos(let g): g.name
         }
     }
     var detail: String? {
         switch self {
         case .thisMac: nil
         case .cast(let d): d.isGroup ? "Speaker group" : (d.model.isEmpty ? nil : d.model)
+        case .sonos(let g): g.detail
         }
     }
-    var isCast: Bool { if case .cast = self { true } else { false } }
+    /// A speaker on the network, which plays the stream from the Mac's LAN address.
+    var isSpeaker: Bool { if case .thisMac = self { false } else { true } }
 }
 
 /// Lets the long-lived HTTP server reach whichever session is current.
@@ -217,10 +226,15 @@ final class AppModel {
     private var server: LocalServer?
     private var session: PlayerSession?
     private var player: AVPlayer?
-    private var cast: DirectCastController?
+    private var cast: (any CastController)?
     private var castEvents: Task<Void, Never>?
     private var timer: Task<Void, Never>?
     private var discovery: CastDiscovery?
+    private var sonosDiscovery: SonosDiscovery?
+    private var castDevices: [CastDevice] = []
+    private var sonosGroups: [SonosGroup] = []
+    private var sonosHosts: [String] = []
+    private var sonosAsks = 0
     private var activity: NSObjectProtocol?
     private var pathMonitor: NWPathMonitor?
     private var lastAddress: String?
@@ -394,8 +408,25 @@ final class AppModel {
         Task { [weak self] in
             for await devices in d.updates {
                 guard let self else { return }
-                self.outputs = [.thisMac] + devices.map { Output.cast($0) }
+                self.castDevices = devices
+                self.updateOutputs()
                 self.discoveryState = .ready
+            }
+        }
+        let sd = SonosDiscovery(); sd.start(); sonosDiscovery = sd
+        Task { [weak self] in
+            for await hosts in sd.updates {
+                guard let self else { return }
+                self.sonosHosts = hosts
+                await self.refreshSonos()
+            }
+        }
+        // Rooms are grouped and ungrouped in the Sonos app, so ask again now and then.
+        Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(30))
+                guard let self else { return }
+                await self.refreshSonos()
             }
         }
         Task { [weak self] in
@@ -409,6 +440,26 @@ final class AppModel {
             try? await Task.sleep(for: .seconds(8))
             if let self, self.discoveryState == .searching { self.discoveryState = .ready }
         }
+    }
+
+    /// Speakers named with `defaults write com.….InterLude sonosHosts "192.168.20.31"`, for a Sonos on another
+    /// VLAN whose Bonjour announcements don't reach the Mac. One is enough: it describes the whole household.
+    private var manualSonosHosts: [String] {
+        (UserDefaults.standard.string(forKey: "sonosHosts") ?? "").split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init)
+    }
+
+    private func refreshSonos() async {
+        sonosAsks += 1
+        let ask = sonosAsks, hosts = Array(Set(sonosHosts + manualSonosHosts)).sorted()
+        let groups = hosts.isEmpty ? [] : await Sonos.groups(hosts: hosts)
+        guard ask == sonosAsks, groups != sonosGroups else { return }      // skip an answer a newer question overtook
+        sonosGroups = groups
+        updateOutputs()
+        if !groups.isEmpty { discoveryState = .ready }
+    }
+
+    private func updateOutputs() {
+        outputs = [.thisMac] + castDevices.map { Output.cast($0) } + sonosGroups.map { Output.sonos($0) }
     }
 
     // MARK: Playback
@@ -461,7 +512,7 @@ final class AppModel {
             } catch {
                 isStarting = false; isPlaying = false; source = nil
                 errorText = friendly(error, station: station)
-                if error is CastError || output.isCast && !(error is FetchError) { castFailed = true } else { stationFailed = true }
+                if error is CastError || output.isSpeaker && !(error is FetchError) { castFailed = true } else { stationFailed = true }
                 await tearDown()
             }
         }
@@ -580,15 +631,21 @@ final class AppModel {
         let t = token, h = holder
         let s = LocalServer(port: UInt16(port)) { [weak self] req in
             let prefix = "/\(t)/"
-            if req.path.hasPrefix(prefix) { return await h.respond(String(req.path.dropFirst(prefix.count))) }
+            if req.path.hasPrefix(prefix) {
+                let relative = String(req.path.dropFirst(prefix.count))
+                if relative == AACStream.path { return AACStream.response { await h.respond($0) } }
+                return await h.respond(relative)
+            }
             return await self?.respondToRemote(req) ?? .notFound
         }
         try s.start()
         server = s
     }
 
-    private func playlistURL(host: String) throws -> URL {
-        guard let u = URL(string: "http://\(host):\(port)/\(token)/live.m3u8") else { throw CastError.rejected("bad playlist address") }
+    /// Where `output` fetches the stream: the playlist, or for Sonos, which can't play HLS, the AAC stream.
+    private func playlistURL(host: String, for output: Output? = nil) throws -> URL {
+        let name = if case .sonos = output ?? selectedOutput { AACStream.path } else { "live.m3u8" }
+        guard let u = URL(string: "http://\(host):\(port)/\(token)/\(name)") else { throw CastError.rejected("bad playlist address") }
         return u
     }
 
@@ -598,21 +655,28 @@ final class AppModel {
             let p = AVPlayer(url: try playlistURL(host: "127.0.0.1"))
             p.automaticallyWaitsToMinimizeStalling = true
             p.volume = Float(volume); p.play(); player = p
-        case .cast(let device):
+        case .cast, .sonos:
             guard let ip = LocalServer.lanAddress() else { throw CastError.rejected("the Mac has no network address") }
             lastAddress = ip
-            let c = DirectCastController(device: device)
+            let c: any CastController
+            switch output {
+            case .cast(let device): c = DirectCastController(device: device)
+            case .sonos(let group): c = SonosController(group: group)
+            case .thisMac: return
+            }
+            let name = output.label
             try await c.connect()
-            try await c.load(url: try playlistURL(host: ip), title: settingsTitle(station))
+            try await c.load(url: try playlistURL(host: ip, for: output), title: settingsTitle(station))
             await c.setVolume(volume)
             cast = c
             castEvents = Task { [weak self] in
                 for await e in c.events {
                     guard let self else { return }
                     switch e {
-                    case .lost: self.castProblem("Cast connection lost", "\(device.name) stopped responding.")
-                    case .takenOver: self.castProblem("Another app took over", "\(device.name) is now playing something else.")
-                    case .loadFailed(let m): self.castProblem("Cast refused the stream", m)
+                    case .lost: self.castProblem("Speaker connection lost", "\(name) stopped responding.")
+                    case .takenOver: self.castProblem("Another app took over", "\(name) is now playing something else.")
+                    case .stoppedOnDevice: self.castProblem("Stopped on the speaker", "\(name) was stopped from its own app.")
+                    case .loadFailed(let m): self.castProblem("The speaker refused the stream", m)
                     }
                 }
             }
@@ -647,7 +711,7 @@ final class AppModel {
 
     /// Reload the stream on the Cast device if the Mac's address changes.
     private func watchNetwork() {
-        guard selectedOutput.isCast else { return }
+        guard selectedOutput.isSpeaker else { return }
         let m = NWPathMonitor()
         m.pathUpdateHandler = { [weak self] _ in
             Task { @MainActor in
