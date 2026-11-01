@@ -224,6 +224,9 @@ function render(s) {
   renderReplay(s.replay);
   $("earlier").hidden = !s.earlier;
   if (s.earlier) renderEarlier(s.earlier, station);
+  const picked = !!s.earlier && (s.earlier.programmes || []).some(p => p.chosen || p.playing);
+  $("toList").hidden = !earlier || !s.earlier;
+  $("toList").firstChild.textContent = picked ? "Change programme" : "Choose a programme";
 
   if ($("speakerSheet").open) renderSpeakers();
   requestAnimationFrame(fitDock);
@@ -485,7 +488,14 @@ $("goLive").addEventListener("click", () => {
   send("station", { id: state.station });
 });
 $("modeLive").addEventListener("click", () => { if (state && state.mode !== "live") send("mode", { m: "live" }); });
-$("modeEarlier").addEventListener("click", () => { if (state && state.mode !== "earlier") send("mode", { m: "earlier" }); });
+$("modeEarlier").addEventListener("click", async () => {
+  if (state && state.mode !== "earlier" && await send("mode", { m: "earlier" })) showList();
+});
+$("toList").addEventListener("click", showList);
+/** Scrolls the Earlier list into view where it sits below the player, as on a phone, and not where it sits beside it. */
+function showList() {
+  if (getComputedStyle(dock).position === "fixed") $("earlier").scrollIntoView({ behavior: "smooth", block: "start" });
+}
 // Counts from the day last asked for, so quick taps each move a day before the Mac has answered.
 async function stepDay(by) {
   if (!state || !state.earlier) return;

@@ -130,6 +130,13 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 
 .btn { background: var(--orange); color: var(--on-orange); font-weight: 700; padding: .65rem 1.1rem; min-height: 2.75rem; border-radius: 99px; font-size: 0.941rem; flex: none; }
 .btn:active { opacity: .8; }
 .golive { margin-top: .9rem; }
+/* In Earlier on a phone the programme list starts below the player, so a button points down to it. */
+.tolist { align-self: flex-start; display: inline-flex; align-items: center; gap: .4rem; margin-top: .9rem; min-height: 2.75rem;
+  padding: .65rem 1.1rem; border-radius: 99px; background: var(--chip); color: var(--accent); font-weight: 700; font-size: 0.941rem; }
+.tolist:active { background: var(--press); }
+.tolist svg { width: 1rem; height: 1rem; }
+.earlier { scroll-margin-top: 16px; }
+@media (min-width: 900px) { .tolist { display: none; } }
 .secondary { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 4px 14px; min-height: 3.25rem; }
 .link { color: var(--accent); font-weight: 600; padding: 10px 0; min-height: 2.75rem; }
 .secondary small { color: var(--muted); font-size: 0.765rem; text-align: right; }
