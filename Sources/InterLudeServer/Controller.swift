@@ -267,9 +267,14 @@ actor Controller {
     /// Answers the player's requests under /stream/: only the playlist and its segments, never the session's
     /// diagnostics, since these addresses carry no token. Starts the session if it isn't running.
     func stream(_ relative: String) async -> HTTPResponse {
-        // A speaker that can't play HLS reads the playlist through here as any player would, which also keeps the
-        // session from stopping as idle.
-        if relative == AACStream.path { return AACStream.response { await self.stream($0) } }
+        // A speaker that can't play HLS reads the session's playlist as any player would, which also keeps the session
+        // from stopping as idle. The stream belongs to the session playing when the speaker asked: once that one stops
+        // it ends, rather than starting another and so playing on the speaker again.
+        if relative == AACStream.path {
+            guard let s = session else { return HTTPResponse(status: 503, contentType: "text/plain", body: Data("Nothing playing.\n".utf8)) }
+            lastRequest = Date()
+            return AACStream.response { [weak self] path in await self?.respond(path, from: s) ?? AACStream.ended }
+        }
         guard relative == "live.m3u8" || (relative.hasPrefix("seg/") && relative.hasSuffix(".ts")) else { return .notFound }
         lastRequest = Date()
         if let session { return await session.respond(to: relative) }
@@ -281,6 +286,13 @@ actor Controller {
         }
         do { return try await t.value.respond(to: relative) }
         catch { return HTTPResponse(status: 503, contentType: "text/plain", body: Data("\(friendly(error))\n".utf8), noCache: true) }
+    }
+
+    /// Answers the AAC stream's request from `s`, while it is still the session playing.
+    private func respond(_ relative: String, from s: PlayerSession) async -> HTTPResponse {
+        guard s === session else { return AACStream.ended }
+        lastRequest = Date()
+        return await s.respond(to: relative)
     }
 
     // MARK: Playback
