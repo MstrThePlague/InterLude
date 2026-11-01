@@ -166,8 +166,8 @@ public enum Sonos {
 }
 
 /// Plays a stream on a Sonos room or group, through the same interface as a Cast device. Sonos keeps no connection
-/// open, so it is asked every few seconds what it is playing, to notice another app taking over or the speaker
-/// going away.
+/// open, so it is asked every second what it is doing, which also follows its own buttons and the Sonos app: a
+/// change of volume is reported, and so is being paused or stopped, another app taking over, or the speaker going away.
 public final class SonosController: CastController, @unchecked Sendable {
     public let group: SonosGroup
     public let events: AsyncStream<CastEvent>
@@ -175,6 +175,10 @@ public final class SonosController: CastController, @unchecked Sendable {
     private let lock = NSLock()
     private var uri: String?
     private var watcher: Task<Void, Never>?
+    /// The group volume (0 to 100) last set or reported, so only changes made elsewhere are reported.
+    private var volume: Int?
+    /// Until when readings are ignored after setting the volume, as one taken just before may still arrive.
+    private var volumeHeld = Date.distantPast
 
     public init(group: SonosGroup) {
         self.group = group
@@ -214,11 +218,25 @@ public final class SonosController: CastController, @unchecked Sendable {
         watch()
     }
 
+    /// Takes over a speaker already playing `url`, as when its own Play button asked for the stream: nothing is
+    /// loaded again, only followed, and its own volume is kept and reported. False if it is doing anything else.
+    public func adopt(url: URL) async -> Bool {
+        let u = Sonos.radioURI(url)
+        guard let media = try? await call(.avTransport, "GetMediaInfo", ["InstanceID": "0"]), Sonos.value("CurrentURI", in: media) == u,
+              let info = try? await call(.avTransport, "GetTransportInfo", ["InstanceID": "0"]),
+              ["PLAYING", "TRANSITIONING"].contains(Sonos.value("CurrentTransportState", in: info)) else { return false }
+        lock.withLock { uri = u; volume = nil }
+        watch()
+        return true
+    }
+
     /// No spectrum is drawn for Sonos, so its position isn't asked for.
     public var playbackSeconds: Double? { nil }
 
     public func setVolume(_ level: Double) async {
-        _ = try? await call(.groupRendering, "SetGroupVolume", ["InstanceID": "0", "DesiredVolume": String(Int((max(0, min(1, level)) * 100).rounded()))])
+        let v = Int((max(0, min(1, level)) * 100).rounded())
+        lock.withLock { volume = v; volumeHeld = Date().addingTimeInterval(2) }
+        _ = try? await call(.groupRendering, "SetGroupVolume", ["InstanceID": "0", "DesiredVolume": String(v)])
     }
 
     public func stop() async {
@@ -228,30 +246,43 @@ public final class SonosController: CastController, @unchecked Sendable {
         eventCont.finish()
     }
 
-    /// Every five seconds: still playing our stream? Three unanswered questions in a row mean the speaker has gone.
+    /// Every second: playing or not, and the volume; every five, still our stream. Ten unanswered seconds in a row
+    /// mean the speaker has gone.
     private func watch() {
         let t = Task { [weak self] in
-            var failures = 0, played = false
+            var failures = 0, played = false, tick = 0
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(5))
+                try? await Task.sleep(for: .seconds(1))
                 guard let self, !Task.isCancelled, let mine = self.lock.withLock({ self.uri }) else { return }
                 do {
-                    let media = try await self.call(.avTransport, "GetMediaInfo", ["InstanceID": "0"])
                     let info = try await self.call(.avTransport, "GetTransportInfo", ["InstanceID": "0"])
-                    failures = 0
+                    let level = try await self.call(.groupRendering, "GetGroupVolume", ["InstanceID": "0"])
+                    let media = tick % 5 == 0 ? try await self.call(.avTransport, "GetMediaInfo", ["InstanceID": "0"]) : nil
+                    failures = 0; tick += 1
                     guard !Task.isCancelled else { return }
-                    if let now = Sonos.value("CurrentURI", in: media), now != mine { self.eventCont.yield(.takenOver); return }
+                    if let now = media.flatMap({ Sonos.value("CurrentURI", in: $0) }), now != mine { self.eventCont.yield(.takenOver); return }
                     switch Sonos.value("CurrentTransportState", in: info) {
                     case "PLAYING": played = true
                     case "STOPPED", "PAUSED_PLAYBACK" where played: self.eventCont.yield(.stoppedOnDevice); return
                     default: break
                     }
+                    if let v = Sonos.value("CurrentVolume", in: level).flatMap({ Int($0) }), self.volumeChanged(to: v) {
+                        self.eventCont.yield(.volume(Double(v) / 100))
+                    }
                 } catch {
                     failures += 1
-                    if failures >= 3 { self.eventCont.yield(.lost); return }
+                    if failures >= 10 { self.eventCont.yield(.lost); return }
                 }
             }
         }
         lock.withLock { watcher?.cancel(); watcher = t }
+    }
+
+    /// Whether a reading is news: different from the last, and not one that may predate a volume we just set.
+    private func volumeChanged(to v: Int) -> Bool {
+        lock.withLock {
+            guard Date() >= volumeHeld, v != volume else { return false }
+            volume = v; return true
+        }
     }
 }

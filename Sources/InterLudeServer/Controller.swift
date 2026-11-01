@@ -191,9 +191,14 @@ actor Controller {
         cast = c
         do {
             try await c.connect()
-            try await c.load(url: url, title: castTitle)
-            await c.setVolume(settings.volume)
-            log("playing on \(sp.name)")
+            if let sonos = c as? SonosController, await sonos.adopt(url: url) {
+                // Its own Play button asked for the stream, so it is playing already, at its own volume.
+                log("playing on \(sp.name), started from the speaker")
+            } else {
+                try await c.load(url: url, title: castTitle)
+                await c.setVolume(settings.volume)
+                log("playing on \(sp.name)")
+            }
         } catch {
             guard cast === c else { return }
             castProblem("Couldn't play on \(sp.name): \(error.localizedDescription)")
@@ -206,7 +211,8 @@ actor Controller {
                 switch e {
                 case .lost: await self.castProblem("Speaker connection lost: \(name) stopped responding.")
                 case .takenOver: await self.castProblem("Another app took over \(name).")
-                case .stoppedOnDevice: await self.castProblem("\(name) was stopped from its own app.")
+                case .stoppedOnDevice: await self.speakerStopped(c, name)
+                case .volume(let v): await self.speakerVolume(c, v)
                 case .loadFailed(let m): await self.castProblem("\(name) refused the stream: \(m)")
                 }
             }
@@ -217,6 +223,18 @@ actor Controller {
         castEvents?.cancel(); castEvents = nil
         let c = cast; cast = nil
         await c?.stop()
+    }
+
+    /// Paused or stopped on the speaker itself: stop, as Stop here would. Its Play button starts it again (`stream`).
+    private func speakerStopped(_ c: any CastController, _ name: String) async {
+        guard cast === c else { return }
+        await stop("paused on \(name)")
+    }
+
+    /// The volume changed on the speaker itself, so the slider follows it.
+    private func speakerVolume(_ c: any CastController, _ v: Double) {
+        guard cast === c else { return }
+        settings.volume = v; saveSettings()
     }
 
     private func castProblem(_ message: String) {
@@ -271,9 +289,15 @@ actor Controller {
         // from stopping as idle. The stream belongs to the session playing when the speaker asked: once that one stops
         // it ends, rather than starting another and so playing on the speaker again.
         if relative == AACStream.path {
-            guard let s = session else { return HTTPResponse(status: 503, contentType: "text/plain", body: Data("Nothing playing.\n".utf8)) }
+            // With nothing playing, this is the speaker's own Play button: start, and the speaker is taken over as it
+            // is (`startCast`). Only the stream's first request can start anything.
+            if session == nil, starting == nil, settings.speaker.hasPrefix("sonos:") { start() }
+            guard session != nil || starting != nil else {
+                return HTTPResponse(status: 503, contentType: "text/plain", body: Data("Nothing playing.\n".utf8))
+            }
             lastRequest = Date()
-            return AACStream.response { [weak self] path in await self?.respond(path, from: s) ?? AACStream.ended }
+            let binding = AACStream.Binding()
+            return AACStream.response { [weak self] path in await self?.respond(path, for: binding) ?? AACStream.ended }
         }
         guard relative == "live.m3u8" || (relative.hasPrefix("seg/") && relative.hasSuffix(".ts")) else { return .notFound }
         lastRequest = Date()
@@ -288,9 +312,14 @@ actor Controller {
         catch { return HTTPResponse(status: 503, contentType: "text/plain", body: Data("\(friendly(error))\n".utf8), noCache: true) }
     }
 
-    /// Answers the AAC stream's request from `s`, while it is still the session playing.
-    private func respond(_ relative: String, from s: PlayerSession) async -> HTTPResponse {
-        guard s === session else { return AACStream.ended }
+    /// Answers a request from a speaker's AAC stream, from the session it belongs to while that one plays. Until
+    /// the first session is there (it is starting) the stream waits; once its session has gone, it ends.
+    private func respond(_ relative: String, for binding: AACStream.Binding) async -> HTTPResponse {
+        guard let s = session else {
+            return binding.session == nil ? HTTPResponse(status: 503, contentType: "text/plain", body: Data()) : AACStream.ended
+        }
+        if binding.session == nil { binding.session = s }
+        guard binding.session === s else { return AACStream.ended }
         lastRequest = Date()
         return await s.respond(to: relative)
     }

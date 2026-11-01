@@ -56,6 +56,13 @@ public enum AACStream {
         TS.parse(segment).map { $0.frames.reduce(into: Data()) { $0.append($1) } }
     }
 
+    /// The session a speaker's stream belongs to: the first one it reads from. Once that session stops the stream is
+    /// told `ended`, so it can't carry on into another. Only touched by the one actor that answers the stream.
+    public final class Binding: @unchecked Sendable {
+        public var session: PlayerSession?
+        public init() {}
+    }
+
     /// The segment number in a path such as `seg/42.ts`.
     static func index(of path: String) -> Int? {
         guard path.hasPrefix("seg/"), path.hasSuffix(".ts") else { return nil }
