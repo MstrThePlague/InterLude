@@ -58,7 +58,14 @@ The remote is served by the same small web server the speakers use. Its address 
 
 ### Sonos speakers
 
-Sonos speakers can't play the HLS playlist a Chromecast or a browser plays, so InterLude gives them one continuous AAC stream made from it, `live.aac` beside `live.m3u8`, and starts it on the speaker as an internet radio station. The stream reads InterLude's own playlist as any player does, so the delay and the muted or skipped news are the same on every speaker. Volume is the group's volume, and a room grouped in the Sonos app plays through its group. If someone stops it from the Sonos app, or plays something else there, InterLude says so.
+Sonos speakers can't play the HLS playlist a Chromecast or a browser plays, so InterLude gives them one continuous AAC stream made from it, `live.aac` beside `live.m3u8`, and starts it on the speaker as an internet radio station. The stream reads InterLude's own playlist as any player does, so the delay and the muted or skipped news are the same on every speaker. Volume is the group's volume, and a room grouped in the Sonos app plays through its group.
+
+The speaker's own buttons and the Sonos app work alongside InterLude, which asks the speaker every second what it is doing:
+
+- **Volume** changed there moves InterLude's slider within a second or two, and the slider sets the speaker's volume as usual.
+- **Pause or stop** there stops InterLude, as its own Stop would.
+- **Play** there starts InterLude again, if that speaker is the one chosen. It plays what InterLude's Play would, starting afresh about a minute behind live rather than where it was paused, so it takes a few seconds.
+- **Playing something else** there, or regrouping the room away, ends InterLude's playback and says so.
 
 On the Mac, a Sonos speaker on another VLAN whose Bonjour announcements don't reach the Mac can be named by its address:
 
@@ -140,7 +147,7 @@ docker compose logs | grep "Open the app"
 
 The log gives the app's address, `http://<server>:8642/app/<code>/`. The long code keeps other people on your network out; **Settings › Reset link** makes a new one. Open it on a phone and add it to the Home Screen to keep it as an app. Settings also shows a QR code for opening it on another device.
 
-The server starts playing when a browser asks for it and stops 10 minutes after the last one stops listening. Play and Stop act on the browser you press them in. With a speaker chosen, they start and stop the speaker instead.
+The server starts playing when a browser asks for it and stops 10 minutes after the last one stops listening. Play and Stop act on the browser you press them in. With a speaker chosen, they start and stop the speaker instead, and a Sonos speaker's own Play and Pause buttons and volume work too (see [Sonos speakers](#sonos-speakers)).
 
 **Your network.** Browsers on your LAN reach the server on TCP 8642. Speakers need two more things:
 
