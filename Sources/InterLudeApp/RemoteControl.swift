@@ -43,16 +43,16 @@ extension AppModel {
         s.stations = orderedStations.map {
             .init(id: $0.serviceId, name: $0.name, short: $0.short, colour: $0.colour, group: $0.group, favourite: profile($0.serviceId).favourite)
         }
-        let speakers = outputs.filter { if case .cast(let d) = $0 { !d.isGroup } else { false } }
-        let groups = outputs.filter { if case .cast(let d) = $0 { d.isGroup } else { false } }
+        let speakers = outputs.filter { $0.isSpeaker && !$0.isGroup }
+        let groups = outputs.filter { $0.isSpeaker && $0.isGroup }
         s.speakers = ([Output.thisMac] + speakers + groups).map { o in
-            let kind = switch o { case .thisMac: "mac"; case .cast(let d): d.isGroup ? "group" : "speaker" }
+            let kind = o.isSpeaker ? (o.isGroup ? "group" : "speaker") : "mac"
             return .init(id: o.id, name: o.label, detail: o.detail, kind: kind)
         }
         switch discoveryState {
         case .searching: s.speakerNote = "Looking for speakers…"
         case .denied: s.speakerNote = "To find speakers, allow Local Network for InterLude on the Mac in System Settings › Privacy & Security."
-        case .ready: if speakers.isEmpty && groups.isEmpty { s.speakerNote = "No Chromecast speakers found." }
+        case .ready: if speakers.isEmpty && groups.isEmpty { s.speakerNote = "No Chromecast or Sonos speakers found." }
         }
         s.mode = mode.rawValue
         s.pageVersion = Self.webFiles.version

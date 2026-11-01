@@ -42,12 +42,29 @@ public final class LocalServer: @unchecked Sendable {
             let head = req.method == "HEAD"
             Task {
                 let r = await handler(req)
+                if let stream = r.stream { Self.send(stream, contentType: r.contentType, head: head, on: c); return }
                 var h = "HTTP/1.1 \(r.status) \(r.status == 200 ? "OK" : "Error")\r\nContent-Type: \(r.contentType)\r\nContent-Length: \(r.body.count)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n"
                 if r.noCache { h += "Cache-Control: no-cache\r\n" }
                 h += "\r\n"
                 var out = Data(h.utf8); if !head { out.append(r.body) }
                 c.send(content: out, completion: .contentProcessed { _ in c.cancel() })
             }
+        }
+    }
+
+    /// Sends a body with no end, such as the AAC stream for a Sonos speaker, until either side stops.
+    private static func send(_ stream: AsyncStream<Data>, contentType: String, head: Bool, on c: NWConnection) {
+        let h = "HTTP/1.1 200 OK\r\nContent-Type: \(contentType)\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+        c.send(content: Data(h.utf8), completion: .contentProcessed { _ in })
+        guard !head else { c.send(content: nil, isComplete: true, completion: .contentProcessed { _ in c.cancel() }); return }
+        Task {
+            for await chunk in stream {
+                let sent = await withCheckedContinuation { (k: CheckedContinuation<Bool, Never>) in
+                    c.send(content: chunk, completion: .contentProcessed { k.resume(returning: $0 == nil) })
+                }
+                if !sent { break }
+            }
+            c.cancel()
         }
     }
 
