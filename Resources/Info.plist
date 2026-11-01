@@ -30,10 +30,11 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_googlecast._tcp</string>
+		<string>_sonos._tcp</string>
 	</array>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>InterLude finds Chromecast devices and groups on your network and streams radio to them.</string>
+	<string>InterLude finds Chromecast and Sonos speakers and groups on your network and streams radio to them.</string>
 </dict>
 </plist>

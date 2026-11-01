@@ -29,7 +29,9 @@ let session = PlayerSession(catalogue: cat, settings: settings, token: token,
 let server = LocalServer(port: port) { req in
     let prefix = "/\(token)/"
     guard req.path.hasPrefix(prefix) else { return .notFound }
-    return await session.respond(to: String(req.path.dropFirst(prefix.count)))
+    let relative = String(req.path.dropFirst(prefix.count))
+    if relative == AACStream.path { return AACStream.response { await session.respond(to: $0) } }      // as Sonos plays it
+    return await session.respond(to: relative)
 }
 try server.start()
 print("starting session (\(Int(settings.delaySeconds))s delay)...")
