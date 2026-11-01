@@ -7,7 +7,7 @@
 # ./config holds a station list and web app to use in place of the image's (scripts/push-config.sh puts them there).
 # The server reads them again when they change, with no restart.
 #
-# Host networking, so Chromecasts and mDNS reach it without NAT. The app's link is in `docker compose logs`.
+# Host networking, so Chromecasts, Sonos speakers and mDNS reach it without NAT. The app's link is in `docker compose logs`.
 services:
   interlude:
     image: ghcr.io/mstrtheplague/interlude-server:${INTERLUDE_TAG:-latest}
@@ -24,6 +24,8 @@ services:
       # INTERLUDE_KEEP_RUNNING: "1"
       # The address Cast speakers fetch the stream from, if the server picks the wrong one.
       # INTERLUDE_CAST_HOST: "192.168.1.50"
+      # Sonos speakers to ask about the household, for when multicast DNS doesn't reach them. One is enough.
+      # INTERLUDE_SONOS_HOSTS: "192.168.1.60"
 
 volumes:
   data:

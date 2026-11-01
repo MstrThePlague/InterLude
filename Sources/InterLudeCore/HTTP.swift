@@ -5,8 +5,13 @@ public struct HTTPResponse: Sendable {
     public var contentType: String
     public var body: Data
     public var noCache = false
+    /// A body with no end, sent as it arrives instead of `body`, such as the AAC stream a Sonos speaker plays.
+    public var stream: AsyncStream<Data>?
     public init(status: Int = 200, contentType: String, body: Data, noCache: Bool = false) {
         self.status = status; self.contentType = contentType; self.body = body; self.noCache = noCache
+    }
+    public init(contentType: String, stream: AsyncStream<Data>) {
+        status = 200; self.contentType = contentType; body = Data(); noCache = true; self.stream = stream
     }
     public static let notFound = HTTPResponse(status: 404, contentType: "text/plain", body: Data("not found".utf8))
 }
