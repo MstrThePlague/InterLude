@@ -1,3 +1,9 @@
+//  AppleAudio.swift
+//  InterLudeApple
+//
+//  The Mac's implementations of what the core asks the platform for: AAC decoding through AVFoundation, AAC encoding
+//  with the system encoder, Apple's built-in sound classifier, and the signal maths on Accelerate's vDSP.
+
 import Foundation
 import Accelerate
 import AudioToolbox
@@ -13,11 +19,12 @@ extension Platform {
 }
 
 extension PCMAudio {
-    init(_ buf: AVAudioPCMBuffer) {
-        let n = Int(buf.frameLength), channels = Int(buf.format.channelCount)
-        let data = buf.floatChannelData
-        self.init(channels: (0..<channels).map { c in data.map { Array(UnsafeBufferPointer(start: $0[c], count: n)) } ?? [] },
-                  sampleRate: buf.format.sampleRate)
+    /// Copies a deinterleaved float buffer.
+    init(_ buffer: AVAudioPCMBuffer) {
+        let frames = Int(buffer.frameLength), channels = Int(buffer.format.channelCount)
+        let data = buffer.floatChannelData
+        self.init(channels: (0..<channels).map { c in data.map { Array(UnsafeBufferPointer(start: $0[c], count: frames)) } ?? [] },
+                  sampleRate: buffer.format.sampleRate)
     }
 
     /// A deinterleaved float buffer with the same samples.
@@ -39,16 +46,17 @@ public struct AppleAudioDecoder: AudioDecoding {
     public init() {}
 
     public func decode(adts frames: [Data]) throws -> PCMAudio? {
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("il-\(UUID().uuidString).aac")
-        var d = Data(); for f in frames { d.append(f) }
-        try d.write(to: tmp); defer { try? FileManager.default.removeItem(at: tmp) }
-        let file = try AVAudioFile(forReading: tmp)
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("il-\(UUID().uuidString).aac")
+        var stream = Data(); for frame in frames { stream.append(frame) }
+        try stream.write(to: temporary); defer { try? FileManager.default.removeItem(at: temporary) }
+        let file = try AVAudioFile(forReading: temporary)
         guard file.length > 0 else { return nil }
         return try read(file)
     }
 
     public func read(contentsOf url: URL) throws -> PCMAudio { try read(AVAudioFile(forReading: url)) }
 
+    /// Reads the whole of an open file.
     private func read(_ file: AVAudioFile) throws -> PCMAudio {
         guard let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(file.length)) else {
             throw PlatformError.unavailable("A buffer for \(file.length) samples")
@@ -58,7 +66,7 @@ public struct AppleAudioDecoder: AudioDecoding {
     }
 }
 
-/// AAC-LC encoding with the system encoder.
+/// AAC-LC encoding with the system encoder, through an AudioConverter fed from memory.
 public struct AppleAACEncoder: AACEncoding {
     public init() {}
 
@@ -74,10 +82,12 @@ public struct AppleAACEncoder: AACEncoding {
         defer { AudioConverterDispose(conv) }
         var rate = bitrate
         AudioConverterSetProperty(conv, kAudioConverterEncodeBitRate, 4, &rate)
+        // The encoder's priming is its lead-in, which callers need to line output up with input.
         var prime = AudioConverterPrimeInfo(leadingFrames: 2112, trailingFrames: 0)
         var primeSize = UInt32(MemoryLayout<AudioConverterPrimeInfo>.size)
         AudioConverterGetProperty(conv, kAudioConverterPrimeInfo, &primeSize, &prime)
 
+        /// The input, handed to the converter's callback as it asks for more.
         final class Feed {
             let samples: UnsafeMutableBufferPointer<Float>
             var pos = 0                                       // in sample frames
@@ -88,6 +98,7 @@ public struct AppleAACEncoder: AACEncoding {
         let feed = Feed(pcm)
         var frames: [Data] = []
         var out = [UInt8](repeating: 0, count: 8192)
+        // One packet (one AAC frame) per call, until the input runs out and the encoder has flushed.
         while true {
             var packets: UInt32 = 1
             var pd = AudioStreamPacketDescription()
@@ -125,25 +136,28 @@ public final class AppleSoundClassifier: NSObject, SoundClassifying, SNResultsOb
 
     public override init() { super.init() }
 
+    /// Writes the clips to a temporary file and analyses it. Results arrive through `request(_:didProduce:)` before
+    /// `analyze()` returns.
     public func classify(_ clips: [PCMAudio]) throws -> [SoundScore] {
         let buffers = clips.compactMap { $0.buffer() }
         guard let first = buffers.first else { return [] }
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("il-\(UUID().uuidString).caf")
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("il-\(UUID().uuidString).caf")
+        defer { try? FileManager.default.removeItem(at: temporary) }
         do {
             let settings: [String: Any] = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: first.format.sampleRate,
                                            AVNumberOfChannelsKey: first.format.channelCount, AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true]
-            let out = try AVAudioFile(forWriting: tmp, settings: settings, commonFormat: first.format.commonFormat, interleaved: false)
-            for b in buffers { try out.write(from: b) }
+            let out = try AVAudioFile(forWriting: temporary, settings: settings, commonFormat: first.format.commonFormat, interleaved: false)
+            for buffer in buffers { try out.write(from: buffer) }
         }
         lock.lock(); results = []; lock.unlock()
-        let analyzer = try SNAudioFileAnalyzer(url: tmp)
+        let analyzer = try SNAudioFileAnalyzer(url: temporary)
         try analyzer.add(try SNClassifySoundRequest(classifierIdentifier: .version1), withObserver: self)
         analyzer.analyze()
         lock.lock(); defer { lock.unlock() }
         return results
     }
 
+    /// Collects one window's speech and music confidences.
     public func request(_ request: SNRequest, didProduce result: SNResult) {
         guard let r = result as? SNClassificationResult else { return }
         let speech = r.classification(forIdentifier: "speech")?.confidence ?? 0
@@ -162,6 +176,7 @@ public final class AccelerateDSP: DSPKernels, @unchecked Sendable {
     public init() {}
     deinit { for s in setups.values { vDSP_destroy_fftsetup(s) } }
 
+    /// The FFT setup for 2^log2n points, made on first use.
     private func setup(log2n: Int) -> FFTSetup? {
         lock.lock(); defer { lock.unlock() }
         if let s = setups[log2n] { return s }
@@ -182,6 +197,7 @@ public final class AccelerateDSP: DSPKernels, @unchecked Sendable {
         var real = [Float](repeating: 0, count: half), imag = [Float](repeating: 0, count: half)
         var power = [Float](repeating: 0, count: half)
         real.withUnsafeMutableBufferPointer { r in imag.withUnsafeMutableBufferPointer { im in
+            // Pack the real frame as N/2 complex values, transform in place, and take the squared magnitudes.
             var split = DSPSplitComplex(realp: r.baseAddress!, imagp: im.baseAddress!)
             frame.withUnsafeBufferPointer { fp in
                 fp.baseAddress!.withMemoryRebound(to: DSPComplex.self, capacity: half) { vDSP_ctoz($0, 2, &split, 1, vDSP_Length(half)) }

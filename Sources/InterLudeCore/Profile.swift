@@ -1,137 +1,176 @@
+//  Profile.swift
+//  InterLudeCore
+//
+//  Per-station settings and what InterLude has learned about each station: its bulletin times and lengths, and its
+//  news theme. Stored as JSON in Application Support so the user can read and edit it; the jingle candidates are
+//  large, so they live in a binary file beside the JSON.
+
 import Foundation
 
-/// Per-station settings and learned data. Stored as JSON in Application Support so the user can edit it.
-/// Jingle candidates are large (up to eight 70 s fingerprints), so they live in a binary file beside the JSON.
+/// A station's settings and learned data.
 public struct StationProfile: Codable, Sendable, Equatable {
+    /// How far behind live to play [s].
     public var delaySeconds = 60.0
     public var muteNews = true
     public var favourite = false
-    /// Detect and log bulletins but never mute.
+    /// Detect and log bulletins, but never mute them.
     public var shadowMode = false
     public var detector = DetectorConfig()
+    /// The learned news theme, if any.
     public var idents: [IdentReference] = []
+    /// Fingerprints of the audio around recent bulletin starts, from which the theme is learned: up to eight 70 s
+    /// windows of `IdentFeatures` frames.
     public var candidates: [[[Float]]] = []
-    /// The block each candidate came from, so "Wasn't news" can withdraw it.
+    /// The bulletin each candidate came from, so "Wasn't news" can withdraw it.
     public var candidateSources: [String] = []
+    /// How many confirmed bulletins started in each minute of the hour.
     public var startMinuteHistogram: [Int: Int] = [:]
+    /// The lengths of recent confirmed bulletins [s].
     public var bulletinSeconds: [Double] = []
+
+    /// Candidates kept at once.
+    static let maxCandidates = 8
+    /// Bulletin lengths kept at once.
+    static let maxBulletinLengths = 200
+
     public init() {}
 
-    /// Tolerant decoding, so profiles written by older versions keep their settings.
+    /// Decodes tolerantly, so profiles written by older versions keep their settings.
     public init(from decoder: Decoder) throws {
         self.init()
-        let c = try decoder.container(keyedBy: Keys.self)
-        func get<T: Decodable>(_ k: Keys, _ v: inout T) { if let x = try? c.decodeIfPresent(T.self, forKey: k) { v = x } }
+        let container = try decoder.container(keyedBy: Keys.self)
+        func get<T: Decodable>(_ key: Keys, _ value: inout T) { if let found = try? container.decodeIfPresent(T.self, forKey: key) { value = found } }
         get(.delaySeconds, &delaySeconds); get(.muteNews, &muteNews); get(.favourite, &favourite); get(.shadowMode, &shadowMode)
         get(.detector, &detector); get(.idents, &idents); get(.candidates, &candidates); get(.candidateSources, &candidateSources)
         get(.startMinuteHistogram, &startMinuteHistogram); get(.bulletinSeconds, &bulletinSeconds)
-        // Candidates from before candidate windows changed are a different shape; drop them.
+        // Candidates and themes from before the fingerprint changed shape can't be compared with new ones; drop them.
         let expected = IdentFeatures.bands
         if candidates.contains(where: { $0.first?.count != expected || $0.count < 1000 }) { candidates = []; candidateSources = [] }
         if idents.contains(where: { $0.features.first?.count != expected }) { idents = [] }
     }
+
     enum Keys: String, CodingKey {
         case delaySeconds, muteNews, favourite, shadowMode, detector, idents, candidates, candidateSources, startMinuteHistogram, bulletinSeconds
     }
 
-    /// Everything except the candidates, which `save` writes separately.
+    /// Encodes everything except the candidates, which `save` writes to their own file.
     public func encode(to encoder: Encoder) throws {
-        var c = encoder.container(keyedBy: Keys.self)
-        try c.encode(delaySeconds, forKey: .delaySeconds); try c.encode(muteNews, forKey: .muteNews)
-        try c.encode(favourite, forKey: .favourite); try c.encode(shadowMode, forKey: .shadowMode)
-        try c.encode(detector, forKey: .detector); try c.encode(idents, forKey: .idents)
-        try c.encode(candidateSources, forKey: .candidateSources)
-        try c.encode(startMinuteHistogram, forKey: .startMinuteHistogram); try c.encode(bulletinSeconds, forKey: .bulletinSeconds)
+        var container = encoder.container(keyedBy: Keys.self)
+        try container.encode(delaySeconds, forKey: .delaySeconds); try container.encode(muteNews, forKey: .muteNews)
+        try container.encode(favourite, forKey: .favourite); try container.encode(shadowMode, forKey: .shadowMode)
+        try container.encode(detector, forKey: .detector); try container.encode(idents, forKey: .idents)
+        try container.encode(candidateSources, forKey: .candidateSources)
+        try container.encode(startMinuteHistogram, forKey: .startMinuteHistogram); try container.encode(bulletinSeconds, forKey: .bulletinSeconds)
     }
 
+    /// The profile's JSON file, `profiles/<serviceId>.json` in the support directory.
     public static func url(_ serviceId: String) throws -> URL {
-        let dir = try AppPaths.supportDirectory().appendingPathComponent("profiles", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("\(serviceId).json")
+        let directory = try AppPaths.supportDirectory().appendingPathComponent("profiles", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("\(serviceId).json")
     }
 
+    /// The candidates' binary file beside the JSON.
     static func candidatesURL(_ serviceId: String) throws -> URL {
         try url(serviceId).deletingPathExtension().appendingPathExtension("candidates")
     }
 
+    /// The station's saved profile, or a new one with defaults suited to the station.
     public static func load(_ station: Station) -> StationProfile {
-        if let u = try? url(station.serviceId), let d = try? Data(contentsOf: u), var p = try? JSONDecoder().decode(StationProfile.self, from: d) {
+        if let url = try? url(station.serviceId), let data = try? Data(contentsOf: url),
+           var profile = try? JSONDecoder().decode(StationProfile.self, from: data) {
             // Older profiles kept candidates in the JSON; newer ones keep them in the binary file.
-            if p.candidates.isEmpty, let cu = try? candidatesURL(station.serviceId), let blob = try? Data(contentsOf: cu) {
-                p.candidates = CandidateFile.decode(blob)
+            if profile.candidates.isEmpty, let binary = try? candidatesURL(station.serviceId), let blob = try? Data(contentsOf: binary) {
+                profile.candidates = CandidateFile.decode(blob)
             }
-            if p.candidateSources.count != p.candidates.count { p.candidateSources = Array(repeating: "", count: p.candidates.count) }
-            return p
+            if profile.candidateSources.count != profile.candidates.count {
+                profile.candidateSources = Array(repeating: "", count: profile.candidates.count)
+            }
+            return profile
         }
-        var p = StationProfile()
-        if station.kind == .speech { p.muteNews = false }
-        if station.serviceId == "bbc_radio_two" {      // Radio 2's bulletins and speech content have not been measured
-            p.shadowMode = true; p.detector.identOnly = true
+        var profile = StationProfile()
+        if station.kind == .speech { profile.muteNews = false }
+        if station.serviceId == "bbc_radio_two" {
+            // Radio 2's bulletins and speech content have not been measured, so only its jingle mutes, and only
+            // once it has been checked in shadow mode.
+            profile.shadowMode = true; profile.detector.identOnly = true
         }
-        return p
+        return profile
     }
 
+    /// Writes the profile and its candidates. Failures are ignored: a profile not saved is learned again.
     public func save(_ station: Station) {
-        guard let u = try? StationProfile.url(station.serviceId) else { return }
-        let e = JSONEncoder(); e.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try? e.encode(self).write(to: u, options: .atomic)
-        if let cu = try? StationProfile.candidatesURL(station.serviceId) { try? CandidateFile.encode(candidates).write(to: cu, options: .atomic) }
+        guard let url = try? StationProfile.url(station.serviceId) else { return }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        try? encoder.encode(self).write(to: url, options: .atomic)
+        if let binary = try? StationProfile.candidatesURL(station.serviceId) {
+            try? CandidateFile.encode(candidates).write(to: binary, options: .atomic)
+        }
     }
 
-    /// Learns the bulletin's start minute and length after a confirmed bulletin.
+    /// Learns a confirmed bulletin's start minute and length, and once five are known, tightens the range of lengths
+    /// the detector treats as normal to the middle 90 %, with a margin.
+    ///
+    /// - Parameters:
+    ///   - start: The bulletin's start, on the stream clock [s since 1970].
+    ///   - end: Its end, on the same clock.
     public mutating func learn(start: Double, end: Double) {
         let minute = Int((start.truncatingRemainder(dividingBy: 3600)) / 60)
         startMinuteHistogram[minute, default: 0] += 1
         bulletinSeconds.append(end - start)
-        if bulletinSeconds.count > 200 { bulletinSeconds.removeFirst() }
+        if bulletinSeconds.count > Self.maxBulletinLengths { bulletinSeconds.removeFirst() }
         if bulletinSeconds.count >= 5 {
-            let s = bulletinSeconds.sorted()
-            detector.minBulletinSeconds = max(30, s[s.count / 20] * 0.7)
-            detector.maxBulletinSeconds = s[s.count - 1 - s.count / 20] * 1.3
+            let sorted = bulletinSeconds.sorted()
+            detector.minBulletinSeconds = max(30, sorted[sorted.count / 20] * 0.7)
+            detector.maxBulletinSeconds = sorted[sorted.count - 1 - sorted.count / 20] * 1.3
         }
     }
 }
 
-/// A learned news theme: four seconds of log-band features, and the score a match must reach.
+/// A learned news theme: four seconds of `IdentFeatures` frames, and the score a match must reach.
 public struct IdentReference: Codable, Sendable, Equatable {
     public var features: [[Float]]
     public var threshold: Float = IdentMatcher.defaultThreshold
 }
 
-/// The binary layout of a `.candidates` file: a count, then for each candidate its frame count, its band count and
-/// the features as little-endian Float32. About 1.7 MB for eight candidates, against several MB of JSON.
+/// The binary layout of a `.candidates` file.
+///
+/// A count, then for each candidate its frame count, its band count and its features, all little-endian 32-bit
+/// values (the features as Float32). About 1.7 MB for eight candidates, against several MB of JSON.
 enum CandidateFile {
     static func encode(_ candidates: [[[Float]]]) -> Data {
-        var d = Data()
-        func put(_ v: UInt32) { withUnsafeBytes(of: v.littleEndian) { d.append(contentsOf: $0) } }
+        var data = Data()
+        func put(_ value: UInt32) { withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) } }
         put(UInt32(candidates.count))
-        for c in candidates {
-            put(UInt32(c.count)); put(UInt32(c.first?.count ?? 0))
-            for frame in c { for v in frame { put(v.bitPattern) } }
+        for candidate in candidates {
+            put(UInt32(candidate.count)); put(UInt32(candidate.first?.count ?? 0))
+            for frame in candidate { for value in frame { put(value.bitPattern) } }
         }
-        return d
+        return data
     }
 
-    static func decode(_ d: Data) -> [[[Float]]] {
-        var pos = 0
+    /// Reads a `.candidates` file. A truncated or malformed file gives no candidates at all.
+    static func decode(_ data: Data) -> [[[Float]]] {
+        var position = 0
         func get() -> UInt32? {
-            guard pos + 4 <= d.count else { return nil }
-            let v = d[d.startIndex + pos..<d.startIndex + pos + 4].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
-            pos += 4
-            return UInt32(littleEndian: v)
+            guard position + 4 <= data.count else { return nil }
+            let start = data.startIndex + position
+            let raw = data[start..<start + 4].withUnsafeBytes { $0.loadUnaligned(as: UInt32.self) }
+            position += 4
+            return UInt32(littleEndian: raw)
         }
-        guard let n = get() else { return [] }
-        var out: [[[Float]]] = []
-        for _ in 0..<n {
+        guard let count = get() else { return [] }
+        var candidates: [[[Float]]] = []
+        for _ in 0..<count {
             guard let frames = get(), let bands = get() else { return [] }
-            var c: [[Float]] = []
+            var candidate: [[Float]] = []
             for _ in 0..<frames {
-                var f: [Float] = []
-                for _ in 0..<bands { guard let v = get() else { return [] }; f.append(Float(bitPattern: v)) }
-                c.append(f)
+                var frame: [Float] = []
+                for _ in 0..<bands { guard let bits = get() else { return [] }; frame.append(Float(bitPattern: bits)) }
+                candidate.append(frame)
             }
-            out.append(c)
+            candidates.append(candidate)
         }
-        return out
+        return candidates
     }
 }

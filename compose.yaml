@@ -19,9 +19,6 @@ services:
       - ./config:/etc/interlude:ro
     environment:
       TZ: Europe/London
-      # Run the live session all the time, for a week of comparing with the Mac app. Remove afterwards: it streams
-      # from the BBC (about 3.5 GB a day at 320 kbps) whether or not anyone is listening.
-      # INTERLUDE_KEEP_RUNNING: "1"
       # The address Cast speakers fetch the stream from, if the server picks the wrong one.
       # INTERLUDE_CAST_HOST: "192.168.1.50"
       # Sonos speakers to ask about the household, for when multicast DNS doesn't reach them. One is enough.

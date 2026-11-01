@@ -1,3 +1,9 @@
+//  NewsTranscriber.swift
+//  InterLudeApple
+//
+//  The Mac's transcriber for the newsreader's opening and sign-off: Apple's on-device speech model, in British
+//  English. Nothing leaves the Mac. The Linux server uses whisper.cpp instead (InterLudeML/Whisper.swift).
+
 import Foundation
 import AVFoundation
 import Speech
@@ -5,6 +11,7 @@ import InterLudeCore
 
 /// On-device transcription with Apple's speech model. Nothing leaves the Mac.
 public actor NewsTranscriber: NewsTranscribing {
+    /// Whether the speech model can be used: not on this Mac, not downloaded yet, downloading, or ready.
     public enum State: Sendable, Equatable { case unavailable, needsModel, installing, ready }
     public private(set) var state: State = .unavailable
     private var locale: Locale?
@@ -28,7 +35,13 @@ public actor NewsTranscriber: NewsTranscribing {
         } catch { state = .needsModel; return false }
     }
 
-    /// Transcribes mono audio (one continuous stretch). Times are seconds from the first sample.
+    /// Transcribes one continuous stretch of mono audio. The analyser reads files, so the audio goes through a
+    /// temporary one.
+    ///
+    /// - Parameters:
+    ///   - samples: The audio.
+    ///   - sampleRate: [Hz]
+    /// - Returns: Phrases timed from the first sample, or none if the model isn't ready.
     public func transcribe(samples: [Float], sampleRate: Double = 48000) async throws -> [SpokenPhrase] {
         guard state == .ready, let locale, !samples.isEmpty,
               let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1),
@@ -38,10 +51,10 @@ public actor NewsTranscriber: NewsTranscribing {
         samples.withUnsafeBufferPointer { src in
             if let base = src.baseAddress { channel.update(from: base, count: samples.count) }
         }
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("il-stt-\(UUID().uuidString).caf")
-        defer { try? FileManager.default.removeItem(at: tmp) }
+        let temporary = FileManager.default.temporaryDirectory.appendingPathComponent("il-stt-\(UUID().uuidString).caf")
+        defer { try? FileManager.default.removeItem(at: temporary) }
         do {
-            let out = try AVAudioFile(forWriting: tmp, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+            let out = try AVAudioFile(forWriting: temporary, settings: format.settings, commonFormat: .pcmFormatFloat32, interleaved: false)
             try out.write(from: buf)
         }
         let transcriber = SpeechTranscriber(locale: locale, preset: .timeIndexedTranscriptionWithAlternatives)
@@ -53,7 +66,7 @@ public actor NewsTranscriber: NewsTranscribing {
             }
             return out
         }
-        let file = try AVAudioFile(forReading: tmp)
+        let file = try AVAudioFile(forReading: temporary)
         if let end = try await analyzer.analyzeSequence(from: file) { try await analyzer.finalizeAndFinish(through: end) }
         else { await analyzer.cancelAndFinishNow() }
         return try await collect.value

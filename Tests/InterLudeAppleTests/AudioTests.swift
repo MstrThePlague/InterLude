@@ -1,3 +1,8 @@
+//  AudioTests.swift
+//  InterLudeAppleTests
+//
+//  The Mac's audio: silent segments, ambience, and the portable maths matching Accelerate's.
+
 import Testing
 import Foundation
 import AVFoundation
@@ -28,7 +33,6 @@ func syntheticPrototype() -> TSSegmentInfo {
     #expect(info.audioPID == 34)
     #expect(info.frames.count == 300)
     #expect(info.firstPTS == 2_323_604_384)
-    try seg.write(to: URL(fileURLWithPath: "/tmp/silent_test.ts"))
 }
 
 @Test func ambienceFadesAndJoins() throws {
@@ -72,31 +76,6 @@ func syntheticPrototype() -> TSSegmentInfo {
     #expect(snr(3.5, 6.3, lag: lag) > 15)                // first segment, after its fade-in
     #expect(snr(12.9, 15, lag: lag) > 15)                // third segment, before its fade-out
 }
-
-/// Needs saved BBC segments: record some with the `record` tool and point INTERLUDE_RECORDINGS at that folder
-/// (it holds `index.txt` and the `.ts` files). Without it the test is skipped.
-@Test(.enabled(if: ProcessInfo.processInfo.environment["INTERLUDE_RECORDINGS"] != nil,
-               "Set INTERLUDE_RECORDINGS to a folder of saved segments"))
-func silentSegmentsJoinRealOnesWithoutTimestampBreaks() throws {
-    Platform.install(.apple)
-    let dir = ProcessInfo.processInfo.environment["INTERLUDE_RECORDINGS"] ?? ""
-    guard let idx = try? String(contentsOfFile: dir + "/index.txt", encoding: .utf8) else { return }
-    let first = Int(idx.split(separator: " ")[0])! + 200
-    var out = Data()
-    var proto: TSSegmentInfo?
-    var frame: Data?
-    for i in first..<(first + 12) {
-        let d = try Data(contentsOf: URL(fileURLWithPath: "\(dir)/\(i).ts"))
-        let info = try #require(TS.parse(d))
-        if proto == nil { proto = info; frame = Silence.adts(raw: try Silence.rawFrame(), like: info.frames[0]) }
-        if (first + 4..<first + 8).contains(i) {
-            let cc = (info.patPacket![3] & 0xF, info.pmtPacket![3] & 0xF)
-            out.append(TS.build(frames: Array(repeating: frame!, count: 300), startPTS: info.firstPTS!, prototype: proto!, patCC: cc.0, pmtCC: cc.1))
-        } else { out.append(d) }
-    }
-    try out.write(to: URL(fileURLWithPath: "/tmp/mix.ts"))
-}
-
 
 /// The portable kernels give what vDSP gives, so a jingle learned on one platform matches on another.
 @Test func portableDSPMatchesAccelerate() {

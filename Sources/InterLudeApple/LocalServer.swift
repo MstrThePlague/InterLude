@@ -1,31 +1,43 @@
+//  LocalServer.swift
+//  InterLudeApple
+//
+//  The Mac's web server, and finding the Mac's addresses on the LAN and on Tailscale for the links it hands out.
+
 import Foundation
 import Network
 import InterLudeCore
 
-/// A small HTTP server on NWListener. It serves the playlist and segments to AVPlayer (on loopback) and to Chromecasts
-/// (on the LAN), and the phone remote. Every path starts with a random token, so other devices cannot guess the URLs.
-/// POST carries no body: the phone remote's commands put their arguments in the query.
+/// A small HTTP server on NWListener.
+///
+/// It serves the playlist and segments to AVPlayer (on loopback) and to speakers (on the LAN), and the web app to the
+/// panel and the phone remote. Every path starts with a random token, so other devices can't guess the URLs. POST
+/// carries no body: commands put their arguments in the query.
 public final class LocalServer: @unchecked Sendable {
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "interlude.server")
     public let port: UInt16
     private let handler: @Sendable (HTTPRequest) async -> HTTPResponse
 
+    /// - Parameters:
+    ///   - port: The TCP port to listen on, on every interface.
+    ///   - handler: Answers each request.
     public init(port: UInt16, handler: @escaping @Sendable (HTTPRequest) async -> HTTPResponse) {
         self.port = port; self.handler = handler
     }
 
+    /// Starts listening. Throws if the port is in use.
     public func start() throws {
-        guard let p = NWEndpoint.Port(rawValue: port), port > 0 else { throw NWError.posix(.EINVAL) }
-        let l = try NWListener(using: .tcp, on: p)
-        l.newConnectionHandler = { [weak self] c in self?.accept(c) }
-        l.start(queue: queue)
-        listener = l
+        guard let endpointPort = NWEndpoint.Port(rawValue: port), port > 0 else { throw NWError.posix(.EINVAL) }
+        let listener = try NWListener(using: .tcp, on: endpointPort)
+        listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+        listener.start(queue: queue)
+        self.listener = listener
     }
 
     public func stop() { listener?.cancel(); listener = nil }
 
-    /// One request per connection: the players ask for small files, so keep-alive is not worth the complexity.
+    /// Answers one request per connection: the players ask for small files, so keep-alive isn't worth the complexity.
+    /// Only the request line is read; headers are ignored.
     private func accept(_ c: NWConnection) {
         c.start(queue: queue)
         c.receive(minimumIncompleteLength: 1, maximumLength: 16384) { [handler] data, _, _, err in
@@ -35,18 +47,19 @@ public final class LocalServer: @unchecked Sendable {
                 c.send(content: Data("HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8), completion: .contentProcessed { _ in c.cancel() })
                 return
             }
+            // Taken from the connection itself, so a request can't claim to be local.
             if case .hostPort(let host, _) = c.endpoint {
-                let h = "\(host)"
-                req.fromLoopback = h == "127.0.0.1" || h == "::1" || h.hasPrefix("::1%") || h == "::ffff:127.0.0.1"
+                let address = "\(host)"
+                req.fromLoopback = address == "127.0.0.1" || address == "::1" || address.hasPrefix("::1%") || address == "::ffff:127.0.0.1"
             }
             let head = req.method == "HEAD"
             Task {
-                let r = await handler(req)
-                if let stream = r.stream { Self.send(stream, contentType: r.contentType, head: head, on: c); return }
-                var h = "HTTP/1.1 \(r.status) \(r.status == 200 ? "OK" : "Error")\r\nContent-Type: \(r.contentType)\r\nContent-Length: \(r.body.count)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n"
-                if r.noCache { h += "Cache-Control: no-cache\r\n" }
-                h += "\r\n"
-                var out = Data(h.utf8); if !head { out.append(r.body) }
+                let response = await handler(req)
+                if let stream = response.stream { Self.send(stream, contentType: response.contentType, head: head, on: c); return }
+                var header = "HTTP/1.1 \(response.status) \(response.status == 200 ? "OK" : "Error")\r\nContent-Type: \(response.contentType)\r\nContent-Length: \(response.body.count)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n"
+                if response.noCache { header += "Cache-Control: no-cache\r\n" }
+                header += "\r\n"
+                var out = Data(header.utf8); if !head { out.append(response.body) }
                 c.send(content: out, completion: .contentProcessed { _ in c.cancel() })
             }
         }
@@ -54,13 +67,14 @@ public final class LocalServer: @unchecked Sendable {
 
     /// Sends a body with no end, such as the AAC stream for a Sonos speaker, until either side stops.
     private static func send(_ stream: AsyncStream<Data>, contentType: String, head: Bool, on c: NWConnection) {
-        let h = "HTTP/1.1 200 OK\r\nContent-Type: \(contentType)\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
-        c.send(content: Data(h.utf8), completion: .contentProcessed { _ in })
+        let header = "HTTP/1.1 200 OK\r\nContent-Type: \(contentType)\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+        c.send(content: Data(header.utf8), completion: .contentProcessed { _ in })
         guard !head else { c.send(content: nil, isComplete: true, completion: .contentProcessed { _ in c.cancel() }); return }
         Task {
             for await chunk in stream {
-                let sent = await withCheckedContinuation { (k: CheckedContinuation<Bool, Never>) in
-                    c.send(content: chunk, completion: .contentProcessed { k.resume(returning: $0 == nil) })
+                // Wait for each chunk to go before sending the next, so a slow speaker isn't buried in data.
+                let sent = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                    c.send(content: chunk, completion: .contentProcessed { continuation.resume(returning: $0 == nil) })
                 }
                 if !sent { break }
             }
@@ -68,12 +82,13 @@ public final class LocalServer: @unchecked Sendable {
         }
     }
 
-    /// The Mac's LAN IPv4 address (en0, en1, ...), never loopback. A Chromecast cannot reach `localhost`.
+    /// The Mac's LAN IPv4 address, on en0 if it has one, otherwise the first other Ethernet or Wi-Fi interface.
+    /// Never loopback or link-local, which a speaker can't reach.
     public static func lanAddress() -> String? {
         var best: String?
-        for (name, addr) in ipv4Addresses() where name.hasPrefix("en") && !addr.hasPrefix("169.254") {
-            if name == "en0" { return addr }
-            best = best ?? addr
+        for (name, address) in ipv4Addresses() where name.hasPrefix("en") && !address.hasPrefix("169.254") {
+            if name == "en0" { return address }
+            best = best ?? address
         }
         return best
     }
@@ -91,6 +106,7 @@ public final class LocalServer: @unchecked Sendable {
         return reverseLookup(ip).flatMap(Tailnet.magicDNSName) ?? tailscaleStatus().flatMap(Tailnet.magicDNSName(statusJSON:))
     }
 
+    /// The DNS name for an IPv4 address, or nil if it has none.
     private static func reverseLookup(_ ip: String) -> String? {
         var sa = sockaddr_in()
         sa.sin_len = UInt8(MemoryLayout<sockaddr_in>.size); sa.sin_family = sa_family_t(AF_INET)
@@ -101,7 +117,7 @@ public final class LocalServer: @unchecked Sendable {
                 getnameinfo($0, socklen_t(MemoryLayout<sockaddr_in>.size), &host, socklen_t(host.count), nil, 0, NI_NAMEREQD)
             }
         }
-        return r == 0 ? String(cString: host) : nil
+        return r == 0 ? string(fromNullTerminated: host) : nil
     }
 
     /// The Mac App Store and standalone builds keep the CLI in the app; Homebrew puts it on the path.
@@ -110,30 +126,36 @@ public final class LocalServer: @unchecked Sendable {
     /// `tailscale status --json` for this Mac alone, given up after 3 seconds.
     private static func tailscaleStatus() -> Data? {
         guard let path = tailscaleCLIs.first(where: FileManager.default.isExecutableFile(atPath:)) else { return nil }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: path)
-        p.arguments = ["status", "--json", "--peers=false"]
-        let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = ["status", "--json", "--peers=false"]
+        let out = Pipe(); process.standardOutput = out; process.standardError = FileHandle.nullDevice
         let done = DispatchSemaphore(value: 0)
-        p.terminationHandler = { _ in done.signal() }
-        guard (try? p.run()) != nil else { return nil }
-        if done.wait(timeout: .now() + 3) == .timedOut { p.terminate(); return nil }
-        return p.terminationStatus == 0 ? out.fileHandleForReading.readDataToEndOfFile() : nil
+        process.terminationHandler = { _ in done.signal() }
+        guard (try? process.run()) != nil else { return nil }
+        if done.wait(timeout: .now() + 3) == .timedOut { process.terminate(); return nil }
+        return process.terminationStatus == 0 ? out.fileHandleForReading.readDataToEndOfFile() : nil
+    }
+
+    /// The text in a C buffer, up to its first null.
+    private static func string(fromNullTerminated buffer: [CChar]) -> String {
+        String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
     }
 
     /// Every up, non-loopback IPv4 address, with its interface name.
     private static func ipv4Addresses() -> [(name: String, addr: String)] {
-        var ifap: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&ifap) == 0, let first = ifap else { return [] }
-        defer { freeifaddrs(ifap) }
-        var out: [(name: String, addr: String)] = []
-        for p in sequence(first: first, next: { $0.pointee.ifa_next }) {
-            let i = p.pointee
-            guard let sa = i.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET), (i.ifa_flags & UInt32(IFF_UP)) != 0, (i.ifa_flags & UInt32(IFF_LOOPBACK)) == 0 else { continue }
+        var interfaces: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&interfaces) == 0, let first = interfaces else { return [] }
+        defer { freeifaddrs(interfaces) }
+        var found: [(name: String, addr: String)] = []
+        for entry in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let interface = entry.pointee
+            guard let address = interface.ifa_addr, address.pointee.sa_family == UInt8(AF_INET),
+                  (interface.ifa_flags & UInt32(IFF_UP)) != 0, (interface.ifa_flags & UInt32(IFF_LOOPBACK)) == 0 else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
-            out.append((String(cString: i.ifa_name), String(cString: host)))
+            getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST)
+            found.append((String(cString: interface.ifa_name), string(fromNullTerminated: host)))
         }
-        return out
+        return found
     }
 }

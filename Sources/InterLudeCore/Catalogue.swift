@@ -1,20 +1,28 @@
+//  Catalogue.swift
+//  InterLudeCore
+//
+//  The station list lives in a JSON file the user can edit, because the BBC changes stream addresses (the pool IDs
+//  in particular) without notice. Nothing about a station is hard-coded in Swift. This file also decides where
+//  InterLude keeps its files.
+
 import Foundation
 
-// The station list lives in a JSON file the user can edit, because the BBC changes stream addresses
-// (the pool IDs in particular) without notice. Nothing about a station is hard-coded in Swift.
-
+/// Whether a station is mostly music, where bulletins are muted, or speech, where talk is the programme.
 public enum StationKind: String, Codable, Sendable { case music, speech }
 
 /// One BBC station as described in `stations.json`.
 public struct Station: Codable, Sendable, Hashable, Identifiable {
     public var name: String
+    /// The BBC's service ID, such as `bbc_6music`.
     public var serviceId: String
+    /// The Akamai pool the station's stream is served from, which the BBC changes from time to time.
     public var poolId: String
     public var kind: StationKind
-    /// Optional presentation: a one or two character badge and a colour as hex, for the panel.
+    /// A one- or two-character badge for the panel, such as "6".
     public var short: String?
+    /// The badge's colour as hexadecimal, such as `#1A9E5F`.
     public var colour: String?
-    /// Optional heading the station appears under in the station menu, such as "National" or "Local".
+    /// The heading the station appears under in the station list, such as "National" or "Local".
     public var group: String?
     public var id: String { serviceId }
     public init(name: String, serviceId: String, poolId: String, kind: StationKind) {
@@ -22,58 +30,74 @@ public struct Station: Codable, Sendable, Hashable, Identifiable {
     }
 }
 
-/// The station list plus the URL template its playlists are built from.
+/// The station list, plus the URL template its playlists are built from.
 public struct Catalogue: Codable, Sendable {
+    /// A playlist URL with `{poolId}`, `{serviceId}` and `{bitrate}` placeholders.
     public var urlTemplate: String
     public var stations: [Station]
 
+    /// Reads a station list from a JSON file.
     public static func load(from url: URL) throws -> Catalogue {
         try JSONDecoder().decode(Catalogue.self, from: Data(contentsOf: url))
     }
 
+    /// The station with `serviceId`, if the list has it.
     public func station(_ serviceId: String) -> Station? { stations.first { $0.serviceId == serviceId } }
 
-    /// Live playlist URL. `norewind` keeps only the live edge; otherwise the 6 hour window is listed.
-    public func playlistURL(_ s: Station, bitrate: Int = 320_000, norewind: Bool = true, scheme: String = "https") -> URL? {
-        var t = urlTemplate
-            .replacingOccurrences(of: "{poolId}", with: s.poolId)
-            .replacingOccurrences(of: "{serviceId}", with: s.serviceId)
+    /// The station's live playlist URL.
+    ///
+    /// - Parameters:
+    ///   - station: The station.
+    ///   - bitrate: 128 000 or 320 000 [bit/s].
+    ///   - norewind: True lists only the live edge; false lists the six-hour rewind window.
+    ///   - scheme: `https`, or `http` for hosts that refuse HTTPS.
+    public func playlistURL(_ station: Station, bitrate: Int = 320_000, norewind: Bool = true, scheme: String = "https") -> URL? {
+        var address = urlTemplate
+            .replacingOccurrences(of: "{poolId}", with: station.poolId)
+            .replacingOccurrences(of: "{serviceId}", with: station.serviceId)
             .replacingOccurrences(of: "{bitrate}", with: String(bitrate))
-        if !norewind { t = t.replacingOccurrences(of: ".norewind", with: "") }
-        if t.hasPrefix("https:") && scheme != "https" { t = scheme + t.dropFirst(5) }
-        return URL(string: t)
+        if !norewind { address = address.replacingOccurrences(of: ".norewind", with: "") }
+        if address.hasPrefix("https:") && scheme != "https" { address = scheme + address.dropFirst(5) }
+        return URL(string: address)
     }
 
-    /// The user's editable list, brought up to date with the bundled one: stations added since the copy was made are
-    /// appended, and fields older copies lack are filled in. The user's own edits, such as a changed pool ID, win.
-    /// `editable` is a list kept elsewhere, such as a server's config folder, in place of the copy in Application Support.
+    /// The user's editable list, brought up to date with the bundled one.
+    ///
+    /// Stations added to the bundled list since the copy was made are appended, and presentation fields that older
+    /// copies lack are filled in. The user's own edits, such as a changed pool ID, win.
+    ///
+    /// - Parameters:
+    ///   - bundled: The list that ships with the app or server.
+    ///   - editable: A list kept elsewhere, such as a server's config folder, to use in place of the copy in
+    ///     Application Support.
     public static func loadEditable(bundled: URL, editable: URL? = nil) throws -> Catalogue {
-        var c = try load(from: editable ?? editableURL(bundled: bundled))
-        guard let b = try? load(from: bundled) else { return c }
-        for i in c.stations.indices {
-            guard let m = b.station(c.stations[i].serviceId) else { continue }
-            if c.stations[i].short == nil { c.stations[i].short = m.short }
-            if c.stations[i].colour == nil { c.stations[i].colour = m.colour }
-            if c.stations[i].group == nil { c.stations[i].group = m.group }
+        var catalogue = try load(from: editable ?? editableURL(bundled: bundled))
+        guard let shipped = try? load(from: bundled) else { return catalogue }
+        for i in catalogue.stations.indices {
+            guard let match = shipped.station(catalogue.stations[i].serviceId) else { continue }
+            if catalogue.stations[i].short == nil { catalogue.stations[i].short = match.short }
+            if catalogue.stations[i].colour == nil { catalogue.stations[i].colour = match.colour }
+            if catalogue.stations[i].group == nil { catalogue.stations[i].group = match.group }
         }
-        let known = Set(c.stations.map(\.serviceId))
-        c.stations += b.stations.filter { !known.contains($0.serviceId) }
-        return c
+        let known = Set(catalogue.stations.map(\.serviceId))
+        catalogue.stations += shipped.stations.filter { !known.contains($0.serviceId) }
+        return catalogue
     }
 
-    /// Copies the bundled catalogue to Application Support on first run and returns the editable file.
+    /// The editable station list in Application Support, copied from the bundled one on first run.
     public static func editableURL(bundled: URL) throws -> URL {
-        let dir = try AppPaths.supportDirectory()
-        let dest = dir.appendingPathComponent("stations.json")
-        if !FileManager.default.fileExists(atPath: dest.path) {
-            try FileManager.default.copyItem(at: bundled, to: dest)
+        let destination = try AppPaths.supportDirectory().appendingPathComponent("stations.json")
+        if !FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.copyItem(at: bundled, to: destination)
         }
-        return dest
+        return destination
     }
 }
 
-/// Where InterLude keeps its files. Inside the App Sandbox these resolve to the app's container.
-/// A server sets `root` once at launch, and then everything lives under that one directory.
+/// Where InterLude keeps its files.
+///
+/// On the Mac these are the user's Library folders, which inside the App Sandbox resolve to the app's container. A
+/// server sets `root` once at launch, and then everything lives under that one directory.
 public enum AppPaths {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var rootOverride: URL?
@@ -84,17 +108,20 @@ public enum AppPaths {
         set { lock.lock(); defer { lock.unlock() }; rootOverride = newValue }
     }
 
+    /// Settings, profiles, the station list and the event log. Created if missing.
     public static func supportDirectory() throws -> URL {
-        let u = try root ?? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        let directory = try root ?? FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
             .appendingPathComponent("InterLude", isDirectory: true)
-        try FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
-        return u
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
+
+    /// Downloaded segments, which can be thrown away at any time. Created if missing.
     public static func cacheDirectory() throws -> URL {
-        let u = try root?.appendingPathComponent("cache", isDirectory: true)
+        let directory = try root?.appendingPathComponent("cache", isDirectory: true)
             ?? FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
                 .appendingPathComponent("InterLude/segments", isDirectory: true)
-        try FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
-        return u
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory
     }
 }

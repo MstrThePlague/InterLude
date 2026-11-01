@@ -32,30 +32,42 @@ const PILLS = { live: "LIVE", muted: "MUTED", earlier: "EARLIER", starting: "STA
 
 let state = null, shownEarlier = "", shownSettings = "", dayWanted = null, timer = null, failures = 0, volumeHeldUntil = 0, volumeTimer = null, toastTimer = null;
 
+/** Minutes and seconds, such as 6:11, from a number of seconds. */
 function clock(seconds) {
   const s = Math.max(0, Math.round(seconds));
   return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
 }
+/** A station colour as #rrggbb, or null if it isn't a six-digit hex colour. */
 function colourOf(c) { return /^#?[0-9a-f]{6}$/i.test(c || "") ? (c[0] === "#" ? c : "#" + c) : null; }
+/** The diagonal gradient a station badge is filled with. */
 function gradient(colour) {
   const c = colourOf(colour);
   return c ? `linear-gradient(135deg, ${c}, color-mix(in srgb, ${c} 65%, black))` : "";
 }
+/** Fills a badge with a station's colour and short name. */
 function paintBadge(el, station) {
   el.style.background = gradient(station && station.colour);
   el.textContent = station ? (station.short || station.name.slice(0, 1)) : "R";
 }
 
+/**
+ * Calls the page's API.
+ * @param {string} path - Relative to api/, with any query.
+ * @param {boolean} post - Whether it is a command, which must be a POST.
+ * @returns {Promise<object>} The state as JSON. A 404 throws an error marked `gone`: the link was reset.
+ */
 async function request(path, post) {
   const r = await fetch("api/" + path, { method: post ? "POST" : "GET", cache: "no-store" });
   if (r.status === 404) { const e = new Error("gone"); e.gone = true; throw e; }
   if (!r.ok) throw new Error(String(r.status));
   return r.json();
 }
+/** Shows or hides the banners for a lost connection and a reset link. */
 function connected(ok, gone) {
   $("gone").hidden = !gone;
   $("offline").hidden = ok || gone;
 }
+/** Fetches the state and shows it, then either listens for changes (a server) or polls again (the Mac). */
 async function refresh() {
   clearTimeout(timer);
   try {
@@ -67,6 +79,7 @@ async function refresh() {
   if (!document.hidden || here) timer = setTimeout(refresh, failures ? 3000 : IN_PANEL ? 1000 : 1500);
 }
 let source = null;
+/** Follows the state as server-sent events. */
 function listen() {
   if (source) return;
   source = new EventSource("api/events");
@@ -74,7 +87,14 @@ function listen() {
   // Polling notices a reset link or a server that has gone, then listens again.
   source.onerror = () => { source.close(); source = null; clearTimeout(timer); timer = setTimeout(refresh, 2000); };
 }
+/** Stops listening and polling. */
 function quiet() { if (source) { source.close(); source = null; } clearTimeout(timer); }
+/**
+ * Sends a command and shows the state it answers with.
+ * @param {string} command - Such as "toggle" or "setting".
+ * @param {object} [params] - Query parameters.
+ * @returns {Promise<boolean>} Whether it got through.
+ */
 async function send(command, params) {
   const q = params ? "?" + new URLSearchParams(params) : "";
   try { render(await request(command + q, true)); failures = 0; connected(true); return true; }
@@ -84,6 +104,7 @@ async function send(command, params) {
 document.addEventListener("visibilitychange", () => { if (document.hidden) { if (!here) quiet(); } else refresh(); });
 window.addEventListener("pageshow", refresh);
 
+/** Shows a short message at the foot of the page for `ms` milliseconds. */
 function toast(text, ms = 2600) {
   const t = $("toast");
   t.textContent = text; t.hidden = false; t.style.opacity = 1;
@@ -93,6 +114,7 @@ function toast(text, ms = 2600) {
 
 // The version of the files this page was loaded from. When the server's files change, load the new ones.
 const PAGE_VERSION = document.querySelector('meta[name="interlude-version"]').content;
+/** Shows a state. Lists are only rebuilt when their contents change, so taps aren't lost. */
 function render(s) {
   if (s.pageVersion && s.pageVersion !== PAGE_VERSION && !document.querySelector("dialog[open]")) { location.reload(); return; }
   state = s;
@@ -207,6 +229,7 @@ function render(s) {
   requestAnimationFrame(fitDock);
 }
 
+/** The progress bar for an earlier programme, or hides it. */
 function renderReplay(r) {
   $("progress").hidden = !r;
   if (!r) return;
@@ -329,6 +352,7 @@ function renderEarlier(e, station) {
   }
 }
 
+/** A row in a sheet's list: an icon or badge, a label with optional detail, and a tick when selected. */
 function option(label, detail, selected, lead, onPick) {
   const b = document.createElement("button");
   b.className = "row card";
@@ -343,8 +367,10 @@ function option(label, detail, selected, lead, onPick) {
   b.addEventListener("click", onPick);
   return b;
 }
+/** A group heading in a list. */
 function title(text) { const h = document.createElement("div"); h.className = "group-title"; h.textContent = text; return h; }
 
+/** The favourite button for a station's row. */
 function star(st) {
   const b = document.createElement("button"); b.className = "star"; b.setAttribute("aria-pressed", st.favourite ? "true" : "false");
   b.setAttribute("aria-label", (st.favourite ? "Remove " : "Add ") + st.name + (st.favourite ? " from favourites" : " to favourites"));
@@ -352,6 +378,7 @@ function star(st) {
   b.addEventListener("click", async e => { e.stopPropagation(); if (await send("favourite", { id: st.id })) renderStations(); });
   return b;
 }
+/** Fills the station sheet: favourites first, then each group. */
 function renderStations() {
   const list = $("stationList"), scroll = list.scrollTop;
   list.replaceChildren();
@@ -380,6 +407,7 @@ function renderStations() {
   }
   list.scrollTop = scroll;
 }
+/** Fills the speaker sheet. */
 function renderSpeakers() {
   const list = $("speakerList");
   list.replaceChildren();
@@ -482,7 +510,9 @@ let hls = null, here = false, hereStream = null, hereSince = 0, hlsLoading = nul
 try { const v = parseFloat(localStorage.getItem("volume")); if (v >= 0 && v <= 1) player.volume = v; } catch {}
 // Whether this browser is where the sound plays: a server's stream with no speaker chosen.
 function playsHere() { return !!(state && state.stream && state.speaker === "browser"); }
+/** Whether the browser plays HLS itself, as Safari does. */
 function nativeHLS() { return player.canPlayType("application/vnd.apple.mpegurl") !== ""; }
+/** Loads hls.js from the server, once, for browsers without HLS of their own. */
 function loadHls() {
   if (window.Hls || nativeHLS()) return;
   if (!hlsLoading) {
@@ -490,6 +520,7 @@ function loadHls() {
     const sc = document.createElement("script"); sc.src = "/static/hls.min.js"; document.head.append(sc);
   }
 }
+/** Points the audio element at the server's stream. Returns false if this browser can't play it. */
 function attach() {
   switchingUntil = Date.now() + 2000;     // swapping streams pauses the element; that isn't the listener stopping
   if (hls) { hls.destroy(); hls = null; }
@@ -509,6 +540,7 @@ function playHere() {
   if (!attach()) { here = false; return; }
   player.play().catch(e => { if (here && e.name !== "AbortError") toast(e.message); });
 }
+/** Stops playing in this browser. */
 function stopHere() {
   here = false; hereStream = null;
   player.pause();
@@ -552,6 +584,7 @@ if ("mediaSession" in navigator) {
 }
 
 // Settings: the same sheet on every device. The Mac's own rows appear only in its panel.
+/** A row in Settings: a label, optional detail, and a control. */
 function settingRow(label, detail, control) {
   const r = document.createElement("div"); r.className = "set";
   const l = document.createElement("div"); l.className = "label";
@@ -561,6 +594,7 @@ function settingRow(label, detail, control) {
   if (control) r.append(control);
   return r;
 }
+/** A switch that sends setting `key` as 1 or 0 when changed. */
 function toggle(checked, key, label) {
   const t = document.createElement("input"); t.type = "checkbox"; t.className = "toggle"; t.checked = checked;
   t.setAttribute("role", "switch");
@@ -585,10 +619,14 @@ function slider(label, value, min, max, step, unit, key) {
 async function change(k, v) {
   if (!await send("setting", v == null ? { k } : { k, v }) && state.settings) renderSettings();
 }
+/** A card holding `rows`. */
 function card(...rows) { const c = document.createElement("div"); c.className = "card"; c.append(...rows); return c; }
+/** A line of explanation under a card. */
 function hint(text) { const p = document.createElement("p"); p.className = "hint"; p.textContent = text; return p; }
+/** The full address to open InterLude on another device. */
 function appLink() { return new URL(state.settings.link, location.origin).href; }
 
+/** Fills the Settings sheet from the state. The Mac's own rows appear only in its panel. */
 function renderSettings() {
   const st = state.settings, mac = st.mac, list = $("settingsList"), scroll = list.scrollTop;
   shownSettings = JSON.stringify(st);
@@ -704,6 +742,7 @@ function share(st) {
   } else drawQR(qr, link.value);
   return box;
 }
+/** Draws a QR code for `text` with qrcode-generator, loaded from the server on first use. */
 function drawQR(el, text) {
   const draw = () => { const q = qrcode(0, "M"); q.addData(text); q.make(); el.innerHTML = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true }); };
   if (window.qrcode) return draw();
@@ -714,6 +753,7 @@ function drawQR(el, text) {
 
 // The dock is fixed to the bottom on phones; the page keeps its height free so nothing hides under it.
 const dock = $("dock");
+/** Keeps room at the foot of the page for the dock, when it is fixed there. */
 function fitDock() {
   const fixed = getComputedStyle(dock).position === "fixed";
   const h = fixed ? dock.getBoundingClientRect().height : 0;

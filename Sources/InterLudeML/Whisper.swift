@@ -1,3 +1,9 @@
+//  Whisper.swift
+//  InterLudeML
+//
+//  The Linux server's transcriber for the newsreader's opening and sign-off: whisper.cpp on the CPU. The Mac uses
+//  Apple's speech model instead (InterLudeApple/NewsTranscriber.swift).
+
 import Foundation
 import CGGML
 import CWhisper
@@ -30,39 +36,42 @@ public actor WhisperTranscriber: NewsTranscribing {
         return context != nil
     }
 
+    /// Transcribes one stretch of mono audio, resampled to the 16 kHz whisper expects. Under a second gives nothing.
     public func transcribe(samples: [Float], sampleRate: Double) async throws -> [SpokenPhrase] {
         guard let box = context else { throw PlatformError.unavailable("The whisper model") }
         let audio = Resample.to16k(samples, from: sampleRate)
         guard audio.count >= 16000 else { return [] }
         let threads = threads
-        return try await withCheckedThrowingContinuation { cont in
-            queue.async { cont.resume(with: Result { try Self.run(box.ctx, audio, threads: threads) }) }
+        return try await withCheckedThrowingContinuation { continuation in
+            queue.async { continuation.resume(with: Result { try Self.run(box.context, audio, threads: threads) }) }
         }
     }
 
-    private static func run(_ ctx: OpaquePointer, _ audio: [Float], threads: Int32) throws -> [SpokenPhrase] {
-        var p = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
-        p.n_threads = threads
-        p.print_progress = false; p.print_realtime = false; p.print_timestamps = false; p.print_special = false
-        p.no_context = true
-        let status = english.withCString { lang -> Int32 in
-            p.language = lang
-            return audio.withUnsafeBufferPointer { whisper_full(ctx, p, $0.baseAddress, Int32($0.count)) }
+    /// Runs whisper greedily in English, with no context carried over from earlier calls.
+    private static func run(_ context: OpaquePointer, _ audio: [Float], threads: Int32) throws -> [SpokenPhrase] {
+        var params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
+        params.n_threads = threads
+        params.print_progress = false; params.print_realtime = false; params.print_timestamps = false; params.print_special = false
+        params.no_context = true
+        let status = english.withCString { language -> Int32 in
+            params.language = language
+            return audio.withUnsafeBufferPointer { whisper_full(context, params, $0.baseAddress, Int32($0.count)) }
         }
         guard status == 0 else { throw PlatformError.unavailable("whisper.cpp (error \(status))") }
-        return (0..<whisper_full_n_segments(ctx)).map { i in
+        return (0..<whisper_full_n_segments(context)).map { i in
             // Segment times are in hundredths of a second.
-            SpokenPhrase(start: Double(whisper_full_get_segment_t0(ctx, i)) / 100, end: Double(whisper_full_get_segment_t1(ctx, i)) / 100,
-                         text: whisper_full_get_segment_text(ctx, i).map { String(cString: $0) }?.trimmingCharacters(in: .whitespaces) ?? "")
+            SpokenPhrase(start: Double(whisper_full_get_segment_t0(context, i)) / 100, end: Double(whisper_full_get_segment_t1(context, i)) / 100,
+                         text: whisper_full_get_segment_text(context, i).map { String(cString: $0) }?.trimmingCharacters(in: .whitespaces) ?? "")
         }
     }
 
     private static let english = "en"
 
+    /// A whisper context, passed to the transcription queue. Only ever used there, one call at a time.
     private struct ContextBox: @unchecked Sendable {
-        let ctx: OpaquePointer
-        init(_ c: OpaquePointer) { ctx = c }
+        let context: OpaquePointer
+        init(_ context: OpaquePointer) { self.context = context }
     }
 
-    deinit { if let context { whisper_free(context.ctx) } }
+    deinit { if let context { whisper_free(context.context) } }
 }

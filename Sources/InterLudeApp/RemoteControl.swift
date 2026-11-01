@@ -1,3 +1,9 @@
+//  RemoteControl.swift
+//  InterLude (the Mac app)
+//
+//  The Mac's side of the web app: what the panel and the phone remote show (`remoteState`) and what they can do
+//  (`perform`), plus the remote's QR code and icons.
+
 import AppKit
 import CoreImage
 import CoreImage.CIFilterBuiltins
@@ -15,78 +21,87 @@ extension AppModel {
         URL(fileURLWithPath: "Web", isDirectory: true),
     ].compactMap { $0 })
 
+    /// Everything the web app shows.
+    ///
+    /// - Parameter panel: Whether the page is the Mac's own panel, which also gets the Mac's settings and the
+    ///   first-run note.
     func remoteState(panel: Bool = false) -> RemoteState {
-        var s = RemoteState()
-        s.state = playState.rawValue
-        s.stationName = statusCaption
-        s.headline = headline
-        s.subheadline = subheadline
-        // In Earlier, the remote's Play button replays the programme last picked, or plays live if none was.
-        if mode == .earlier && !isPlaying && !isStarting, let p = replaying, Self.canPlay(p) {
-            s.subheadline = "Play starts \(p.title) from \(p.start.formatted(date: .omitted, time: .shortened))"
+        var state = RemoteState()
+        state.state = playState.rawValue
+        state.stationName = statusCaption
+        state.headline = headline
+        state.subheadline = subheadline
+        // In Earlier, Play replays the programme last picked, or plays live if none was.
+        if mode == .earlier && !isPlaying && !isStarting, let programme = replaying, programme.canPlay {
+            state.subheadline = "Play starts \(programme.title) from \(programme.start.formatted(date: .omitted, time: .shortened))"
         }
-        s.artwork = artworkURL?.absoluteString
-        s.error = errorText
-        s.playing = isPlaying || isStarting
-        s.volume = volume
-        s.muted = isPlaying && status.muted
-        s.muteElapsed = status.muteElapsed
-        s.muteStartsIn = status.muteStartsIn
-        s.justSkipped = status.replay?.justSkipped
-        s.canCorrect = isPlaying && onAirStation?.kind != .speech
-        s.note = learnedNote
-        s.footer = isPlaying ? footerText : nil
-        s.station = selectedStationID
-        if let id = source?.station.serviceId, id != selectedStationID { s.onAir = id }
-        s.offerLive = offersLive
-        s.speaker = selectedOutputID
-        s.stations = orderedStations.map {
+        state.artwork = artworkURL?.absoluteString
+        state.error = errorText
+        state.playing = isPlaying || isStarting
+        state.volume = volume
+        state.muted = isPlaying && status.muted
+        state.muteElapsed = status.muteElapsed
+        state.muteStartsIn = status.muteStartsIn
+        state.justSkipped = status.replay?.justSkipped
+        state.canCorrect = isPlaying && onAirStation?.kind != .speech
+        state.note = learnedNote
+        state.footer = isPlaying ? footerText : nil
+        state.station = selectedStationID
+        if let id = source?.station.serviceId, id != selectedStationID { state.onAir = id }
+        state.offerLive = offersLive
+        state.speaker = selectedOutputID
+        state.stations = orderedStations.map {
             .init(id: $0.serviceId, name: $0.name, short: $0.short, colour: $0.colour, group: $0.group, favourite: profile($0.serviceId).favourite)
         }
         let speakers = outputs.filter { $0.isSpeaker && !$0.isGroup }
         let groups = outputs.filter { $0.isSpeaker && $0.isGroup }
-        s.speakers = ([Output.thisMac] + speakers + groups).map { o in
-            let kind = o.isSpeaker ? (o.isGroup ? "group" : "speaker") : "mac"
-            return .init(id: o.id, name: o.label, detail: o.detail, kind: kind)
+        state.speakers = ([Output.thisMac] + speakers + groups).map { output in
+            let kind = output.isSpeaker ? (output.isGroup ? "group" : "speaker") : "mac"
+            return .init(id: output.id, name: output.label, detail: output.detail, kind: kind)
         }
         switch discoveryState {
-        case .searching: s.speakerNote = "Looking for speakers…"
-        case .denied: s.speakerNote = "To find speakers, allow Local Network for InterLude on the Mac in System Settings › Privacy & Security."
-        case .ready: if speakers.isEmpty && groups.isEmpty { s.speakerNote = "No Chromecast or Sonos speakers found." }
+        case .searching: state.speakerNote = "Looking for speakers…"
+        case .denied: state.speakerNote = "To find speakers, allow Local Network for InterLude on the Mac in System Settings › Privacy & Security."
+        case .ready: if speakers.isEmpty && groups.isEmpty { state.speakerNote = "No Chromecast or Sonos speakers found." }
         }
-        s.mode = mode.rawValue
-        s.pageVersion = Self.webFiles.version
-        if mode == .earlier { s.earlier = remoteEarlier() }
-        if isReplay, let r = status.replay { s.replay = remoteReplay(r) }
-        s.news = .describe(profile(selectedStationID), kind: selectedStation?.kind, earlier: isReplay || (mode == .earlier && !isPlaying && !isStarting),
-                           ambience: ambience)
+        state.mode = mode.rawValue
+        state.pageVersion = Self.webFiles.version
+        if mode == .earlier {
+            let problem: String? = if case .failed(let message) = scheduleState { message } else { nil }
+            state.earlier = .describe(day: scheduleDay, programmes: programmes, loading: scheduleState == .loading, problem: problem,
+                                      chosen: replaying, playing: isReplay ? source?.replay : nil)
+        }
+        if isReplay, let progress = status.replay { state.replay = .describe(progress) }
+        state.news = .describe(profile(selectedStationID), kind: selectedStation?.kind, earlier: isReplay || (mode == .earlier && !isPlaying && !isStarting),
+                               ambience: ambience)
         if isPlaying && !status.recentBlocks.isEmpty {
-            s.recentTitle = isReplay ? "News in this programme" : "Recent mutes"
-            s.recent = RemoteState.RecentItem.list(status.recentBlocks)
+            state.recentTitle = isReplay ? "News in this programme" : "Recent mutes"
+            state.recent = RemoteState.RecentItem.list(status.recentBlocks)
         }
         if errorText != nil && !isPlaying && !isStarting {
-            s.recover = (castFailed ? ["here"] : []) + (castFailed || stationFailed ? ["retry"] : [])
+            state.recover = (castFailed ? ["here"] : []) + (castFailed || stationFailed ? ["retry"] : [])
         }
-        s.welcome = panel && showWelcome && !demoHidesWelcome
-        s.settings = remoteSettings(panel: panel)
-        return s
+        state.welcome = panel && showWelcome && !demoHidesWelcome
+        state.settings = remoteSettings(panel: panel)
+        return state
     }
 
     /// Settings for the chosen station. The phone remote gets the shared ones; the panel also gets the Mac's own and
     /// the phone remote's link, which a phone could otherwise reset from under itself.
     private func remoteSettings(panel: Bool) -> RemoteState.SettingsItem {
-        let st = selectedStation, p = profile(selectedStationID), music = st?.kind == .music
+        let station = selectedStation, options = profile(selectedStationID), music = station?.kind == .music
         let link = panel ? remoteURL?.absoluteString ?? "" : ""
         var item = RemoteState.SettingsItem(
-            stationName: st?.name ?? selectedStationID, delay: p.delaySeconds, muteNews: p.muteNews, jingleOnly: p.detector.identOnly,
-            shadowMode: p.shadowMode, jingle: p.jingleStatus, canForgetJingle: !p.idents.isEmpty || !p.candidates.isEmpty, newsNote: nil,
+            stationName: station?.name ?? selectedStationID, delay: options.delaySeconds, muteNews: options.muteNews,
+            jingleOnly: options.detector.identOnly, shadowMode: options.shadowMode, jingle: options.jingleStatus,
+            canForgetJingle: !options.idents.isEmpty || !options.candidates.isEmpty, newsNote: nil,
             bitrate: bitrate / 1000, ambience: ambience, ambienceChoices: Self.ambienceChoices.map { [$0.id, $0.name] }, link: link,
-            qr: link.isEmpty ? nil : "qr.png", maxMute: music ? p.detector.maxMuteSeconds / 60 : nil,
-            slots: music ? p.detector.slotMinutes.map(String.init).joined(separator: ", ") : nil)
+            qr: link.isEmpty ? nil : "qr.png", maxMute: music ? options.detector.maxMuteSeconds / 60 : nil,
+            slots: music ? options.detector.slotMinutes.map(String.init).joined(separator: ", ") : nil)
         if panel {
             let note: String?
             if !remoteEnabled { note = nil }
-            else if let e = remoteError { note = e }
+            else if let error = remoteError { note = error }
             else if remoteURL == nil { note = "Connect this Mac to Wi-Fi or Ethernet to use the remote." }
             else if remoteOnTailscale { note = "The link uses Tailscale, so the phone needs Tailscale on. The Mac must be awake with InterLude open." }
             else { note = "The phone needs to be on the same Wi-Fi as this Mac, and the Mac awake with InterLude open." }
@@ -97,49 +112,18 @@ extension AppModel {
 
     /// The phone remote's link as a QR code.
     func remoteQR() -> HTTPResponse {
-        guard let url = remoteURL, let img = qrImage(for: url.absoluteString), let tiff = img.tiffRepresentation,
+        guard let url = remoteURL, let image = qrImage(for: url.absoluteString), let tiff = image.tiffRepresentation,
               let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) else { return .notFound }
         return HTTPResponse(contentType: "image/png", body: png, noCache: true)
     }
 
-    /// The day's programmes as the panel's list shows them.
-    private func remoteEarlier() -> RemoteState.EarlierItem {
-        var e = RemoteState.EarlierItem()
-        e.day = scheduleDay
-        e.dayTitle = scheduleDayTitle
-        switch scheduleState {
-        case .loading: e.loading = programmes.isEmpty
-        case .failed(let m): if programmes.isEmpty { e.problem = m }
-        case .idle: break
-        }
-        let now = Date(), playingID = isReplay ? source?.replay?.id : nil
-        e.programmes = programmes.map { p in
-            let playable = Self.canPlay(p), onNow = p.end > now, chosen = replaying?.id == p.id
-            let length = Self.duration(p.end.timeIntervalSince(p.start))
-            return .init(id: p.id, title: p.title, detail: playable ? (p.subtitle ?? length) : (onNow ? "On now" : "Not available"),
-                         time: p.start.formatted(date: .omitted, time: .shortened), image: p.imageURL?.absoluteString,
-                         playable: playable, onNow: onNow, chosen: chosen, playing: playingID == p.id)
-        }
-        return e
-    }
-
-    /// How far into the programme the listener is, as the panel's progress bar shows it.
-    private func remoteReplay(_ r: ReplayStatus) -> RemoteState.ReplayItem {
-        let p = r.programme
-        let total = max(1, p.end.timeIntervalSince(p.start))
-        func x(_ d: Date) -> Double { min(1, max(0, d.timeIntervalSince(p.start) / total)) }
-        let skipped = r.skipCount > 0 ? "\(r.skipCount) bulletin\(r.skipCount == 1 ? "" : "s") skipped · \(clock(r.skippedSeconds))" : nil
-        return .init(heard: x(r.heard), analysed: x(r.analysedThrough), news: r.news.map { [x($0.lowerBound), x($0.upperBound)] },
-                     position: "\(clock(r.heard.timeIntervalSince(p.start))) of \(Self.duration(total))", skipped: skipped)
-    }
-
     /// Does what the page asked. A phone can't change the Mac's own settings, save diagnostics, quit, or reset its link.
-    func perform(_ c: RemoteCommand, panel: Bool = false) {
-        if !panel { if c.macOnly || c == .resetLink { return } }
-        switch c {
+    func perform(_ command: RemoteCommand, panel: Bool = false) {
+        if !panel && (command.macOnly || command == .resetLink) { return }
+        switch command {
         case .toggle:
             if isPlaying || isStarting { stop() }
-            else if mode == .earlier, let p = replaying, Self.canPlay(p) { play(p) }
+            else if mode == .earlier, let programme = replaying, programme.canPlay { play(programme) }
             else { playLive(selectedStationID) }
         case .play: if !isPlaying && !isStarting { perform(.toggle) }
         case .station(let id):
@@ -147,43 +131,44 @@ extension AppModel {
             if mode == .earlier { if stations.contains(where: { $0.serviceId == id }) { switchStation(to: id) } }
             else { playLive(id) }
         case .speaker(let id): if outputs.contains(where: { $0.id == id }) { switchOutput(to: id) }
-        case .volume(let v): volume = v
+        case .volume(let level): volume = level
         case .notNews: if isPlaying { notNews() }
         case .newsGotThrough: if isPlaying { newsGotThrough() }
         case .earlier(let on): mode = on ? .earlier : .live
-        case .day(let d): if mode == .earlier { scheduleDay = d }
+        case .day(let day): if mode == .earlier { scheduleDay = day }
         case .reloadSchedule: if mode == .earlier { loadSchedule(force: true) }
-        case .programme(let id): if mode == .earlier, let p = programmes.first(where: { $0.id == id }) { play(p) }
-        case .setting(let s): apply(s)
+        case .programme(let id): if mode == .earlier, let programme = programmes.first(where: { $0.id == id }) { play(programme) }
+        case .setting(let setting): apply(setting)
         case .resetLink: resetRemoteLink()
         case .favourite(let id): if stations.contains(where: { $0.serviceId == id }) { updateProfile(id) { $0.favourite.toggle() } }
-        case .wrong(let id): if let u = UUID(uuidString: id) { markWrong(u) }
+        case .wrong(let id): if let block = UUID(uuidString: id) { markWrong(block) }
         case .welcomed: showWelcome = false
         case .diagnostics: exportDiagnostics()
         case .quit: NSApplication.shared.terminate(nil)
         }
     }
 
-    private func apply(_ s: RemoteSetting) {
+    /// Applies a change from the Settings sheet to the chosen station, restarting the session when it must.
+    private func apply(_ setting: RemoteSetting) {
         let id = selectedStationID
-        switch s {
-        case .delay(let d):
-            updateProfile(id) { $0.delaySeconds = d }
+        switch setting {
+        case .delay(let seconds):
+            updateProfile(id) { $0.delaySeconds = seconds }
             if isPlaying && !isReplay && source?.station.serviceId == id { restart() }
         case .muteNews(let on): updateProfile(id) { $0.muteNews = on }
         case .jingleOnly(let on): updateProfile(id) { $0.detector.identOnly = on }
         case .shadowMode(let on): updateProfile(id) { $0.shadowMode = on }
         case .forgetJingle: updateProfile(id) { $0.idents = []; $0.candidates = []; $0.candidateSources = [] }
-        case .bitrate(let b):
-            guard b != bitrate else { return }
-            bitrate = b
+        case .bitrate(let newBitrate):
+            guard newBitrate != bitrate else { return }
+            bitrate = newBitrate
             if isPlaying { restart() }
-        case .ambience(let a): ambience = a
-        case .maxMute(let m): updateProfile(id) { $0.detector.maxMuteSeconds = m * 60 }
-        case .slots(let mins): updateProfile(id) { $0.detector.slotMinutes = mins }
+        case .ambience(let sound): ambience = sound
+        case .maxMute(let minutes): updateProfile(id) { $0.detector.maxMuteSeconds = minutes * 60 }
+        case .slots(let minutes): updateProfile(id) { $0.detector.slotMinutes = minutes }
         case .startAtLogin(let on): setStartAtLogin(on)
         case .keepAwake(let on): keepAwake = on
-        case .port(let p): port = p
+        case .port(let newPort): port = newPort
         case .remote(let on): remoteEnabled = on
         }
     }
@@ -195,8 +180,9 @@ extension AppModel {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "InterLude-diagnostics.zip"
         guard panel.runModal() == .OK, let dest = panel.url else { return }
-        var err: NSError?
-        NSFileCoordinator().coordinate(readingItemAt: folder, options: .forUploading, error: &err) { zip in
+        var error: NSError?
+        // Reading for uploading hands back a zip of the folder.
+        NSFileCoordinator().coordinate(readingItemAt: folder, options: .forUploading, error: &error) { zip in
             try? FileManager.default.removeItem(at: dest)
             try? FileManager.default.copyItem(at: zip, to: dest)
         }
@@ -210,34 +196,29 @@ extension AppModel {
     /// The icon's body without the macOS margin, on black with no alpha channel, so the phone's own rounded mask
     /// has nothing transparent to fill.
     private static func remoteIconPNG(side: Int) -> Data {
-        guard let cs = CGColorSpace(name: CGColorSpace.sRGB),
-              let cg = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0, space: cs,
-                                 bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return Data() }
+        guard let colourSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0, space: colourSpace,
+                                      bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else { return Data() }
         NSGraphicsContext.saveGraphicsState()
-        NSGraphicsContext.current = NSGraphicsContext(cgContext: cg, flipped: false)
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
         NSColor.black.setFill()
         NSRect(x: 0, y: 0, width: side, height: side).fill()
         // The macOS icon grid puts an 824 pt body in a 1024 pt canvas.
         let full = CGFloat(side) * 1024 / 824, inset = (full - CGFloat(side)) / 2
         NSApp.applicationIconImage?.draw(in: NSRect(x: -inset, y: -inset, width: full, height: full))
         NSGraphicsContext.restoreGraphicsState()
-        guard let image = cg.makeImage() else { return Data() }
+        guard let image = context.makeImage() else { return Data() }
         return NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:]) ?? Data()
     }
 }
 
 /// A QR code for a link, drawn crisp at any size.
 func qrImage(for text: String) -> NSImage? {
-    let f = CIFilter.qrCodeGenerator()
-    f.message = Data(text.utf8)
-    f.correctionLevel = "M"
-    guard let out = f.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)),
-          let cg = CIContext().createCGImage(out, from: out.extent) else { return nil }
-    return NSImage(cgImage: cg, size: NSSize(width: out.extent.width, height: out.extent.height))
-}
-
-/// Minutes and seconds, such as 6:11.
-func clock(_ seconds: Double) -> String {
-    let s = max(0, Int(seconds.rounded()))
-    return "\(s / 60):" + String(format: "%02d", s % 60)
+    let filter = CIFilter.qrCodeGenerator()
+    filter.message = Data(text.utf8)
+    filter.correctionLevel = "M"
+    // Scale each module to 10 pixels without smoothing, so it stays sharp.
+    guard let out = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)),
+          let image = CIContext().createCGImage(out, from: out.extent) else { return nil }
+    return NSImage(cgImage: image, size: NSSize(width: out.extent.width, height: out.extent.height))
 }

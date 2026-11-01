@@ -1,3 +1,9 @@
+//  Model.swift
+//  InterLude (the Mac app)
+//
+//  The Mac app's state and actions: the station and speaker chosen, the playing session, Earlier programmes,
+//  settings, speaker discovery and the phone remote. The web app in the panel reads it through RemoteControl.swift.
+
 import Foundation
 import AVFoundation
 import Network
@@ -7,34 +13,31 @@ import UserNotifications
 import InterLudeCore
 import InterLudeApple
 
+/// Where the sound goes: this Mac, a Cast device or group, or a Sonos room or group.
 enum Output: Hashable, Identifiable {
     case thisMac
     case cast(CastDevice)
     case sonos(SonosGroup)
+    /// "mac", "cast:<id>" or "sonos:<id>", as saved in the settings and sent to the page.
     var id: String {
-        switch self { case .thisMac: "mac"; case .cast(let d): "cast:" + d.id; case .sonos(let g): "sonos:" + g.id }
+        switch self { case .thisMac: "mac"; case .cast(let device): "cast:" + device.id; case .sonos(let group): "sonos:" + group.id }
     }
     var isGroup: Bool {
-        switch self { case .thisMac: false; case .cast(let d): d.isGroup; case .sonos(let g): g.isGroup }
-    }
-    var icon: String {
-        switch self {
-        case .thisMac: "laptopcomputer"
-        case .cast, .sonos: isGroup ? "hifispeaker.2" : "hifispeaker"
-        }
+        switch self { case .thisMac: false; case .cast(let device): device.isGroup; case .sonos(let group): group.isGroup }
     }
     var label: String {
         switch self {
         case .thisMac: "This Mac"
-        case .cast(let d): d.name
-        case .sonos(let g): g.name
+        case .cast(let device): device.name
+        case .sonos(let group): group.name
         }
     }
+    /// The model, or the rooms of a Sonos group.
     var detail: String? {
         switch self {
         case .thisMac: nil
-        case .cast(let d): d.isGroup ? "Speaker group" : (d.model.isEmpty ? nil : d.model)
-        case .sonos(let g): g.detail
+        case .cast(let device): device.isGroup ? "Speaker group" : (device.model.isEmpty ? nil : device.model)
+        case .sonos(let group): group.detail
         }
     }
     /// A speaker on the network, which plays the stream from the Mac's LAN address.
@@ -44,14 +47,15 @@ enum Output: Hashable, Identifiable {
 /// Lets the long-lived HTTP server reach whichever session is current.
 actor SessionHolder {
     var session: PlayerSession?
-    func set(_ s: PlayerSession?) { session = s }
+    func set(_ newSession: PlayerSession?) { session = newSession }
+    /// Answers the player from the current session, or 404 if nothing plays.
     func respond(_ path: String) async -> HTTPResponse { await session?.respond(to: path) ?? .notFound }
     /// For a speaker's AAC stream: from the session it belongs to while that one plays. Until the first session is
     /// there (it is starting) the stream waits; once its session has gone, it ends.
     func respond(_ path: String, for binding: AACStream.Binding) async -> HTTPResponse {
-        guard let s = session else { return binding.session == nil ? .notFound : AACStream.ended }
-        if binding.session == nil { binding.session = s }
-        return binding.session === s ? await s.respond(to: path) : AACStream.ended
+        guard let current = session else { return binding.session == nil ? .notFound : AACStream.ended }
+        if binding.session == nil { binding.session = current }
+        return binding.session === current ? await current.respond(to: path) : AACStream.ended
     }
 }
 
@@ -65,6 +69,7 @@ final class AppModel {
     var selectedStationID: String { didSet { UserDefaults.standard.set(selectedStationID, forKey: "station") } }
     var outputs: [Output] = [.thisMac]
     var selectedOutputID: String { didSet { UserDefaults.standard.set(selectedOutputID, forKey: "output") } }
+    /// From 0 to 1.
     var volume: Double { didSet { UserDefaults.standard.set(volume, forKey: "volume"); applyVolume() } }
 
     // Earlier programmes
@@ -91,17 +96,6 @@ final class AppModel {
     var scheduleDay = 0 {
         didSet { if scheduleDay != oldValue { programmes = []; loadSchedule() } }
     }
-    /// Within the last 11 hours a programme plays from the live origin; before that, on demand.
-    static func canPlay(_ p: Programme) -> Bool { Schedule.isPlayable(p) || OnDemand.isAvailable(p) }
-    var scheduleDayTitle: String {
-        switch scheduleDay {
-        case 0: return "Today"
-        case 1: return "Yesterday"
-        default:
-            let d = Calendar.current.date(byAdding: .day, value: -scheduleDay, to: Date()) ?? Date()
-            return d.formatted(.dateTime.weekday(.wide).day().month(.abbreviated))
-        }
-    }
     var isReplay: Bool { (isPlaying || isStarting) && source?.replay != nil }
     /// The station playing or starting, or the one chosen when nothing is.
     var onAirStation: Station? { source?.station ?? selectedStation }
@@ -118,6 +112,7 @@ final class AppModel {
             UserDefaults.standard.set(port, forKey: "port")
         }
     }
+    /// [bit/s]
     var bitrate: Int { didSet { UserDefaults.standard.set(bitrate, forKey: "bitrate") } }
     var keepAwake: Bool { didSet { UserDefaults.standard.set(keepAwake, forKey: "keepAwake"); updateActivity() } }
     /// What plays during muted bulletins: "silence" or the name of a sound in Resources/Ambience.
@@ -129,6 +124,7 @@ final class AppModel {
         }
     }
     static let ambienceChoices = Ambience.choices
+    /// The chosen sound's file, from the app bundle or, when run with `swift run`, the checkout.
     var ambienceURL: URL? {
         guard ambience != "silence" else { return nil }
         return Bundle.main.url(forResource: ambience, withExtension: "m4a", subdirectory: "Ambience")
@@ -154,9 +150,10 @@ final class AppModel {
     var remoteOnTailscale: Bool {
         remoteAddress.map { $0.hasSuffix(".ts.net") || Tailnet.isTailscale($0) } ?? false
     }
+    /// The phone remote's link, while it is on and the Mac has an address.
     var remoteURL: URL? {
-        guard remoteEnabled, let ip = remoteAddress, let p = server?.port else { return nil }
-        return URL(string: "http://\(ip):\(p)\(RemoteRoutes.pagePath(token: remoteToken))")
+        guard remoteEnabled, let host = remoteAddress, let port = server?.port else { return nil }
+        return URL(string: "http://\(host):\(port)\(RemoteRoutes.pagePath(token: remoteToken))")
     }
 
     // State
@@ -168,26 +165,23 @@ final class AppModel {
     /// Offered with a Cast error: play on the Mac instead.
     var castFailed = false
     var discoveryState: DiscoveryState = .searching
+    /// Still looking for speakers, done looking, or refused Local Network access.
     enum DiscoveryState { case searching, ready, denied }
     var showWelcome: Bool { didSet { UserDefaults.standard.set(!showWelcome, forKey: "welcomeDismissed") } }
+    /// Set by `--demo=` for screenshots, so the first-run note stays out of the way.
     var demoHidesWelcome = false
+    /// A short note on what InterLude knows about the station's news.
     var learnedNote: String? {
-        let p = profile(onAirStation?.serviceId ?? selectedStationID)
+        let options = profile(onAirStation?.serviceId ?? selectedStationID)
         if status.learningJingle { return "Learning the news jingle…" }
         if status.speechModel == "checking" { return "Getting speech recognition ready…" }
-        if !p.idents.isEmpty { return "Knows the news jingle" }
-        return p.candidates.isEmpty ? nil : "Learning the news jingle"
+        if !options.idents.isEmpty { return "Knows the news jingle" }
+        return options.candidates.isEmpty ? nil : "Learning the news jingle"
     }
-    var delayDescription: String { "About \(Int((status.delaySeconds / 5).rounded()) * 5) seconds" }
-    var footerText: String {
-        guard isReplay, let r = status.replay else { return "\(delayDescription) behind live" }
-        return "Started at \(r.programme.start.formatted(date: .omitted, time: .shortened)) · \(Self.duration(status.delaySeconds)) behind live"
-    }
-    static func duration(_ seconds: Double) -> String {
-        let m = Int((seconds / 60).rounded())
-        return m >= 60 ? "\(m / 60) h \(m % 60) min" : "\(m) min"
-    }
+    /// The footer while something plays: how far behind live.
+    var footerText: String { Wording.footer(delaySeconds: status.delaySeconds, replay: isReplay ? status.replay : nil) }
 
+    /// The status badge.
     enum PlayState: String { case off, starting, live, earlier, muted, error }
     var playState: PlayState {
         if isStarting { return .starting }
@@ -198,15 +192,17 @@ final class AppModel {
     var statusCaption: String {
         isPlaying || isStarting ? (onAirStation?.name ?? "") : (errorText != nil ? "Stopped" : "Not playing")
     }
+    /// The large line on the player.
     var headline: String {
-        if isStarting, let p = source?.replay { return p.title }
+        if isStarting, let programme = source?.replay { return programme.title }
         guard isPlaying else { return selectedStation?.name ?? "InterLude" }
         if status.muted { return "News muted" }
         return status.nowPlaying?.title ?? status.nowPlaying?.artist ?? onAirStation?.name ?? "Playing"
     }
+    /// The line under the headline.
     var subheadline: String {
-        if isStarting, let p = source?.replay {
-            return "Starting from \(p.start.formatted(date: .omitted, time: .shortened))…"
+        if isStarting, let programme = source?.replay {
+            return "Starting from \(programme.start.formatted(date: .omitted, time: .shortened))…"
         }
         if isStarting { return "Starting about a minute behind live…" }
         guard isPlaying else {
@@ -214,13 +210,15 @@ final class AppModel {
             return "Ready to play on \(selectedOutput.label)"
         }
         if status.muted { return "Sound returns when the music does" }
-        if let np = status.nowPlaying, np.title != nil { return np.artist }
+        if let track = status.nowPlaying, track.title != nil { return track.artist }
         return "On \(selectedOutput.label)"
     }
+    /// The track's artwork while playing, or the programme's while starting one or browsing Earlier.
     var artworkURL: URL? {
         isPlaying ? status.nowPlaying?.imageURL : isStarting ? source?.replay?.imageURL : (mode == .earlier ? replaying?.imageURL : nil)
     }
 
+    /// The menu bar icon's SF Symbol.
     var menuIcon: String {
         if isPlaying && status.muted { return "speaker.slash.fill" }
         if isPlaying || isStarting { return "dot.radiowaves.left.and.right" }
@@ -241,17 +239,24 @@ final class AppModel {
     private var castDevices: [CastDevice] = []
     private var sonosGroups: [SonosGroup] = []
     private var sonosHosts: [String] = []
+    /// Counts questions to Sonos, so an answer a newer question overtook is ignored.
     private var sonosAsks = 0
     /// Set while taking a volume from the speaker, so it isn't sent straight back.
     private var volumeFromSpeaker = false
+    /// Keeps the Mac awake while playing.
     private var activity: NSObjectProtocol?
+    /// Watches for the Mac's address changing while a speaker plays.
     private var pathMonitor: NWPathMonitor?
+    /// The address the speaker was given.
     private var lastAddress: String?
+    /// Session notices already passed on as notifications.
     private var shownNotices = 0
     private var notifiedFailure = false
     private var askedForNotifications = false
     private var volumeTask: Task<Void, Never>?
     private var remoteMonitor: NWPathMonitor?
+    /// Prefixes every stream address the local server answers. Kept between launches, so a speaker playing
+    /// across a relaunch still reaches it.
     private let token: String
     /// The panel's own address carries this, new each launch, and it is answered only on loopback.
     private let panelToken = RemoteRoutes.newToken()
@@ -281,13 +286,10 @@ final class AppModel {
         ambience = d.string(forKey: "ambience") ?? "silence"
         showWelcome = !d.bool(forKey: "welcomeDismissed")
         remoteEnabled = d.bool(forKey: "remoteEnabled")
-        let rt = d.string(forKey: "remoteToken") ?? RemoteRoutes.newToken()
-        d.set(rt, forKey: "remoteToken"); remoteToken = rt
-        let args = CommandLine.arguments
-        // The token prefixes every URL the local server answers. `--token` fixes it for scripted tests.
-        if let i = args.firstIndex(of: "--token"), i + 1 < args.count { token = args[i + 1] }
-        else if let t = d.string(forKey: "token") { token = t } else {
-            token = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let savedRemoteToken = d.string(forKey: "remoteToken") ?? RemoteRoutes.newToken()
+        d.set(savedRemoteToken, forKey: "remoteToken"); remoteToken = savedRemoteToken
+        if let saved = d.string(forKey: "token") { token = saved } else {
+            token = RemoteRoutes.newToken()
             d.set(token, forKey: "token")
         }
         startAtLogin = SMAppService.mainApp.status == .enabled
@@ -299,11 +301,12 @@ final class AppModel {
         startDiscovery()
         if mode == .earlier { loadSchedule() }
         if remoteEnabled { enableRemote() }
-        if CommandLine.arguments.contains("--autoplay") { start() }
-        if let d = CommandLine.arguments.first(where: { $0.hasPrefix("--demo=") }) { demo(String(d.dropFirst(7))) }
+        if let demoArgument = CommandLine.arguments.first(where: { $0.hasPrefix("--demo=") }) { demo(String(demoArgument.dropFirst(7))) }
     }
 
-    /// Fills the panel with sample state, for screenshots and design checks. Nothing is played.
+    /// Fills the panel with sample state, for the README's screenshots and design checks. Nothing is played.
+    ///
+    /// - Parameter kind: Which state to show, from `--demo=<kind>`.
     private func demo(_ kind: String) {
         demoHidesWelcome = kind != "welcome"
         selectedStationID = "bbc_6music"
@@ -311,34 +314,31 @@ final class AppModel {
         let now = Date().timeIntervalSince1970
         status.nowPlaying = NowPlaying(artist: "Nilüfer Yanya", title: "Stabilise",
                                        imageURL: URL(string: "https://ichef.bbci.co.uk/images/ic/480x480/p0d71jpt.jpg"))
-        var b1 = NewsBlock(start: now - 3600, end: now - 3340, evidence: "demo")
-        b1.doubtful = false
-        var b2 = NewsBlock(start: now - 1900, end: now - 1880, evidence: "demo"); b2.falseStart = true; b2.doubtful = true
-        status.recentBlocks = [b2, b1]
+        let bulletin = NewsBlock(start: now - 3600, end: now - 3340, evidence: "demo")
+        var mistake = NewsBlock(start: now - 1900, end: now - 1880, evidence: "demo"); mistake.falseStart = true; mistake.doubtful = true
+        status.recentBlocks = [mistake, bulletin]
         switch kind {
         case "muted": isPlaying = true; status.muted = true; status.muteElapsed = 83; showRecentDemo()
         case "error": errorText = "Radio 6 Music: HTTP 404. The pool ID (81827798) has probably changed."; stationFailed = true
         case "casterror": errorText = "Cast connection lost. Kitchen speaker stopped responding."; castFailed = true
         case "upcoming": isPlaying = true; status.muteStartsIn = 38
         case "welcome": showWelcome = true
-        case "welcome-dismiss":      // closes the note after 3 s, to check the window shrinks
-            demoHidesWelcome = false; showWelcome = true
-            Task { try? await Task.sleep(for: .seconds(3)); demoHidesWelcome = true }
         case "earlier": mode = .earlier
         case "earlier-past": mode = .earlier; scheduleDay = 3
         case "replay":
             mode = .earlier; isPlaying = true
             let start = Date(timeIntervalSince1970: (now / 3600).rounded(.down) * 3600 - 3600)
-            let prog = Programme(id: "demo", title: "Radcliffe and Maconie", subtitle: "Music, chat and Isobel Campbell",
-                                 start: start, end: start.addingTimeInterval(7200), imageURL: URL(string: "https://ichef.bbci.co.uk/images/ic/480x480/p0lxz91z.jpg"))
-            replaying = prog
-            if let st = selectedStation { source = (st, prog) }
-            var r = ReplayStatus(programme: prog, heard: start.addingTimeInterval(2400), analysedThrough: start.addingTimeInterval(3000))
-            r.skipCount = 2; r.skippedSeconds = 371; r.justSkipped = 188
-            r.news = [start.addingTimeInterval(-20)...start.addingTimeInterval(163), start.addingTimeInterval(1790)...start.addingTimeInterval(1978)]
-            status.replay = r
-            status.delaySeconds = Date().timeIntervalSince(r.heard)
-            status.nowPlaying = NowPlaying(artist: prog.subtitle!, title: prog.title, imageURL: prog.imageURL)
+            let programme = Programme(id: "demo", title: "Radcliffe and Maconie", subtitle: "Music, chat and Isobel Campbell",
+                                      start: start, end: start.addingTimeInterval(7200),
+                                      imageURL: URL(string: "https://ichef.bbci.co.uk/images/ic/480x480/p0lxz91z.jpg"))
+            replaying = programme
+            if let station = selectedStation { source = (station, programme) }
+            var progress = ReplayStatus(programme: programme, heard: start.addingTimeInterval(2400), analysedThrough: start.addingTimeInterval(3000))
+            progress.skipCount = 2; progress.skippedSeconds = 371; progress.justSkipped = 188
+            progress.news = [start.addingTimeInterval(-20)...start.addingTimeInterval(163), start.addingTimeInterval(1790)...start.addingTimeInterval(1978)]
+            status.replay = progress
+            status.delaySeconds = Date().timeIntervalSince(progress.heard)
+            status.nowPlaying = NowPlaying(artist: programme.subtitle ?? "", title: programme.title, imageURL: programme.imageURL)
         case "starting": isStarting = true
         case "stopped": break
         default: isPlaying = true
@@ -349,6 +349,7 @@ final class AppModel {
 
     // MARK: Catalogue and profiles
 
+    /// Loads the station list and starts watching it for edits.
     private func loadCatalogue() {
         let bundled = Bundle.main.url(forResource: "stations", withExtension: "json") ?? URL(fileURLWithPath: "Data/stations.json")
         do {
@@ -375,56 +376,54 @@ final class AppModel {
     }
 
     /// Takes a station list. What plays carries on, unless its stream's address changed or it was removed.
-    private func use(_ c: Catalogue) {
+    private func use(_ newCatalogue: Catalogue) {
         let old = catalogue
-        catalogue = c; stations = c.stations
-        for s in c.stations where profiles[s.serviceId] == nil { profiles[s.serviceId] = StationProfile.load(s) }
-        if selectedStation == nil, let first = c.stations.first {
+        catalogue = newCatalogue; stations = newCatalogue.stations
+        for station in newCatalogue.stations where profiles[station.serviceId] == nil { profiles[station.serviceId] = StationProfile.load(station) }
+        if selectedStation == nil, let first = newCatalogue.stations.first {
             selectedStationID = first.serviceId
             replaying = nil; programmes = []
             if mode == .earlier { loadSchedule() }
         }
-        guard let src = source, let old else { return }
-        guard let now = c.station(src.station.serviceId) else {
-            stop(); errorText = "\(src.station.name) was removed from the station list."; return
+        guard let playing = source, let old else { return }
+        guard let updated = newCatalogue.station(playing.station.serviceId) else {
+            stop(); errorText = "\(playing.station.name) was removed from the station list."; return
         }
-        source = (now, src.replay)
-        if c.playlistURL(now) != old.playlistURL(src.station) { restart() }
+        source = (updated, playing.replay)
+        if newCatalogue.playlistURL(updated) != old.playlistURL(playing.station) { restart() }
     }
 
     func profile(_ id: String) -> StationProfile { profiles[id] ?? StationProfile() }
-    func updateProfile(_ id: String, _ f: (inout StationProfile) -> Void) {
-        var p = profile(id); f(&p); profiles[id] = p
-        if let s = stations.first(where: { $0.serviceId == id }) { p.save(s) }
-        if isPlaying, id == source?.station.serviceId { Task { await session?.setLiveOptions(muteNews: p.muteNews, shadowMode: p.shadowMode) } }
+
+    /// Changes a station's profile, saves it, and passes its mute options to the session if that station plays.
+    func updateProfile(_ id: String, _ change: (inout StationProfile) -> Void) {
+        var updated = profile(id); change(&updated); profiles[id] = updated
+        if let station = stations.first(where: { $0.serviceId == id }) { updated.save(station) }
+        if isPlaying, id == source?.station.serviceId {
+            Task { await session?.setLiveOptions(muteNews: updated.muteNews, shadowMode: updated.shadowMode) }
+        }
     }
     var favouriteStations: [Station] { stations.filter { profile($0.serviceId).favourite } }
     var otherStations: [Station] { stations.filter { !profile($0.serviceId).favourite } }
-    /// Non-favourite stations under their group headings, in the order the groups first appear.
-    var otherStationGroups: [(name: String?, stations: [Station])] {
-        var groups: [(name: String?, stations: [Station])] = []
-        for s in otherStations {
-            if let i = groups.firstIndex(where: { $0.name == s.group }) { groups[i].stations.append(s) } else { groups.append((s.group, [s])) }
-        }
-        return groups
-    }
+    /// Favourites first, then the rest in the list's order.
     var orderedStations: [Station] { favouriteStations + otherStations }
 
     // MARK: Cast discovery
 
+    /// Follows Cast devices and Sonos speakers as they come and go.
     private func startDiscovery() {
-        let d = CastDiscovery(); d.start(); discovery = d
+        let castDiscovery = CastDiscovery(); castDiscovery.start(); discovery = castDiscovery
         Task { [weak self] in
-            for await devices in d.updates {
+            for await devices in castDiscovery.updates {
                 guard let self else { return }
                 self.castDevices = devices
                 self.updateOutputs()
                 self.discoveryState = .ready
             }
         }
-        let sd = SonosDiscovery(); sd.start(); sonosDiscovery = sd
+        let sonos = SonosDiscovery(); sonos.start(); sonosDiscovery = sonos
         Task { [weak self] in
-            for await hosts in sd.updates {
+            for await hosts in sonos.updates {
                 guard let self else { return }
                 self.sonosHosts = hosts
                 await self.refreshSonos()
@@ -439,7 +438,7 @@ final class AppModel {
             }
         }
         Task { [weak self] in
-            for await denied in d.permission {
+            for await denied in castDiscovery.permission {
                 guard let self else { return }
                 if denied { self.discoveryState = .denied }
             }
@@ -451,12 +450,13 @@ final class AppModel {
         }
     }
 
-    /// Speakers named with `defaults write com.….InterLude sonosHosts "192.168.1.60"`, for a Sonos on another
-    /// VLAN whose Bonjour announcements don't reach the Mac. One is enough: it describes the whole household.
+    /// Speakers named with `defaults write org.benbull.InterLude sonosHosts 192.168.1.60`, for a Sonos on another
+    /// network whose Bonjour announcements don't reach the Mac. One is enough: it describes the whole household.
     private var manualSonosHosts: [String] {
         (UserDefaults.standard.string(forKey: "sonosHosts") ?? "").split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init)
     }
 
+    /// Asks a Sonos speaker for the household's rooms and groups.
     private func refreshSonos() async {
         sonosAsks += 1
         let ask = sonosAsks, hosts = Array(Set(sonosHosts + manualSonosHosts)).sorted()
@@ -484,12 +484,12 @@ final class AppModel {
         let station: Station, replay: Programme?
         if let what { (station, replay) = (catalogue.station(what.station.serviceId) ?? what.station, what.replay) }
         else {
-            guard let st = selectedStation else { return }
+            guard let chosen = selectedStation else { return }
             if mode == .earlier && replaying == nil {
-                guard let p = programmes.first(where: { Self.canPlay($0) }) else { loadSchedule(); return }
-                replaying = p
+                guard let first = programmes.first(where: \.canPlay) else { loadSchedule(); return }
+                replaying = first
             }
-            (station, replay) = (st, mode == .earlier ? replaying : nil)
+            (station, replay) = (chosen, mode == .earlier ? replaying : nil)
         }
         source = (station, replay)
         errorText = nil; stationFailed = false; castFailed = false; notifiedFailure = false
@@ -502,19 +502,19 @@ final class AppModel {
         var settings = SessionSettings(station: station, profile: profile(station.serviceId))
         settings.bitrate = bitrate
         settings.ambience = ambienceURL
-        if let p = replay {
-            settings.replay = p
-            settings.onDemand = !Schedule.isPlayable(p)
+        if let programme = replay {
+            settings.replay = programme
+            settings.onDemand = !Schedule.isPlayable(programme)
         }
         Task {
             do {
                 let cacheRoot = try AppPaths.cacheDirectory()
                 let events = try AppPaths.supportDirectory().appendingPathComponent("events.jsonl")
-                let s = PlayerSession(catalogue: catalogue, settings: settings, token: token, cacheRoot: cacheRoot, eventLog: events)
+                let newSession = PlayerSession(catalogue: catalogue, settings: settings, token: token, cacheRoot: cacheRoot, eventLog: events)
                 try ensureServer()
-                await holder.set(s)
-                try await s.start()
-                session = s
+                await holder.set(newSession)
+                try await newSession.start()
+                session = newSession
                 try await startOutput(output, station: station)
                 isPlaying = true; isStarting = false
                 updateActivity(); startTimer(); watchNetwork()
@@ -533,11 +533,13 @@ final class AppModel {
         Task { await tearDown(); isPlaying = false; isStarting = false; start(what) }
     }
 
+    /// Stops playing and lets any speaker go.
     func stop() {
         isPlaying = false; isStarting = false; source = nil
         Task { await tearDown() }
     }
 
+    /// Stops the session, the player and any speaker, and forgets the status.
     private func tearDown() async {
         timer?.cancel(); timer = nil
         pathMonitor?.cancel(); pathMonitor = nil
@@ -578,6 +580,7 @@ final class AppModel {
         if !isPlaying { start() }
     }
 
+    /// Stops the sound where it is going, leaving the session running.
     private func stopOutput() async {
         castEvents?.cancel(); castEvents = nil
         player?.pause(); player = nil
@@ -614,7 +617,7 @@ final class AppModel {
     /// Reads the selected station's schedule for the chosen day. Kept for five minutes per station and day.
     func loadSchedule(force: Bool = false) {
         let id = selectedStationID, day = scheduleDay
-        if !force, let f = scheduleFor, f.station == id, f.day == day, Date().timeIntervalSince(f.at) < 300, !programmes.isEmpty { return }
+        if !force, let cached = scheduleFor, cached.station == id, cached.day == day, Date().timeIntervalSince(cached.at) < 300, !programmes.isEmpty { return }
         scheduleState = .loading
         Task {
             do {
@@ -629,86 +632,93 @@ final class AppModel {
     }
 
     /// Plays an earlier programme of the chosen station from its start, stopping whatever is playing.
-    func play(_ p: Programme) {
-        guard Self.canPlay(p), let st = selectedStation else { return }
-        replaying = p
-        if isPlaying || isStarting { Task { await tearDown(); isPlaying = false; isStarting = false; start((st, p)) } } else { start((st, p)) }
+    func play(_ programme: Programme) {
+        guard programme.canPlay, let station = selectedStation else { return }
+        replaying = programme
+        if isPlaying || isStarting {
+            Task { await tearDown(); isPlaying = false; isStarting = false; start((station, programme)) }
+        } else { start((station, programme)) }
     }
 
+    /// Starts the local server, if it isn't running. It answers the stream under `/<token>/`, and everything else
+    /// (the panel and the phone remote) through `respondToRemote`.
     private func ensureServer() throws {
         if server != nil { return }
-        let t = token, h = holder
-        let s = LocalServer(port: UInt16(port)) { [weak self] req in
-            let prefix = "/\(t)/"
+        let streamToken = token, sessions = holder
+        let newServer = LocalServer(port: UInt16(port)) { [weak self] req in
+            let prefix = "/\(streamToken)/"
             if req.path.hasPrefix(prefix) {
                 let relative = String(req.path.dropFirst(prefix.count))
                 if relative == AACStream.path {
                     // With nothing playing, this is the speaker's own Play button: start for it.
-                    if await h.session == nil, await self?.startFromSpeaker() != true { return .notFound }
+                    if await sessions.session == nil, await self?.startFromSpeaker() != true { return .notFound }
                     let binding = AACStream.Binding()
-                    return AACStream.response { await h.respond($0, for: binding) }
+                    return AACStream.response { await sessions.respond($0, for: binding) }
                 }
-                return await h.respond(relative)
+                return await sessions.respond(relative)
             }
             return await self?.respondToRemote(req) ?? .notFound
         }
-        try s.start()
-        server = s
+        try newServer.start()
+        server = newServer
     }
 
     /// Where `output` fetches the stream: the playlist, or for Sonos, which can't play HLS, the AAC stream.
     private func playlistURL(host: String, for output: Output? = nil) throws -> URL {
         let name = if case .sonos = output ?? selectedOutput { AACStream.path } else { "live.m3u8" }
-        guard let u = URL(string: "http://\(host):\(port)/\(token)/\(name)") else { throw CastError.rejected("bad playlist address") }
-        return u
+        guard let url = URL(string: "http://\(host):\(port)/\(token)/\(name)") else { throw CastError.rejected("bad playlist address") }
+        return url
     }
 
+    /// Starts the sound on `output`: AVPlayer for this Mac, or the speaker's controller.
     private func startOutput(_ output: Output, station: Station) async throws {
         switch output {
         case .thisMac:
-            let p = AVPlayer(url: try playlistURL(host: "127.0.0.1"))
-            p.automaticallyWaitsToMinimizeStalling = true
-            p.volume = Float(volume); p.play(); player = p
+            let newPlayer = AVPlayer(url: try playlistURL(host: "127.0.0.1"))
+            newPlayer.automaticallyWaitsToMinimizeStalling = true
+            newPlayer.volume = Float(volume); newPlayer.play(); player = newPlayer
         case .cast, .sonos:
             guard let ip = LocalServer.lanAddress() else { throw CastError.rejected("the Mac has no network address") }
             lastAddress = ip
-            let c: any CastController
+            let controller: any CastController
             switch output {
-            case .cast(let device): c = DirectCastController(device: device)
-            case .sonos(let group): c = SonosController(group: group)
+            case .cast(let device): controller = DirectCastController(device: device)
+            case .sonos(let group): controller = SonosController(group: group)
             case .thisMac: return
             }
             let name = output.label
-            try await c.connect()
+            try await controller.connect()
             let url = try playlistURL(host: ip, for: output)
-            if let sonos = c as? SonosController, await sonos.adopt(url: url) {
+            if let sonos = controller as? SonosController, await sonos.adopt(url: url) {
                 // Its own Play button asked for the stream, so it is playing already, at its own volume.
             } else {
-                try await c.load(url: url, title: settingsTitle(station))
-                await c.setVolume(volume)
+                try await controller.load(url: url, title: castTitle(station))
+                await controller.setVolume(volume)
             }
-            cast = c
+            cast = controller
             castEvents = Task { [weak self] in
-                for await e in c.events {
+                for await event in controller.events {
                     guard let self else { return }
-                    switch e {
+                    switch event {
                     case .lost: self.castProblem("Speaker connection lost", "\(name) stopped responding.")
                     case .takenOver: self.castProblem("Another app took over", "\(name) is now playing something else.")
                     // Paused or stopped on the speaker itself: stop, as Stop here would. Its Play button starts it again.
                     case .stoppedOnDevice: if self.isPlaying { self.stop() }
-                    case .volume(let v): self.volumeFromSpeaker = true; self.volume = v; self.volumeFromSpeaker = false
-                    case .loadFailed(let m): self.castProblem("The speaker refused the stream", m)
+                    case .volume(let level): self.volumeFromSpeaker = true; self.volume = level; self.volumeFromSpeaker = false
+                    case .loadFailed(let reason): self.castProblem("The speaker refused the stream", reason)
                     }
                 }
             }
         }
     }
 
-    private func settingsTitle(_ station: Station) -> String {
-        if let p = source?.replay { return "\(p.title) · \(station.name)" }
+    /// What the speaker's own app shows.
+    private func castTitle(_ station: Station) -> String {
+        if let programme = source?.replay { return "\(programme.title) · \(station.name)" }
         return station.name
     }
 
+    /// Reports a speaker's failure as an error and a notification, and stops.
     private func castProblem(_ title: String, _ body: String) {
         guard isPlaying else { return }
         errorText = "\(title). \(body)"; castFailed = true
@@ -725,62 +735,68 @@ final class AppModel {
 
     private func applyVolume() {
         player?.volume = Float(volume)
-        guard let c = cast, !volumeFromSpeaker else { return }
+        guard let controller = cast, !volumeFromSpeaker else { return }
         // Dragging the slider would send dozens of messages a second; send the latest after a short pause.
         volumeTask?.cancel()
-        let v = volume
-        volumeTask = Task { try? await Task.sleep(for: .milliseconds(120)); if !Task.isCancelled { await c.setVolume(v) } }
+        let level = volume
+        volumeTask = Task { try? await Task.sleep(for: .milliseconds(120)); if !Task.isCancelled { await controller.setVolume(level) } }
     }
 
+    /// Keeps the Mac from idle sleep while playing, if asked to.
     private func updateActivity() {
         if keepAwake && isPlaying {
             if activity == nil { activity = ProcessInfo.processInfo.beginActivity(options: [.idleSystemSleepDisabled, .userInitiated], reason: "Playing radio") }
-        } else if let a = activity { ProcessInfo.processInfo.endActivity(a); activity = nil }
+        } else if let running = activity { ProcessInfo.processInfo.endActivity(running); activity = nil }
     }
 
-    /// Reload the stream on the Cast device if the Mac's address changes.
+    /// Gives the speaker the stream's new address if the Mac's address changes.
     private func watchNetwork() {
         guard selectedOutput.isSpeaker else { return }
-        let m = NWPathMonitor()
-        m.pathUpdateHandler = { [weak self] _ in
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.isPlaying, let ip = LocalServer.lanAddress(), ip != self.lastAddress, let c = self.cast, let st = self.source?.station else { return }
+                guard let self, self.isPlaying, let ip = LocalServer.lanAddress(), ip != self.lastAddress,
+                      let controller = self.cast, let station = self.source?.station else { return }
                 self.lastAddress = ip
-                if let url = try? self.playlistURL(host: ip) { try? await c.load(url: url, title: self.settingsTitle(st)) }
+                if let url = try? self.playlistURL(host: ip) { try? await controller.load(url: url, title: self.castTitle(station)) }
             }
         }
-        m.start(queue: .main); pathMonitor = m
+        monitor.start(queue: .main); pathMonitor = monitor
     }
 
     // MARK: Status
 
+    /// Reads the session's status once a second, and acts on what it says.
     private func startTimer() {
         timer?.cancel()
         timer = Task { [weak self] in
             while !Task.isCancelled {
-                guard let self, let s = self.session else { return }
-                let st = await s.status()
-                if st.recentBlocks.count != self.status.recentBlocks.count || st.recentBlocks.first?.end != self.status.recentBlocks.first?.end
-                    || st.learningJingle != self.status.learningJingle,
+                guard let self, let current = self.session else { return }
+                let latest = await current.status()
+                // The session saves what it learns, so read the profile again when that may have changed.
+                if latest.recentBlocks.count != self.status.recentBlocks.count || latest.recentBlocks.first?.end != self.status.recentBlocks.first?.end
+                    || latest.learningJingle != self.status.learningJingle,
                    let station = self.source?.station {
                     self.profiles[station.serviceId] = StationProfile.load(station)
                 }
-                self.status = st
-                if st.notices.count > self.shownNotices {
-                    for n in st.notices[self.shownNotices...] where n.contains("longest mute") || n.contains("failed") { self.notify("InterLude", n) }
-                    self.shownNotices = st.notices.count
+                self.status = latest
+                if latest.notices.count > self.shownNotices {
+                    for notice in latest.notices[self.shownNotices...] where notice.contains("longest mute") || notice.contains("failed") {
+                        self.notify("InterLude", notice)
+                    }
+                    self.shownNotices = latest.notices.count
                 }
-                if st.finished {
-                    self.notify("InterLude", "\(st.replay?.programme.title ?? "The programme") has finished.")
+                if latest.finished {
+                    self.notify("InterLude", "\(latest.replay?.programme.title ?? "The programme") has finished.")
                     self.stop(); return
                 }
-                if st.needsRestart {
+                if latest.needsRestart {
                     self.notify("InterLude", "Playback was interrupted, so it is starting again.")
                     self.restart(); return
                 }
-                if case .failed(let m) = st.state {
-                    self.errorText = m
-                    if !self.notifiedFailure { self.notifiedFailure = true; self.notify("Station stream failed", m) }
+                if case .failed(let message) = latest.state {
+                    self.errorText = message
+                    if !self.notifiedFailure { self.notifiedFailure = true; self.notify("Station stream failed", message) }
                 } else if self.notifiedFailure {
                     self.notifiedFailure = false; self.errorText = nil      // the stream recovered
                 }
@@ -792,26 +808,28 @@ final class AppModel {
     func newsGotThrough() {
         Task {
             await session?.newsGotThrough()
-            if let st = onAirStation { profiles[st.serviceId] = StationProfile.load(st) }
+            if let station = onAirStation { profiles[station.serviceId] = StationProfile.load(station) }
         }
     }
-    func restartToApply() { if isPlaying { restart() } }
     func notNews() { Task { await session?.notNews() } }
     func markWrong(_ id: UUID) { Task { await session?.markWrong(id: id) } }
 
-    private func friendly(_ e: Error, station: Station) -> String {
-        if case FetchError.unhealthy(let m) = e { return m }
-        if let c = e as? CastError { return c.localizedDescription }
-        return "Could not start \(station.name): \(e.localizedDescription)"
+    /// An error in words fit to show.
+    private func friendly(_ error: Error, station: Station) -> String {
+        if case FetchError.unhealthy(let message) = error { return message }
+        if let castError = error as? CastError { return castError.localizedDescription }
+        return "Could not start \(station.name): \(error.localizedDescription)"
     }
 
+    /// Posts a notification at once.
     private func notify(_ title: String, _ body: String) {
-        let c = UNMutableNotificationContent(); c.title = title; c.body = body
-        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: c, trigger: nil))
+        let content = UNMutableNotificationContent(); content.title = title; content.body = body
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
     }
 
     // MARK: Phone remote
 
+    /// Starts the phone remote: makes sure the server runs, and follows the Mac's address.
     private func enableRemote() {
         remoteError = nil
         do { try ensureServer() } catch {
@@ -820,11 +838,11 @@ final class AppModel {
         }
         remoteAddress = LocalServer.tailscaleAddress() ?? LocalServer.lanAddress()
         refreshRemoteAddress()
-        let m = NWPathMonitor()
-        m.pathUpdateHandler = { [weak self] _ in
+        let monitor = NWPathMonitor()
+        monitor.pathUpdateHandler = { [weak self] _ in
             Task { @MainActor in self?.refreshRemoteAddress() }
         }
-        m.start(queue: .main); remoteMonitor = m
+        monitor.start(queue: .main); remoteMonitor = monitor
     }
 
     /// Finds the remote's host off the main thread, since the Tailscale name needs a DNS lookup.
@@ -852,7 +870,7 @@ final class AppModel {
         UserDefaults.standard.set(remoteToken, forKey: "remoteToken")
     }
 
-    /// The panel's page, only to this Mac, and the phone remote's, only while it is on.
+    /// Answers the panel's page, only to this Mac, and the phone remote's, only while it is on.
     private func respondToRemote(_ req: HTTPRequest) -> HTTPResponse {
         if req.fromLoopback, let route = RemoteRoutes.route(req, token: panelToken, prefix: RemoteRoutes.panelPrefix) {
             return respond(to: route, panel: true)
@@ -872,7 +890,7 @@ final class AppModel {
         case .icon: return HTTPResponse(contentType: "image/png", body: Self.remoteIcon)
         case .state: return RemoteRoutes.json(remoteState(panel: panel))
         case .events: return .notFound      // the page polls the Mac instead
-        case .command(let c): perform(c, panel: panel); return RemoteRoutes.json(remoteState(panel: panel))
+        case .command(let command): perform(command, panel: panel); return RemoteRoutes.json(remoteState(panel: panel))
         }
     }
 
@@ -883,21 +901,22 @@ final class AppModel {
         startAtLogin = SMAppService.mainApp.status == .enabled
     }
 
+    /// A temporary folder holding copies of the event log, station list and profiles, for Export diagnostics.
     func diagnosticsFolder() -> URL? {
         guard let support = try? AppPaths.supportDirectory() else { return nil }
-        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("InterLude-diagnostics", isDirectory: true)
-        try? FileManager.default.removeItem(at: tmp)
-        try? FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("InterLude-diagnostics", isDirectory: true)
+        try? FileManager.default.removeItem(at: folder)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         // Read and rewrite the files rather than copying them, which skipped files the app had written itself.
-        func put(_ src: URL, as name: String) {
-            if let d = try? Data(contentsOf: src) { try? d.write(to: tmp.appendingPathComponent(name)) }
+        func put(_ source: URL, as name: String) {
+            if let data = try? Data(contentsOf: source) { try? data.write(to: folder.appendingPathComponent(name)) }
         }
         put(support.appendingPathComponent("events.jsonl"), as: "events.jsonl")
         put(support.appendingPathComponent("stations.json"), as: "stations.json")
         let profiles = support.appendingPathComponent("profiles")
-        for f in (try? FileManager.default.contentsOfDirectory(atPath: profiles.path)) ?? [] {
-            put(profiles.appendingPathComponent(f), as: "profile-\(f)")
+        for file in (try? FileManager.default.contentsOfDirectory(atPath: profiles.path)) ?? [] {
+            put(profiles.appendingPathComponent(file), as: "profile-\(file)")
         }
-        return tmp
+        return folder
     }
 }

@@ -1,3 +1,8 @@
+//  HTTPServer.swift
+//  InterLudeHTTP
+//
+//  The Linux server's web server: Hummingbird, bridged to InterLude's own request and response types.
+
 import Foundation
 import Hummingbird
 import InterLudeCore
@@ -10,6 +15,7 @@ public struct HTTPServer: Sendable {
     /// Answers with a stream of server-sent events, or nil to leave the request to the handler.
     public typealias EventsHandler = @Sendable (InterLudeCore.HTTPRequest) async -> AsyncStream<String>?
 
+    /// The address to listen on; all of them by default.
     public let host: String
     public let port: Int
     private let handler: Handler
@@ -27,6 +33,7 @@ public struct HTTPServer: Sendable {
         try await app.runService()
     }
 
+    /// Turns Hummingbird's requests into InterLude's and the answers back again.
     private struct Bridge: HTTPResponder {
         typealias Context = BasicRequestContext
         let handler: Handler
@@ -44,17 +51,17 @@ public struct HTTPServer: Sendable {
                 return Response(status: .ok, headers: headers,
                                 body: ResponseBody(asyncSequence: stream.map { ByteBuffer(string: $0) }))
             }
-            let r = await handler(req)
-            if let stream = r.stream {
-                let headers: HTTPFields = [.contentType: r.contentType, .cacheControl: "no-cache"]
+            let response = await handler(req)
+            if let stream = response.stream {
+                let headers: HTTPFields = [.contentType: response.contentType, .cacheControl: "no-cache"]
                 return Response(status: .ok, headers: headers,
                                 body: req.method == "HEAD" ? ResponseBody() : ResponseBody(asyncSequence: stream.map { ByteBuffer(bytes: $0) }))
             }
-            var headers: HTTPFields = [.contentType: r.contentType, .accessControlAllowOrigin: "*"]
-            if r.noCache { headers[.cacheControl] = "no-cache" }
-            headers[.contentLength] = String(r.body.count)
-            let body = req.method == "HEAD" ? ResponseBody() : ResponseBody(byteBuffer: ByteBuffer(bytes: r.body))
-            return Response(status: .init(code: r.status), headers: headers, body: body)
+            var headers: HTTPFields = [.contentType: response.contentType, .accessControlAllowOrigin: "*"]
+            if response.noCache { headers[.cacheControl] = "no-cache" }
+            headers[.contentLength] = String(response.body.count)
+            let body = req.method == "HEAD" ? ResponseBody() : ResponseBody(byteBuffer: ByteBuffer(bytes: response.body))
+            return Response(status: .init(code: response.status), headers: headers, body: body)
         }
     }
 }

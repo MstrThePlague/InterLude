@@ -1,3 +1,8 @@
+//  RemoteTests.swift
+//  InterLudeCoreTests
+//
+//  The web app's routes, commands and settings, its page and files, and recognising Tailscale addresses.
+
 import Testing
 import Foundation
 @testable import InterLudeCore
@@ -249,5 +254,42 @@ import Foundation
     @Test func tokensAreLongAndFresh() {
         let a = RemoteRoutes.newToken(), b = RemoteRoutes.newToken()
         #expect(a.count == 32 && a != b)
+    }
+
+    @Test func timesAreWordedTheSameEverywhere() {
+        #expect(Wording.clock(371) == "6:11")
+        #expect(Wording.clock(3723) == "1:02:03")
+        #expect(Wording.clock(-5) == "0:00")
+        #expect(Wording.duration(2700) == "45 min")
+        #expect(Wording.duration(7200) == "2 h 0 min")
+        #expect(Wording.dayTitle(daysAgo: 0) == "Today" && Wording.dayTitle(daysAgo: 1) == "Yesterday")
+        #expect(Wording.footer(delaySeconds: 63, replay: nil) == "About 65 seconds behind live")
+    }
+
+    @Test func replayProgressIsDescribed() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        let programme = Programme(id: "p0", title: "Show", subtitle: nil, start: start, end: start.addingTimeInterval(7200), imageURL: nil)
+        var progress = ReplayStatus(programme: programme, heard: start.addingTimeInterval(2400), analysedThrough: start.addingTimeInterval(3600))
+        progress.skipCount = 2; progress.skippedSeconds = 371
+        progress.news = [start.addingTimeInterval(-60)...start.addingTimeInterval(720)]
+        let item = RemoteState.ReplayItem.describe(progress)
+        #expect(item.position == "40:00 of 2 h 0 min")
+        #expect(item.skipped == "2 bulletins skipped · 6:11")
+        #expect(abs(item.heard - 1.0 / 3) < 1e-9 && item.analysed == 0.5)
+        #expect(item.news == [[0, 0.1]])                                   // clamped to the programme
+    }
+
+    @Test func earlierListMarksChosenAndPlaying() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let older = Programme(id: "a", title: "Older", subtitle: "Sub", start: now.addingTimeInterval(-7200), end: now.addingTimeInterval(-3600), imageURL: nil)
+        let onNow = Programme(id: "b", title: "On now", subtitle: nil, start: now.addingTimeInterval(-600), end: now.addingTimeInterval(3000), imageURL: nil)
+        let item = RemoteState.EarlierItem.describe(day: 0, programmes: [onNow, older], loading: true, problem: "ignored",
+                                                    chosen: older, playing: onNow, now: now)
+        #expect(!item.loading && item.problem == nil)                     // a list on show isn't replaced by a spinner
+        #expect(item.programmes.map(\.onNow) == [true, false])
+        #expect(item.programmes.map(\.chosen) == [false, true])
+        #expect(item.programmes.map(\.playing) == [true, false])
+        let empty = RemoteState.EarlierItem.describe(day: 2, programmes: [], loading: true, problem: "No schedule", chosen: nil, playing: nil, now: now)
+        #expect(empty.loading && empty.problem == "No schedule" && empty.day == 2)
     }
 }

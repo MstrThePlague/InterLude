@@ -1,3 +1,8 @@
+//  App.swift
+//  InterLude (the Mac app)
+//
+//  The menu bar app: its menu bar item and window, both of which show the web app from the Mac's own server.
+
 import SwiftUI
 import AppKit
 import WebKit
@@ -11,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A demo is for a screenshot, so show it in a window straight away.
         if CommandLine.arguments.contains(where: { $0.hasPrefix("--demo=") }) { showWindow(); return }
         // The first launch shows the app in a window as well, so it is clear it is running.
         if !UserDefaults.standard.bool(forKey: "shownWelcomeWindow") {
@@ -27,15 +33,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The same web app as the menu bar panel, in a window that can be widened to show Earlier beside the player.
     func showWindow() {
         if window == nil {
+            // `--demo=settings` and `--demo=settings-end` open the page at its Settings sheet.
             let fragment = CommandLine.arguments.first { $0.hasPrefix("--demo=settings") }.map { String($0.dropFirst(7)) }
-            let w = NSWindow(contentViewController: NSHostingController(rootView: WebPanel(model: AppModel.shared, fragment: fragment)))
-            w.title = "InterLude"
-            w.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            w.setContentSize(NSSize(width: 400, height: 760))
-            w.contentMinSize = NSSize(width: 340, height: 520)
-            w.isReleasedWhenClosed = false
-            w.center()
-            window = w
+            let newWindow = NSWindow(contentViewController: NSHostingController(rootView: WebPanel(model: AppModel.shared, fragment: fragment)))
+            newWindow.title = "InterLude"
+            newWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            newWindow.setContentSize(NSSize(width: 400, height: 760))
+            newWindow.contentMinSize = NSSize(width: 340, height: 520)
+            newWindow.isReleasedWhenClosed = false
+            newWindow.center()
+            window = newWindow
         }
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -55,8 +62,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension NSView {
+    /// The first descendant of `type`, searching depth first.
     func firstSubview<T: NSView>(of type: T.Type) -> T? {
-        for v in subviews { if let t = v as? T ?? v.firstSubview(of: type) { return t } }
+        for view in subviews { if let match = view as? T ?? view.firstSubview(of: type) { return match } }
         return nil
     }
 }
@@ -76,6 +84,7 @@ struct WebPanel: View {
     }
 }
 
+/// A web view that loads one URL, with a transparent background so the page's own shows from the start.
 private struct WebView: NSViewRepresentable {
     let url: URL
 
@@ -93,6 +102,7 @@ private struct WebView: NSViewRepresentable {
     }
 }
 
+/// The app: a menu bar item whose window is the web app. There is no Dock icon (LSUIElement).
 @main
 struct InterLudeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate

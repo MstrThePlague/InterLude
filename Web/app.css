@@ -1,7 +1,12 @@
-/* InterLude's web app. See app.js. */
+/* InterLude's web app: the Mac's menu bar panel, its phone remote and interlude-server's page. See app.js.
+   Sizes are in rem so the page follows the reader's text size; colours are custom properties, set below for light
+   and dark appearance. */
+
+/* The three Aurora colours, registered so they can be animated as the mood changes. */
 @property --c1 { syntax: "<color>"; inherits: true; initial-value: #0080ff; }
 @property --c2 { syntax: "<color>"; inherits: true; initial-value: #8b00ff; }
 @property --c3 { syntax: "<color>"; inherits: true; initial-value: #20b2aa; }
+/* Colours, light first. */
 :root {
   color-scheme: light dark;
   --bg: #f2f2f7; --card: rgba(255,255,255,.74); --glass-line: rgba(255,255,255,.7); --aurora-op: .3;
@@ -37,6 +42,7 @@
 @media (prefers-reduced-motion: reduce) { .aurora i { animation: none; } :root { transition: none; } }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* Base layout. */
 html { background: var(--bg); font-size: 106.25%; }
 @supports (font: -apple-system-body) { html { font: -apple-system-body; } }
 html, body { margin: 0; color: var(--text); }
@@ -49,12 +55,14 @@ main { max-width: 480px; margin: 0 auto; display: flex; flex-direction: column; 
 button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
 .card { background: var(--card); border-radius: 16px; border: 1px solid var(--glass-line);
   -webkit-backdrop-filter: blur(22px) saturate(150%); backdrop-filter: blur(22px) saturate(150%); }
+/* Banners for a lost connection, a reset link and errors. */
 .banner { padding: 12px 14px; border-radius: 12px; font-size: 0.882rem; }
 .banner.offline { background: var(--warn-bg); }
 .banner.error { background: rgba(255,59,48,.14); color: var(--red); }
 .banner b { display: block; color: var(--text); margin-bottom: 2px; }
 [hidden] { display: none !important; }
 
+/* The player card: artwork, status pill, headline. */
 .now { padding: 18px; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 4px; }
 .art { --art: min(64vw, 240px, 32vh); position: relative; width: var(--art); aspect-ratio: 1; border-radius: 18px; overflow: hidden; margin-bottom: 12px;
   box-shadow: 0 0 0 1px rgba(255,255,255,.2), 0 12px 40px -10px var(--c1); display: grid; place-items: center; color: #fff; font-weight: 800;
@@ -74,6 +82,7 @@ button { font: inherit; color: inherit; background: none; border: 0; padding: 0;
 h1 { font-size: 1.294rem; margin: 2px 0 0; line-height: 1.2; overflow-wrap: anywhere; }
 .sub { color: var(--muted); font-size: 0.941rem; overflow-wrap: anywhere; }
 
+/* Play, stop and volume. */
 .transport { display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .play { width: 4.5rem; height: 4.5rem; flex: none; border-radius: 50%; display: grid; place-items: center; background: var(--play-bg); color: var(--play-fg);
   box-shadow: 0 10px 34px -8px color-mix(in srgb, var(--c1) 70%, transparent); transition: transform .12s; }
@@ -92,11 +101,13 @@ input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 24px;
 input[type=range]::-moz-range-track { height: 6px; border-radius: 99px; background: var(--track-hi); }
 input[type=range]::-moz-range-progress { height: 6px; border-radius: 99px; background: var(--text); }
 input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 50%; background: #fff; border: 1px solid rgba(0,0,0,.15); box-shadow: 0 2px 8px rgba(0,0,0,.35); }
+/* The Live / Earlier switch and the Settings button. */
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .topbar .seg { flex: 1; }
 .iconbtn { width: 2.75rem; height: 2.75rem; flex: none; display: grid; place-items: center; border-radius: 50%; background: var(--chip); color: var(--text); }
 .iconbtn svg { width: 1.3rem; height: 1.3rem; }
 
+/* Rows of choices in cards and sheets. */
 .rows { overflow: hidden; }
 .row { width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 14px; min-height: 3.75rem; text-align: left; }
 .row + .row { border-top: 1px solid var(--line); }
@@ -110,6 +121,7 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 
 .icon { width: 2.25rem; height: 2.25rem; flex: none; display: grid; place-items: center; color: var(--muted); }
 .icon svg { width: 24px; height: 24px; }
 
+/* The news card, the bulletin alert and its buttons. */
 .news { overflow: hidden; }
 .alert { display: flex; align-items: center; gap: 12px; padding: 12px 14px; background: var(--orange-bg); border-radius: 14px; }
 .alert .label { flex: 1; }
@@ -125,6 +137,7 @@ input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 
 .plainrow .link { color: var(--muted); font-weight: 500; font-size: .82rem; }
 footer { text-align: center; color: var(--muted); font-size: 0.765rem; }
 
+/* Sheets: the station list, the speaker list and Settings. */
 dialog { border: 0; padding: 0; margin: auto auto 0; width: 100%; max-width: 520px; max-height: 82vh; background: var(--bg); color: var(--text);
   border-radius: 18px 18px 0 0; display: flex; flex-direction: column; }
 dialog:not([open]) { display: none; }
@@ -136,6 +149,7 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .group-title { color: var(--muted); font-size: 0.765rem; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; margin: 16px 4px 6px; }
 .check { width: 20px; height: 20px; color: var(--accent); flex: none; }
 .hint { color: var(--muted); font-size: 0.824rem; margin: 12px 4px; }
+/* An earlier programme's progress bar, with the news cut out marked on it. */
 .progress { width: 100%; margin-top: 12px; }
 .bar { position: relative; height: 6px; border-radius: 99px; overflow: hidden; background: var(--track); }
 .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; }
@@ -145,10 +159,12 @@ dialog::backdrop { background: rgba(0,0,0,.4); }
 .progress-text { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 0.765rem;
   font-variant-numeric: tabular-nums; }
 
+/* Segmented controls. */
 .seg { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 3px; border-radius: 999px; background: var(--chip); }
 .seg button { min-height: 2.75rem; padding: 0 .9rem; border-radius: 999px; font-size: 0.882rem; font-weight: 600; color: var(--text); }
 .seg button[aria-pressed="true"] { background: var(--seg-on); font-weight: 800; box-shadow: 0 1px 4px rgba(0,0,0,.14), inset 0 0 0 1px var(--glass-line); }
 
+/* The Earlier list: the day's programmes. */
 .earlier { overflow: hidden; }
 .days { display: flex; align-items: center; justify-content: space-between; padding: 4px; border-bottom: 1px solid var(--line); }
 .days b { font-size: 0.941rem; }

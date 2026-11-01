@@ -1,3 +1,8 @@
+//  CastTests.swift
+//  InterLudePortableTests
+//
+//  Multicast DNS: reading answers, and following speakers as they come and go.
+
 import Foundation
 import Testing
 @testable import InterLudeCast
@@ -32,14 +37,6 @@ import Testing
 @Test func mdnsIgnoresTruncatedPackets() {
     #expect(MDNS.parse([0, 0, 0x84, 0, 0, 0, 0, 1]).isEmpty)
     #expect(MDNS.parse([0, 0, 0x84, 0, 0, 0, 0, 1, 0, 0, 0, 0, 5, 0x61]).isEmpty)
-}
-
-/// Looks for real speakers on this network, when asked to with INTERLUDE_LIVE_CAST=1.
-@Test(.enabled(if: ProcessInfo.processInfo.environment["INTERLUDE_LIVE_CAST"] == "1"))
-func mdnsFindsSpeakersHere() {
-    let found = MDNS.browseCast(timeout: 3)
-    print("found", found.map { "\($0.name) [\($0.model)] \($0.host):\($0.port)" })
-    #expect(!found.isEmpty)
 }
 
 /// A speaker's records as an announcement or answer carries them.
@@ -84,14 +81,3 @@ private func announcement(_ id: String, _ service: String, host: String, address
     #expect(MDNS.instances(of: sonos, from: cache.records).map(\.host) == ["192.168.1.31"])
 }
 
-/// Watches for real speakers on this network, when asked to with INTERLUDE_LIVE_CAST=1.
-@Test(.enabled(if: ProcessInfo.processInfo.environment["INTERLUDE_LIVE_CAST"] == "1"))
-func mdnsWatcherFindsSpeakersHere() async {
-    let w = MDNSWatcher()
-    w.start()
-    defer { w.stop() }
-    var first: MDNSWatcher.Found?
-    for await f in w.updates { first = f; break }
-    print("cast", first?.cast.map(\.name) ?? [], "sonos", first?.sonos ?? [])
-    #expect(!(first?.cast.isEmpty ?? true) || !(first?.sonos.isEmpty ?? true))
-}

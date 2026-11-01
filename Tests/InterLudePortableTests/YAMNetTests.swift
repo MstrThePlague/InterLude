@@ -1,3 +1,8 @@
+//  YAMNetTests.swift
+//  InterLudePortableTests
+//
+//  YAMNet's calibration and windowing, resampling, and (when the models are in Models/) the models themselves.
+
 import Foundation
 import Testing
 import InterLudeCore

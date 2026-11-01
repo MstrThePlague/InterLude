@@ -1,3 +1,8 @@
+//  EngineTests.swift
+//  InterLudeCoreTests
+//
+//  The detector's rules, both playouts, jingle matching and learning, and finding the newsreader in transcripts.
+
 import Testing
 import Foundation
 @testable import InterLudeCore
@@ -152,6 +157,25 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     #expect(m.namespace.hasSuffix("tp.connection"))
     // Known wire bytes: version=0, then source string field 2.
     #expect(Array(framed[4..<8]) == [0x08, 0x00, 0x12, 0x08])
+}
+
+@Test func castFramesSplitAcrossReads() throws {
+    let one = CastWire.encode(source: "a", destination: "b", namespace: "n", payload: "1")
+    let two = CastWire.encode(source: "a", destination: "b", namespace: "n", payload: "2")
+    var buffer = Array(one) + Array(two.prefix(5))
+    #expect(CastWire.takeMessages(from: &buffer).map(\.payload) == ["1"])
+    #expect(buffer.count == 5)                                          // the partial frame waits for the rest
+    buffer += Array(two.dropFirst(5))
+    #expect(CastWire.takeMessages(from: &buffer).map(\.payload) == ["2"])
+    #expect(buffer.isEmpty)
+}
+
+@Test func castReceiverStatusIsRead() {
+    let status: [String: Any] = ["status": ["applications": [["appId": CastWire.defaultReceiverAppId, "transportId": "t-1", "sessionId": "s-1"]]]]
+    #expect(CastWire.defaultReceiver(in: status)?.transportId == "t-1")
+    #expect(CastWire.stillOurs(status, sessionId: "s-1"))
+    #expect(!CastWire.stillOurs(status, sessionId: "s-2"))
+    #expect(CastWire.defaultReceiver(in: ["status": ["applications": []]]) == nil)
 }
 
 @Test func identOnlyIgnoresSpeechButMutesOnIdent() {

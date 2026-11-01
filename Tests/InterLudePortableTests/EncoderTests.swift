@@ -1,3 +1,8 @@
+//  EncoderTests.swift
+//  InterLudePortableTests
+//
+//  Encoding and decoding with ffmpeg, as the Linux server does.
+
 import Foundation
 import Testing
 @testable import InterLudeCore

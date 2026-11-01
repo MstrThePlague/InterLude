@@ -1,3 +1,8 @@
+//  ReplayTests.swift
+//  InterLudeCoreTests
+//
+//  Playing an earlier programme: skipping news, the schedule, and on-demand streams.
+
 import Testing
 import Foundation
 @testable import InterLudeCore

@@ -1,3 +1,8 @@
+//  ONNXModel.swift
+//  InterLudeML
+//
+//  A thin wrapper over ONNX Runtime's C API, just enough to run YAMNet: one float input, one float output, on the CPU.
+
 import Foundation
 import COnnxRuntime
 
@@ -11,11 +16,19 @@ final class ONNXModel: @unchecked Sendable {
     private let inputName: String
     private let outputName: String
 
+    /// An error ONNX Runtime reported, or a model that didn't behave as expected.
     struct Failure: Error, LocalizedError {
         let message: String
         var errorDescription: String? { "ONNX Runtime: \(message)" }
     }
 
+    /// Loads a model.
+    ///
+    /// - Parameters:
+    ///   - path: The `.onnx` file.
+    ///   - input: The input tensor's name.
+    ///   - output: The output tensor's name.
+    ///   - threads: Threads to use within one run.
     init(path: String, input: String, output: String, threads: Int32 = 2) throws {
         guard let base = OrtGetApiBase(), let api = base.pointee.GetApi(UInt32(ORT_API_VERSION)) else {
             throw Failure(message: "this build of ONNX Runtime doesn't offer API version \(ORT_API_VERSION)")
@@ -70,6 +83,7 @@ final class ONNXModel: @unchecked Sendable {
         return (values, dims.map(Int.init))
     }
 
+    /// Throws the error a C API call returned, if it returned one, and releases it.
     private func check(_ status: OpaquePointer?) throws {
         guard let status else { return }
         defer { api.pointee.ReleaseStatus(status) }

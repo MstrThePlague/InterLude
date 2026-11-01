@@ -1,3 +1,8 @@
+//  SegmentTests.swift
+//  InterLudeCoreTests
+//
+//  Reading playlists, and the station profile's storage.
+
 import Testing
 import Foundation
 @testable import InterLudeCore
@@ -8,12 +13,6 @@ import Foundation
     #expect(p.firstSequence == 100 && p.names.count == 2 && p.lastSequence == 101)
     #expect(HLS.splitName(p.names[0])?.index == 100)
     #expect(HLS.splitName(p.names[0])?.prefix == "bbc_6music-audio=320000-")
-}
-
-@Test func realSegmentIfPresent() throws {
-    guard let d = FileManager.default.contents(atPath: "/tmp/seg0.ts") else { return }
-    let info = try #require(TS.parse(d))
-    print("REAL frames", info.frames.count, "pid", info.audioPID, "pts", info.firstPTS ?? -1, info.frames.prefix(3).map { $0.count })
 }
 
 @Test func jingleCandidatesSurviveTheBinaryFile() {

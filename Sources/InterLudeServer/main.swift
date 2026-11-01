@@ -1,3 +1,8 @@
+//  main.swift
+//  interlude-server
+//
+//  InterLude without a Mac.
+
 import Foundation
 import InterLudeCore
 import InterLudePortable
@@ -9,11 +14,10 @@ import InterLudeCast
 // session, which starts when a browser asks for the stream and stops when nobody has for 10 minutes.
 //
 //   interlude-server [--port 8642] [--data DIR] [--config DIR] [--stations FILE] [--web DIR] [--models DIR] [--ambience DIR]
-//                    [--ffmpeg PATH] [--keep-running] [--cast-host ADDRESS] [--sonos-host ADDRESS[,ADDRESS…]]
+//                    [--ffmpeg PATH] [--cast-host ADDRESS] [--sonos-host ADDRESS[,ADDRESS…]]
 //   interlude-server --check AUDIOFILE [--models DIR]     runs both models on a file, prints what they hear, and exits
 //
-// --keep-running (or INTERLUDE_KEEP_RUNNING=1) runs the live session all the time, for comparing with the Mac.
-// --cast-host is the address Cast and Sonos speakers fetch the stream from; by default, this machine's LAN address.
+// --cast-host (or INTERLUDE_CAST_HOST) is the address Cast and Sonos speakers fetch the stream from; by default, this machine's LAN address.
 // --sonos-host (or INTERLUDE_SONOS_HOSTS) names Sonos speakers to ask for the household's rooms, for when multicast DNS
 // doesn't reach them, such as on another VLAN. One is enough: it describes all the others.
 //
@@ -27,6 +31,7 @@ import InterLudeCast
 /// Writes a line straight to stdout, unbuffered, so `docker logs` keeps up.
 func log(_ line: String) { FileHandle.standardOutput.write(Data((line + "\n").utf8)) }
 
+/// The command line, with environment variables as defaults.
 struct Options {
     var port = 8642
     var data = URL(fileURLWithPath: "/var/lib/interlude", isDirectory: true)
@@ -36,11 +41,12 @@ struct Options {
     var models = URL(fileURLWithPath: "/usr/share/interlude/models", isDirectory: true)
     var ambience = URL(fileURLWithPath: "/usr/share/interlude/ambience", isDirectory: true)
     var ffmpeg: URL?
-    var keepRunning = ProcessInfo.processInfo.environment["INTERLUDE_KEEP_RUNNING"] == "1"
     var castHost = ProcessInfo.processInfo.environment["INTERLUDE_CAST_HOST"]
     var sonosHosts = Options.addresses(ProcessInfo.processInfo.environment["INTERLUDE_SONOS_HOSTS"] ?? "")
+    /// An audio file to run the models on, for `--check`.
     var check: URL?
 
+    /// Reads `args`, as `CommandLine.arguments` gives them.
     init(_ args: [String]) throws {
         var i = 1
         func value() throws -> String {
@@ -58,7 +64,6 @@ struct Options {
             case "--models": models = URL(fileURLWithPath: try value(), isDirectory: true)
             case "--ambience": ambience = URL(fileURLWithPath: try value(), isDirectory: true)
             case "--ffmpeg": ffmpeg = URL(fileURLWithPath: try value())
-            case "--keep-running": keepRunning = true
             case "--cast-host": castHost = try value()
             case "--sonos-host": sonosHosts += Options.addresses(try value())
             case "--check": check = URL(fileURLWithPath: try value())
@@ -68,11 +73,13 @@ struct Options {
         }
     }
 
+    /// Addresses separated by commas or spaces.
     static func addresses(_ list: String) -> [String] {
         list.split(whereSeparator: { $0 == "," || $0 == " " }).map(String.init)
     }
 }
 
+/// A mistake on the command line, reported with exit status 2.
 struct UsageError: Error, CustomStringConvertible {
     let description: String
     init(_ d: String) { description = d }
@@ -121,8 +128,9 @@ func watchStations(bundled: URL, config: URL, controller: Controller) throws {
     }
 }
 
-func text(_ status: Int, _ s: String) -> HTTPResponse {
-    HTTPResponse(status: status, contentType: "text/plain; charset=utf-8", body: Data(s.utf8), noCache: true)
+/// A plain-text response.
+func text(_ status: Int, _ message: String) -> HTTPResponse {
+    HTTPResponse(status: status, contentType: "text/plain; charset=utf-8", body: Data(message.utf8), noCache: true)
 }
 
 do {
@@ -151,14 +159,14 @@ do {
         let audio = try platform.decoder.read(contentsOf: file)
         log(String(format: "%@: %.1f s at %.0f Hz", file.lastPathComponent, audio.duration, audio.sampleRate))
         if detects {
-            for sc in try platform.makeClassifier().classify([audio]) {
-                log(String(format: "  %5.1f s  speech %.2f  music %.2f", sc.time, sc.speech, sc.music))
+            for score in try platform.makeClassifier().classify([audio]) {
+                log(String(format: "  %5.1f s  speech %.2f  music %.2f", score.time, score.speech, score.music))
             }
         }
-        if let stt = platform.makeTranscriber?() {
-            guard await stt.prepare(install: false) else { throw UsageError("the whisper model didn't load") }
-            let phrases = try await stt.transcribe(samples: audio.channels[0], sampleRate: audio.sampleRate)
-            for p in phrases { log(String(format: "  %5.1f s  %@", p.start, p.text)) }
+        if let transcriber = platform.makeTranscriber?() {
+            guard await transcriber.prepare(install: false) else { throw UsageError("the whisper model didn't load") }
+            let phrases = try await transcriber.transcribe(samples: audio.channels[0], sampleRate: audio.sampleRate)
+            for phrase in phrases { log(String(format: "  %5.1f s  %@", phrase.start, phrase.text)) }
             log("sign-off: \(NewsPhrases.signOff(in: phrases, after: 0).map { String(format: "at %.1f s", $0) } ?? "not heard")")
         }
         exit(0)
@@ -168,9 +176,8 @@ do {
     let configStations = opt.config.appendingPathComponent("stations.json")
     let catalogue = try loadStations(bundled: opt.stations, config: configStations)
     let controller = Controller(catalogue: catalogue, settingsURL: try AppPaths.supportDirectory().appendingPathComponent("settings.json"),
-                                detects: detects, ambienceDirectory: opt.ambience, keepRunning: opt.keepRunning,
+                                detects: detects, ambienceDirectory: opt.ambience,
                                 castBase: (opt.castHost ?? LocalAddress.lan()).map { "http://\($0):\(opt.port)" }, sonosHosts: opt.sonosHosts)
-    if opt.keepRunning { log("keeping the live session running") }
     let web = opt.web
     let icon = (try? Data(contentsOf: web.appendingPathComponent("icon.png"))) ?? Data()
     let touchIcon = (try? Data(contentsOf: web.appendingPathComponent("touch-icon.png"))) ?? Data()
@@ -180,12 +187,10 @@ do {
     for name in WebFiles.names where files.url(name)?.deletingLastPathComponent().standardizedFileURL != web.standardizedFileURL {
         log("\(name) from \(files.url(name)?.path ?? "nowhere")")
     }
-    let oldPage = opt.data.appendingPathComponent("web/index.html")
-    if FileManager.default.fileExists(atPath: oldPage.path) {
-        log("ignoring \(oldPage.path), from an older push-web.sh: pages now come from \(opt.config.path)/web")
-    }
     try watchStations(bundled: opt.stations, config: configStations, controller: controller)
 
+    // Routes: a health check for Docker, static files (hls.js, the QR code library, icons), the stream the browsers
+    // and speakers play (no token, but only the playlist and segments), and the app itself under its token.
     let server = HTTPServer(port: opt.port, events: { req in
         guard RemoteRoutes.route(req, token: await controller.token, prefix: prefix) == .events else { return nil }
         return controller.events()

@@ -1,3 +1,8 @@
+//  FFmpeg.swift
+//  InterLudePortable
+//
+//  Audio decoding and AAC encoding by running ffmpeg, for platforms without Apple's frameworks.
+
 import Foundation
 import InterLudeCore
 
@@ -5,6 +10,7 @@ import InterLudeCore
 /// a 6.4 s segment decodes in a few tens of milliseconds, well inside the time the session has for it.
 public struct FFmpegDecoder: AudioDecoding {
     public let executable: URL
+    /// The rate audio is decoded to [Hz].
     public let sampleRate: Double
 
     public init(executable: URL, sampleRate: Double = 48000) {
@@ -25,16 +31,17 @@ public struct FFmpegDecoder: AudioDecoding {
     private static let pathSeparator: Character = ":", executableName = "ffmpeg"
     #endif
 
+    /// Decodes ADTS frames piped to ffmpeg.
     public func decode(adts frames: [Data]) throws -> PCMAudio? {
         guard !frames.isEmpty else { return nil }
         let pcm = try run(["-f", "aac", "-i", "pipe:0"], input: frames.reduce(into: Data()) { $0.append($1) })
         return pcm.frameCount > 0 ? pcm : nil
     }
 
+    /// Decodes a whole file.
     public func read(contentsOf url: URL) throws -> PCMAudio {
         try run(["-i", url.path], input: nil)
     }
-
     /// Runs ffmpeg with `inputArgs`, asking for 32-bit float stereo at `sampleRate`, and splits the result into channels.
     private func run(_ inputArgs: [String], input: Data?) throws -> PCMAudio {
         let out = try FFmpeg.run(executable, inputArgs + ["-f", "f32le", "-ac", "2", "-ar", String(Int(sampleRate)), "pipe:1"], input: input)
@@ -67,14 +74,18 @@ public enum FFmpeg {
         public var errorDescription: String? { "ffmpeg exited with \(status)\(message.isEmpty ? "" : ": \(message)")" }
     }
 
+    /// Runs ffmpeg quietly with `args`, feeding it `input` on stdin.
+    ///
+    /// - Returns: Everything ffmpeg wrote to stdout.
+    /// - Throws: `Failure`, with ffmpeg's error output, if it exits with an error.
     static func run(_ executable: URL, _ args: [String], input: Data?) throws -> Data {
-        let p = Process()
-        p.executableURL = executable
-        p.arguments = (input == nil ? ["-nostdin"] : []) + ["-hide_banner", "-loglevel", "error"] + args
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = (input == nil ? ["-nostdin"] : []) + ["-hide_banner", "-loglevel", "error"] + args
         let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
-        p.standardInput = input == nil ? FileHandle.nullDevice : stdin
-        p.standardOutput = stdout; p.standardError = stderr
-        try p.run()
+        process.standardInput = input == nil ? FileHandle.nullDevice : stdin
+        process.standardOutput = stdout; process.standardError = stderr
+        try process.run()
         // Feed stdin on another thread: ffmpeg writes output while it reads, and both pipes have small buffers.
         if let input {
             let writer = stdin.fileHandleForWriting
@@ -85,10 +96,10 @@ public enum FFmpeg {
         }
         let errors = Data.Collector(stderr.fileHandleForReading)
         let out = stdout.fileHandleForReading.readDataToEndOfFile()
-        p.waitUntilExit()
-        guard p.terminationStatus == 0 else {
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
             let message = String(decoding: errors.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            throw Failure(status: p.terminationStatus, message: message)
+            throw Failure(status: process.terminationStatus, message: message)
         }
         return out
     }
@@ -110,10 +121,10 @@ public enum FFmpeg {
 extension PCMAudio {
     /// Splits little-endian interleaved stereo Float32 into two channels. A trailing partial frame is dropped.
     init(interleavedStereo data: Data, sampleRate: Double) {
-        let n = data.count / 8
-        var left = [Float](repeating: 0, count: n), right = [Float](repeating: 0, count: n)
+        let frames = data.count / 8                         // two 4-byte samples per frame
+        var left = [Float](repeating: 0, count: frames), right = [Float](repeating: 0, count: frames)
         data.withUnsafeBytes { raw in
-            for i in 0..<n {
+            for i in 0..<frames {
                 left[i] = Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: i * 8, as: UInt32.self)))
                 right[i] = Float(bitPattern: UInt32(littleEndian: raw.loadUnaligned(fromByteOffset: i * 8 + 4, as: UInt32.self)))
             }

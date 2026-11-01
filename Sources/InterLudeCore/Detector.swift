@@ -1,52 +1,71 @@
-import Foundation
-
-// Deciding which stretches of audio are news.
+//  Detector.swift
+//  InterLudeCore
 //
-// The classifier produces speech and music scores every 1.5 s. A bulletin opens when speech is sustained near a
-// bulletin slot (or the news theme is heard) and closes when music returns or the newsreader signs off. The
-// detector runs about a delay ahead of the listener, so it can change its mind before anything is heard.
+//  Decides which stretches of audio are news. The classifier scores speech and music every 1.5 s. A bulletin opens
+//  when speech is sustained near a bulletin slot, or the news theme or the newsreader's opening is heard, and closes
+//  when music returns or the newsreader signs off. The detector runs about a delay ahead of the listener, so it can
+//  change its mind before anything is heard, and it is deterministic, so every mute can be explained from the log.
+
+import Foundation
 
 /// Every number the decision rule uses. Lives in the station profile file, never in code paths.
 public struct DetectorConfig: Codable, Sendable, Equatable {
+    /// Speech score at or above which a window counts as speech.
     public var speechThreshold = 0.6
+    /// Speech that must last this long near a slot to open a bulletin [s].
     public var sustainedSpeechSeconds = 20.0
+    /// The longest pause that still continues a run of speech [s].
     public var gapSeconds = 8.0
+    /// Music score at or above which a window counts as music.
     public var musicThreshold = 0.5
+    /// A window only counts as music if its speech score is also below this, since speech over a music bed scores
+    /// highly for both.
     public var speechCeilingForMusic = 0.5
+    /// Music that must last this long to close a bulletin [s].
     public var sustainedMusicSeconds = 5.0
+    /// Minutes past the hour when bulletins start.
     public var slotMinutes: [Int] = [0, 30]
-    /// A bulletin's speech starts from `slotBeforeMinutes` before to `slotAfterMinutes` after a slot minute.
-    /// Measured 6 Music starts were 26 to 46 s after the slot; a window of +-4 minutes muted a presenter talking over a song.
+    /// A bulletin's speech may start from `slotBeforeMinutes` before to `slotAfterMinutes` after a slot minute.
+    /// Measured 6 Music starts were 26 to 46 s after the slot; a window of ±4 minutes muted a presenter talking over
+    /// a song.
     public var slotBeforeMinutes = 1.0
     public var slotAfterMinutes = 3.0
+    /// Whether speech must start near a slot. Off, any sustained speech opens a bulletin.
     public var requireSlot = true
-    /// Mute only when the news ident matches. Used until a station's speech rule has been checked in shadow mode.
+    /// Mute only when the news theme matches. Used until a station's speech rule has been checked in shadow mode.
     public var identOnly = false
+    /// The longest a mute may last [s], a safety net in case a bulletin's end is never recognised.
     public var maxMuteSeconds = 480.0
+    /// Bulletins shorter than this are flagged as doubtful [s].
     public var minBulletinSeconds = 90.0
+    /// Bulletins longer than this are flagged as doubtful [s].
     public var maxBulletinSeconds = 360.0
+
     public init() {}
 
-    /// Tolerant decoding: profiles written by older versions keep working, with new fields at their defaults.
+    /// Decodes tolerantly: profiles written by older versions keep working, with new fields at their defaults.
     public init(from decoder: Decoder) throws {
         self.init()
-        let c = try decoder.container(keyedBy: Keys.self)
-        func get<T: Decodable>(_ k: Keys, _ v: inout T) { if let x = try? c.decodeIfPresent(T.self, forKey: k) { v = x } }
+        let container = try decoder.container(keyedBy: Keys.self)
+        func get<T: Decodable>(_ key: Keys, _ value: inout T) { if let found = try? container.decodeIfPresent(T.self, forKey: key) { value = found } }
         get(.speechThreshold, &speechThreshold); get(.sustainedSpeechSeconds, &sustainedSpeechSeconds); get(.gapSeconds, &gapSeconds)
         get(.musicThreshold, &musicThreshold); get(.speechCeilingForMusic, &speechCeilingForMusic); get(.sustainedMusicSeconds, &sustainedMusicSeconds)
         get(.slotMinutes, &slotMinutes); get(.slotBeforeMinutes, &slotBeforeMinutes); get(.slotAfterMinutes, &slotAfterMinutes)
         get(.requireSlot, &requireSlot); get(.identOnly, &identOnly); get(.maxMuteSeconds, &maxMuteSeconds)
         get(.minBulletinSeconds, &minBulletinSeconds); get(.maxBulletinSeconds, &maxBulletinSeconds)
     }
+
     enum Keys: String, CodingKey {
         case speechThreshold, sustainedSpeechSeconds, gapSeconds, musicThreshold, speechCeilingForMusic, sustainedMusicSeconds
         case slotMinutes, slotBeforeMinutes, slotAfterMinutes, requireSlot, identOnly, maxMuteSeconds, minBulletinSeconds, maxBulletinSeconds
     }
 }
 
-/// One classifier window in absolute time (Unix seconds, on the stream's clock).
+/// One classifier window in absolute time.
 public struct ScoreSample: Sendable, Codable, Equatable {
+    /// The window's start, on the stream's clock [s since 1970].
     public var time: Double
+    /// [s]
     public var duration: Double
     public var speech: Double
     public var music: Double
@@ -55,187 +74,242 @@ public struct ScoreSample: Sendable, Codable, Equatable {
     }
 }
 
-/// A stretch the detector believes is a bulletin. `falseStart` blocks are kept for the log but never muted.
+/// A stretch the detector believes is a bulletin.
 public struct NewsBlock: Sendable, Codable, Equatable, Identifiable {
     public var id = UUID()
+    /// On the stream's clock [s since 1970].
     public var start: Double
-    public var end: Double?          // nil while open
+    /// Nil while the bulletin is still going.
+    public var end: Double?
+    /// Closed by the longest-mute safety net rather than by music or a sign-off.
     public var timedOut = false
+    /// Its length was outside the usual range, so it isn't learned from.
     public var doubtful = false
+    /// Not news after all. Kept for the log, but never muted.
     public var falseStart = false
+    /// Why the block opened and closed, in words, for the event log.
     public var evidence = ""
-    /// The start was moved to the news theme.
+    /// The start was moved to the news theme or the newsreader's opening, so it is exact.
     public var anchoredOnIdent = false
     public var isOpen: Bool { end == nil }
     public init(start: Double, end: Double? = nil, evidence: String = "") { self.start = start; self.end = end; self.evidence = evidence }
 }
 
-/// Deterministic bulletin detector, so every mute can be explained from the event log.
+/// The bulletin detector.
 public struct NewsDetector: Sendable {
+    /// How far from a block's start a theme or opening may be heard and still belong to that block [s].
+    static let anchorReach = 120.0
+    /// After a sign-off, talk for this long does not start another block [s].
+    static let pauseAfterSignOff = 240.0
+    /// Score windows kept for re-judging after "Not news": about 10 minutes.
+    static let historyLength = 400
+
     public var config: DetectorConfig
     public private(set) var blocks: [NewsBlock] = []
+    /// When the current run of speech started, if one is going.
     private var runStart: Double?
+    /// The end of the latest speech window.
     private var lastSpeech: Double = 0
+    /// When the current run of music started, while a block is open.
     private var musicRunStart: Double?
     private var suppressUntilMusic = false
     private var history: [ScoreSample] = []
-    private var freshAfter: Double = 0     // speech before this time no longer counts towards a run
+    /// Speech before this time no longer counts towards a run.
+    private var freshAfter: Double = 0
     /// After "Not news", speech only counts again once there has been a clear break (music, a jingle, a pause).
     private var awaitingBreak = false
-    /// After the newsreader signs off, talk (trails, the presenter) does not start a new block for a while.
+    /// After the newsreader signs off, talk (trails, the presenter) does not start a new block until this time.
     private var openingsPausedUntil: Double = 0
     /// Recent runs of speech, so "News got through" can find the bulletin the listener just heard.
     public private(set) var speechRuns: [(start: Double, end: Double)] = []
 
     public init(config: DetectorConfig = DetectorConfig()) { self.config = config }
 
+    /// The block still going, if any.
     public var openBlock: NewsBlock? { blocks.last(where: \.isOpen) }
 
-    /// Whether `t` falls in a bulletin slot: from a minute before to three minutes after :00 or :30 by default.
-    func inSlot(_ t: Double) -> Bool {
+    /// Whether `time` falls in a bulletin slot: by default from a minute before to three minutes after :00 or :30.
+    func inSlot(_ time: Double) -> Bool {
         guard config.requireSlot else { return true }
-        let minute = (t.truncatingRemainder(dividingBy: 3600)) / 60
-        return config.slotMinutes.contains { m in
-            var d = minute - Double(m)                 // minutes after the slot, wrapped to -30...30
-            if d > 30 { d -= 60 } else if d < -30 { d += 60 }
-            return d >= -config.slotBeforeMinutes && d <= config.slotAfterMinutes
+        let minute = (time.truncatingRemainder(dividingBy: 3600)) / 60
+        return config.slotMinutes.contains { slot in
+            var after = minute - Double(slot)               // minutes after the slot, wrapped to −30...30
+            if after > 30 { after -= 60 } else if after < -30 { after += 60 }
+            return after >= -config.slotBeforeMinutes && after <= config.slotAfterMinutes
         }
     }
 
-    /// Feed windows in time order.
-    public mutating func ingest(_ s: ScoreSample) {
-        history.append(s)
-        if history.count > 400 { history.removeFirst(history.count - 400) }     // about 10 minutes
-        process(s)
+    /// The latest real block that a theme or opening heard at `time` belongs to: one that started within
+    /// `anchorReach` of it and hadn't ended by then.
+    private func blockIndex(around time: Double) -> Int? {
+        blocks.lastIndex { !$0.falseStart && abs($0.start - time) <= Self.anchorReach && ($0.end.map { time < $0 } ?? true) }
     }
 
-    private mutating func process(_ s: ScoreSample) {
-        if awaitingBreak && s.time >= freshAfter && s.speech < 0.4 { awaitingBreak = false }
-        let isSpeech = s.speech >= config.speechThreshold && s.time >= freshAfter && !awaitingBreak
-        let isMusic = s.music >= config.musicThreshold && s.speech < config.speechCeilingForMusic
+    /// Takes the next classifier window. Windows must arrive in time order.
+    public mutating func ingest(_ sample: ScoreSample) {
+        history.append(sample)
+        if history.count > Self.historyLength { history.removeFirst(history.count - Self.historyLength) }
+        process(sample)
+    }
+
+    private mutating func process(_ sample: ScoreSample) {
+        if awaitingBreak && sample.time >= freshAfter && sample.speech < 0.4 { awaitingBreak = false }
+        let isSpeech = sample.speech >= config.speechThreshold && sample.time >= freshAfter && !awaitingBreak
+        let isMusic = sample.music >= config.musicThreshold && sample.speech < config.speechCeilingForMusic
         if isMusic { suppressUntilMusic = false }
 
+        // Follow runs of speech, bridging pauses up to `gapSeconds`.
         if isSpeech {
-            if runStart == nil || s.time - lastSpeech > config.gapSeconds { runStart = s.time }
-            lastSpeech = s.time + s.duration
-            let start = runStart ?? s.time
+            if runStart == nil || sample.time - lastSpeech > config.gapSeconds { runStart = sample.time }
+            lastSpeech = sample.time + sample.duration
+            let start = runStart ?? sample.time
             if let last = speechRuns.last, abs(last.start - start) < 0.001 { speechRuns[speechRuns.count - 1].end = lastSpeech }
             else { speechRuns.append((start, lastSpeech)); if speechRuns.count > 30 { speechRuns.removeFirst() } }
-        } else if runStart != nil, s.time - lastSpeech > config.gapSeconds { runStart = nil }
+        } else if runStart != nil, sample.time - lastSpeech > config.gapSeconds { runStart = nil }
 
-        if let i = blocks.lastIndex(where: \.isOpen) {
-            if isMusic { if musicRunStart == nil { musicRunStart = s.time } } else { musicRunStart = nil }
-            if let m = musicRunStart, s.time + s.duration - m >= config.sustainedMusicSeconds {
-                close(i, at: m + s.duration / 2, timedOut: false, why: "music returned")
-            } else if s.time - blocks[i].start > config.maxMuteSeconds {
-                close(i, at: s.time, timedOut: true, why: "longest mute reached")
+        // An open block closes when music has lasted long enough, or when it has gone on too long.
+        if let open = blocks.lastIndex(where: \.isOpen) {
+            if isMusic { if musicRunStart == nil { musicRunStart = sample.time } } else { musicRunStart = nil }
+            if let musicStart = musicRunStart, sample.time + sample.duration - musicStart >= config.sustainedMusicSeconds {
+                close(open, at: musicStart + sample.duration / 2, timedOut: false, why: "music returned")
+            } else if sample.time - blocks[open].start > config.maxMuteSeconds {
+                close(open, at: sample.time, timedOut: true, why: "longest mute reached")
             }
             return
         }
+
+        // Otherwise sustained speech that started near a slot opens one.
         musicRunStart = nil
-        guard !config.identOnly, !suppressUntilMusic, s.time >= openingsPausedUntil, let r = runStart, lastSpeech - r >= config.sustainedSpeechSeconds, inSlot(r) else { return }
-        blocks.append(NewsBlock(start: r, evidence: "speech>=\(config.speechThreshold) for \(Int(lastSpeech - r))s near a slot"))
+        guard !config.identOnly, !suppressUntilMusic, sample.time >= openingsPausedUntil, let start = runStart,
+              lastSpeech - start >= config.sustainedSpeechSeconds, inSlot(start) else { return }
+        blocks.append(NewsBlock(start: start, evidence: "speech>=\(config.speechThreshold) for \(Int(lastSpeech - start))s near a slot"))
     }
 
-    private mutating func close(_ i: Int, at end: Double, timedOut: Bool, why: String) {
-        blocks[i].end = end
-        blocks[i].timedOut = timedOut
-        let len = end - blocks[i].start
-        blocks[i].doubtful = len < config.minBulletinSeconds || len > config.maxBulletinSeconds
-        blocks[i].evidence += "; closed: \(why), \(Int(len))s"
+    private mutating func close(_ index: Int, at end: Double, timedOut: Bool, why: String) {
+        blocks[index].end = end
+        blocks[index].timedOut = timedOut
+        let length = end - blocks[index].start
+        blocks[index].doubtful = length < config.minBulletinSeconds || length > config.maxBulletinSeconds
+        blocks[index].evidence += "; closed: \(why), \(Int(length))s"
         runStart = nil; musicRunStart = nil
     }
 
-    /// The news theme was heard at `t` (already moved back to where the theme begins).
+    /// The news theme was heard.
+    ///
     /// Inside a block that speech opened, the start moves to the theme, so the presenter's handover is not muted.
-    /// Otherwise it opens a block, without waiting for sustained speech.
-    public mutating func identMatch(at t: Double, score: Float) {
-        guard inSlot(t) else { return }
-        if let i = blocks.lastIndex(where: { !$0.falseStart && abs($0.start - t) <= 120 && ($0.end.map { t < $0 } ?? true) }) {
-            guard !blocks[i].anchoredOnIdent else { return }
-            blocks[i].evidence += "; start moved \(Int(t - blocks[i].start)) s to the news theme (\(String(format: "%.2f", score)))"
-            blocks[i].start = t
-            blocks[i].anchoredOnIdent = true
+    /// Otherwise, near a slot, it opens a block without waiting for sustained speech.
+    ///
+    /// - Parameters:
+    ///   - time: Where the theme begins, already moved back by `IdentMatcher.leadSeconds` [s since 1970].
+    ///   - score: The match's score, for the log.
+    public mutating func identMatch(at time: Double, score: Float) {
+        guard inSlot(time) else { return }
+        if let index = blockIndex(around: time) {
+            guard !blocks[index].anchoredOnIdent else { return }
+            blocks[index].evidence += "; start moved \(Int(time - blocks[index].start)) s to the news theme (\(String(format: "%.2f", score)))"
+            blocks[index].start = time
+            blocks[index].anchoredOnIdent = true
             return
         }
         guard openBlock == nil, !suppressUntilMusic else { return }
-        if let last = blocks.last, let e = last.end, t - e < 30 { return }
-        var b = NewsBlock(start: t, evidence: "news theme heard (\(String(format: "%.2f", score)))")
-        b.anchoredOnIdent = true
-        blocks.append(b)
+        if let last = blocks.last, let end = last.end, time - end < 30 { return }      // the tail of the last bulletin
+        var block = NewsBlock(start: time, evidence: "news theme heard (\(String(format: "%.2f", score)))")
+        block.anchoredOnIdent = true
+        blocks.append(block)
         runStart = nil
     }
 
-    /// The newsreader's opening was heard: like the theme, it marks where the bulletin really starts.
-    public mutating func anchorStart(at t: Double, why: String) {
-        guard let i = blocks.lastIndex(where: { !$0.falseStart && abs($0.start - t) <= 120 && ($0.end.map { t < $0 } ?? true) }),
-              !blocks[i].anchoredOnIdent else { return }
-        blocks[i].evidence += "; start moved \(Int(t - blocks[i].start)) s: \(why)"
-        blocks[i].start = t
-        blocks[i].anchoredOnIdent = true
+    /// Moves the start of the block around `time` there, as the theme does, unless its start is already exact.
+    ///
+    /// - Parameters:
+    ///   - time: Where the bulletin really starts [s since 1970].
+    ///   - why: For the log.
+    public mutating func anchorStart(at time: Double, why: String) {
+        guard let index = blockIndex(around: time), !blocks[index].anchoredOnIdent else { return }
+        blocks[index].evidence += "; start moved \(Int(time - blocks[index].start)) s: \(why)"
+        blocks[index].start = time
+        blocks[index].anchoredOnIdent = true
     }
 
-    /// The newsreader's opening was heard at `t`. Inside a block it anchors the start; otherwise, near a slot, it opens
-    /// one, as the theme does. This catches a bulletin the presenter talked straight into, where the speech began
-    /// before the slot and so never counted as starting near one.
-    public mutating func newsreaderOpening(at t: Double) {
-        if blocks.contains(where: { !$0.falseStart && abs($0.start - t) <= 120 && ($0.end.map { t < $0 } ?? true) }) {
-            anchorStart(at: t, why: "newsreader's opening heard"); return
-        }
-        guard inSlot(t), openBlock == nil, !config.identOnly else { return }
-        var b = NewsBlock(start: t, evidence: "newsreader's opening heard near a slot")
-        b.anchoredOnIdent = true
-        blocks.append(b)
+    /// The newsreader's opening was heard.
+    ///
+    /// Inside a block it anchors the start; otherwise, near a slot, it opens one, as the theme does. This catches a
+    /// bulletin the presenter talked straight into, where the speech began before the slot and so never counted as
+    /// starting near one.
+    ///
+    /// - Parameter time: Where the opening starts [s since 1970].
+    public mutating func newsreaderOpening(at time: Double) {
+        if blockIndex(around: time) != nil { anchorStart(at: time, why: "newsreader's opening heard"); return }
+        guard inSlot(time), openBlock == nil, !config.identOnly else { return }
+        var block = NewsBlock(start: time, evidence: "newsreader's opening heard near a slot")
+        block.anchoredOnIdent = true
+        blocks.append(block)
         runStart = nil
     }
 
-    /// The newsreader signed off at `t`: the bulletin ends there, even if the presenter talks on.
-    /// Talk for the next four minutes does not start another block.
-    public mutating func endBlock(at t: Double, why: String) {
-        guard let i = blocks.lastIndex(where: { !$0.falseStart && $0.start < t && ($0.end.map { $0 > t } ?? true) }) else { return }
-        if blocks[i].isOpen { close(i, at: t, timedOut: false, why: why) }
+    /// The newsreader signed off: the bulletin ends there, even if the presenter talks on, and talk for the next
+    /// `pauseAfterSignOff` seconds does not start another block.
+    ///
+    /// - Parameters:
+    ///   - time: The end of the sign-off [s since 1970].
+    ///   - why: For the log.
+    public mutating func endBlock(at time: Double, why: String) {
+        guard let index = blocks.lastIndex(where: { !$0.falseStart && $0.start < time && ($0.end.map { $0 > time } ?? true) }) else { return }
+        if blocks[index].isOpen { close(index, at: time, timedOut: false, why: why) }
         else {
-            blocks[i].evidence += "; end moved \(Int((blocks[i].end ?? t) - t)) s earlier: \(why)"
-            blocks[i].end = t
+            blocks[index].evidence += "; end moved \(Int((blocks[index].end ?? time) - time)) s earlier: \(why)"
+            blocks[index].end = time
         }
-        openingsPausedUntil = t + 240
+        openingsPausedUntil = time + Self.pauseAfterSignOff
     }
 
-    /// "Not news": the block ends at `t`, the point the listener has reached. The detector is already about a delay
-    /// ahead of the listener, so audio after `t` is judged again from scratch. Talk that simply carries on stays
-    /// unmuted (the listener said it was not news), but after a clear break, such as a jingle or music, sustained
-    /// speech can start a new block, so a bulletin that follows presenter chat is still caught.
-    public mutating func rejectOpenBlock(at t: Double, why: String = "rejected by user") {
-        guard let i = blocks.lastIndex(where: \.isOpen) else { return }
-        blocks[i].falseStart = true
-        close(i, at: t, timedOut: false, why: why)
+    /// "Not news": the open block ends where the listener has reached.
+    ///
+    /// The detector is already about a delay ahead of the listener, so audio after `time` is judged again from
+    /// scratch. Talk that simply carries on stays unmuted (the listener said it was not news), but after a clear
+    /// break, such as a jingle or music, sustained speech can start a new block, so a bulletin that follows
+    /// presenter chat is still caught.
+    ///
+    /// - Parameters:
+    ///   - time: Where the listener has reached [s since 1970].
+    ///   - why: For the log.
+    public mutating func rejectOpenBlock(at time: Double, why: String = "rejected by user") {
+        guard let index = blocks.lastIndex(where: \.isOpen) else { return }
+        blocks[index].falseStart = true
+        close(index, at: time, timedOut: false, why: why)
         suppressUntilMusic = false
-        freshAfter = t
+        freshAfter = time
         awaitingBreak = true
         runStart = nil; musicRunStart = nil
-        for s in history where s.time >= t { process(s) }
+        for sample in history where sample.time >= time { process(sample) }
     }
 
     /// "Wasn't news" on a recent block.
     public mutating func markFalseStart(id: UUID) {
-        if let i = blocks.firstIndex(where: { $0.id == id }) { blocks[i].falseStart = true }
+        if let index = blocks.firstIndex(where: { $0.id == id }) { blocks[index].falseStart = true }
     }
 
-    /// "News got through": the listener has just heard a bulletin that was not muted. The detector is about a delay ahead
-    /// of the listener, so look at speech the listener has reached (`listenerTime`), not the newest speech analysed.
-    /// Prefers the latest run of at least 30 s, since a bulletin is longer than presenter chat.
+    /// "News got through": the listener has just heard a bulletin that was not muted.
+    ///
+    /// The detector is about a delay ahead of the listener, so this looks at speech the listener has reached, not the
+    /// newest speech analysed, and prefers the latest run of at least 30 s, since a bulletin is longer than chat.
+    ///
+    /// - Parameter listenerTime: What the listener is hearing now [s since 1970].
+    /// - Returns: The block added, or nil if no speech has been heard.
     @discardableResult
     public mutating func markNewsHeard(listenerTime: Double) -> NewsBlock? {
         let heard = speechRuns.filter { $0.start <= listenerTime }
-        guard let r = heard.last(where: { $0.end - $0.start >= 30 }) ?? heard.last else { return nil }
-        let b = NewsBlock(start: r.start, end: r.end, evidence: "marked by user")
-        blocks.append(b)
-        return b
+        guard let run = heard.last(where: { $0.end - $0.start >= 30 }) ?? heard.last else { return nil }
+        let block = NewsBlock(start: run.start, end: run.end, evidence: "marked by user")
+        blocks.append(block)
+        return block
     }
 
-    /// Whether the audio of the segment [start, start+6.4) should be silenced.
+    /// Whether the segment starting at `segmentStart` overlaps any real block, and so should be silenced.
+    ///
+    /// - Parameter segmentStart: On the stream's clock [s since 1970].
     public func isNews(segmentStart: Double) -> Bool {
         let end = segmentStart + segmentDuration
-        return blocks.contains { b in !b.falseStart && b.start < end && (b.end ?? .infinity) > segmentStart }
+        return blocks.contains { !$0.falseStart && $0.start < end && ($0.end ?? .infinity) > segmentStart }
     }
 }

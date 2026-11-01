@@ -1,3 +1,8 @@
+//  SonosTests.swift
+//  InterLudeCoreTests
+//
+//  Sonos: reading the household's topology, the SOAP messages, and the AAC stream speakers play.
+
 import Testing
 import Foundation
 @testable import InterLudeCore
@@ -90,29 +95,5 @@ import Foundation
         for await _ in stream { chunks += 1 }
         #expect(chunks == 1)
         #expect(polls.lock.withLock { polls.count } == 3)
-    }
-
-    /// Plays the AAC stream at INTERLUDE_LIVE_SONOS_URL on the Sonos speaker at INTERLUDE_LIVE_SONOS for 20 seconds,
-    /// checking that it plays, then stops it.
-    @Test(.enabled(if: ProcessInfo.processInfo.environment["INTERLUDE_LIVE_SONOS"] != nil))
-    func playsOnARealSonos() async throws {
-        let env = ProcessInfo.processInfo.environment
-        let groups = await Sonos.groups(hosts: [env["INTERLUDE_LIVE_SONOS"]!])
-        print("groups", groups.map { "\($0.name) [\($0.detail)] \($0.host)" })
-        let g = try #require(groups.first)
-        let url = try #require(env["INTERLUDE_LIVE_SONOS_URL"].flatMap(URL.init(string:)))
-        let c = SonosController(group: g)
-        try await c.connect()
-        try await c.load(url: url, title: "InterLude test")
-        var states: [String] = []
-        for _ in 0..<10 {
-            try await Task.sleep(for: .seconds(2))
-            let info = try await Sonos.call(host: g.host, port: g.port, .avTransport, "GetTransportInfo", ["InstanceID": "0"])
-            states.append(Sonos.value("CurrentTransportState", in: info) ?? "?")
-        }
-        let media = try await Sonos.call(host: g.host, port: g.port, .avTransport, "GetMediaInfo", ["InstanceID": "0"])
-        print("states", states, "uri", Sonos.value("CurrentURI", in: media) ?? "?")
-        await c.stop()
-        #expect(states.suffix(3).allSatisfy { $0 == "PLAYING" })
     }
 }

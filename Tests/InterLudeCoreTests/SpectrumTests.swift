@@ -1,3 +1,8 @@
+//  SpectrumTests.swift
+//  InterLudeCoreTests
+//
+//  The panel's spectrum and the tape that keeps it in step with the player.
+
 import Testing
 import Foundation
 @testable import InterLudeCore

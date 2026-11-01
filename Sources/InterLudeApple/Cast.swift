@@ -1,243 +1,266 @@
+//  Cast.swift
+//  InterLudeApple
+//
+//  Chromecast on the Mac: finding Cast devices with Bonjour, and a minimal Cast v2 sender over Network.framework.
+//  The wire format is shared with the Linux server's sender (InterLudeCast) through `CastWire`.
+
 import Foundation
 import Network
 import InterLudeCore
 
-// MARK: Public interface
+// MARK: Discovery
 
+/// A Chromecast or Cast group found with Bonjour.
 public struct CastDevice: Identifiable, Sendable, Hashable {
-    public var id: String          // Bonjour service name
+    /// The Bonjour service name, which stays the same across restarts.
+    public var id: String
+    /// The name set in the Google Home app.
     public var name: String
+    /// The model, such as "Chromecast Audio" or "Google Cast Group".
     public var model: String
     public var isGroup: Bool { model == "Google Cast Group" }
     public var endpoint: NWEndpoint
     public static func == (a: CastDevice, b: CastDevice) -> Bool { a.id == b.id }
-    public func hash(into h: inout Hasher) { h.combine(id) }
+    public func hash(into hasher: inout Hasher) { hasher.combine(id) }
 }
 
-// MARK: Discovery
-
+/// Follows the Cast devices on the network.
 public final class CastDiscovery: @unchecked Sendable {
+    /// `kDNSServiceErr_PolicyDenied`: macOS has refused the app local network access.
+    private static let policyDenied: Int32 = -65570
+
     private var browser: NWBrowser?
     private let queue = DispatchQueue(label: "interlude.cast.discovery")
+    /// The devices found, sorted by name, each time the list changes.
     public let updates: AsyncStream<[CastDevice]>
-    private let cont: AsyncStream<[CastDevice]>.Continuation
-
+    private let updatesContinuation: AsyncStream<[CastDevice]>.Continuation
     /// Yields true when macOS has refused local network access.
     public let permission: AsyncStream<Bool>
-    private let permCont: AsyncStream<Bool>.Continuation
+    private let permissionContinuation: AsyncStream<Bool>.Continuation
 
     public init() {
-        (updates, cont) = AsyncStream.makeStream(of: [CastDevice].self, bufferingPolicy: .bufferingNewest(1))
-        (permission, permCont) = AsyncStream.makeStream(of: Bool.self, bufferingPolicy: .bufferingNewest(1))
+        (updates, updatesContinuation) = AsyncStream.makeStream(of: [CastDevice].self, bufferingPolicy: .bufferingNewest(1))
+        (permission, permissionContinuation) = AsyncStream.makeStream(of: Bool.self, bufferingPolicy: .bufferingNewest(1))
     }
 
     public func start() {
-        let b = NWBrowser(for: .bonjourWithTXTRecord(type: "_googlecast._tcp", domain: nil), using: .tcp)
-        b.browseResultsChangedHandler = { [cont] results, _ in
-            var out: [CastDevice] = []
-            for r in results {
-                guard case .service(let name, _, _, _) = r.endpoint else { continue }
-                var fn = name, md = ""
-                if case .bonjour(let txt) = r.metadata {
-                    fn = txt["fn"] ?? name; md = txt["md"] ?? ""
+        let browser = NWBrowser(for: .bonjourWithTXTRecord(type: "_googlecast._tcp", domain: nil), using: .tcp)
+        browser.browseResultsChangedHandler = { [updatesContinuation] results, _ in
+            var devices: [CastDevice] = []
+            for result in results {
+                guard case .service(let name, _, _, _) = result.endpoint else { continue }
+                // The TXT record carries the friendly name (fn) and the model (md).
+                var friendlyName = name, model = ""
+                if case .bonjour(let txt) = result.metadata {
+                    friendlyName = txt["fn"] ?? name; model = txt["md"] ?? ""
                 }
-                out.append(CastDevice(id: name, name: fn, model: md, endpoint: r.endpoint))
+                devices.append(CastDevice(id: name, name: friendlyName, model: model, endpoint: result.endpoint))
             }
-            cont.yield(out.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
+            updatesContinuation.yield(devices.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending })
         }
-        b.stateUpdateHandler = { [permCont] st in
-            if case .waiting(let e) = st, case .dns(let code) = e, code == -65570 { permCont.yield(true) }     // kDNSServiceErr_PolicyDenied
-            if case .failed = st { permCont.yield(true) }
+        browser.stateUpdateHandler = { [permissionContinuation] state in
+            if case .waiting(let error) = state, case .dns(let code) = error, code == Self.policyDenied { permissionContinuation.yield(true) }
+            if case .failed = state { permissionContinuation.yield(true) }
         }
-        b.start(queue: queue)
-        browser = b
+        browser.start(queue: queue)
+        self.browser = browser
     }
 
     public func stop() { browser?.cancel(); browser = nil }
 }
 
-struct JSONBox: @unchecked Sendable { let v: [String: Any]; init(_ v: [String: Any]) { self.v = v } }
+/// A JSON message, passed between threads. Only ever read after it is made.
+struct JSONBox: @unchecked Sendable { let value: [String: Any]; init(_ value: [String: Any]) { self.value = value } }
 
-// MARK: Direct implementation
+// MARK: Sender
 
 /// A minimal Cast v2 sender: connection, heartbeat, launch of the Default Media Receiver, load, volume and stop.
+///
+/// Everything mutable is touched only on `queue`, apart from the reported position, which has its own lock.
 public final class DirectCastController: CastController, @unchecked Sendable {
     private let device: CastDevice
     private let queue = DispatchQueue(label: "interlude.cast.conn")
-    private var conn: NWConnection?
+    private var connection: NWConnection?
+    /// Bytes read but not yet framed.
     private var buffer = [UInt8]()
     private var requestId = 0
+    /// Answers awaited, by request ID.
     private var waiters: [Int: @Sendable (Result<JSONBox, Error>) -> Void] = [:]
     private var transportId: String?
     private var sessionId: String?
     private var heartbeat: DispatchSourceTimer?
+    /// Whether the receiver has reported its status once, after which a status without our session means another
+    /// app has taken over.
     private var launched = false
     private let positionLock = NSLock()
+    /// The device's last reported position [s], whether it was playing, and when it said so.
     private var reported: (time: Double, playing: Bool, at: Date)?
     private var statusTimer: DispatchSourceTimer?
-    private let eventCont: AsyncStream<CastEvent>.Continuation
+    private let eventContinuation: AsyncStream<CastEvent>.Continuation
     public let events: AsyncStream<CastEvent>
 
-    static let appId = "CC1AD845"
-    enum NS { static let connection = "urn:x-cast:com.google.cast.tp.connection", heartbeat = "urn:x-cast:com.google.cast.tp.heartbeat",
-              receiver = "urn:x-cast:com.google.cast.receiver", media = "urn:x-cast:com.google.cast.media" }
+    private typealias Namespace = CastWire.Namespace
 
     public init(device: CastDevice) {
         self.device = device
-        (events, eventCont) = AsyncStream.makeStream(of: CastEvent.self)
+        (events, eventContinuation) = AsyncStream.makeStream(of: CastEvent.self)
     }
 
+    /// Opens a TLS connection and launches the Default Media Receiver.
     public func connect() async throws {
         let tls = NWProtocolTLS.Options()
-        sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, _, done in done(true) }, queue)   // devices use self-signed certificates
-        let params = NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
-        let c = NWConnection(to: device.endpoint, using: params)
-        conn = c
-        try await withCheckedThrowingContinuation { (k: CheckedContinuation<Void, Error>) in
+        // Cast devices present self-signed certificates, so none can be verified.
+        sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, _, done in done(true) }, queue)
+        let connection = NWConnection(to: device.endpoint, using: NWParameters(tls: tls, tcp: NWProtocolTCP.Options()))
+        self.connection = connection
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             final class Once: @unchecked Sendable { var done = false }
             let once = Once()      // only touched on `queue`
-            c.stateUpdateHandler = { [weak self] st in
-                switch st {
-                case .ready: if !once.done { once.done = true; k.resume() }
-                case .failed(let e): if !once.done { once.done = true; k.resume(throwing: e) } else { self?.eventCont.yield(.lost) }
-                case .cancelled: if !once.done { once.done = true; k.resume(throwing: CastError.closed) }
+            connection.stateUpdateHandler = { [weak self] state in
+                switch state {
+                case .ready: if !once.done { once.done = true; continuation.resume() }
+                case .failed(let error):
+                    if !once.done { once.done = true; continuation.resume(throwing: error) } else { self?.eventContinuation.yield(.lost) }
+                case .cancelled: if !once.done { once.done = true; continuation.resume(throwing: CastError.closed) }
                 default: break
                 }
             }
-            c.start(queue: queue)
+            connection.start(queue: queue)
         }
         receiveLoop()
-        send(NS.connection, to: "receiver-0", ["type": "CONNECT"])
+        send(Namespace.connection, to: CastWire.platformReceiver, ["type": "CONNECT"])
         startHeartbeat()
-        // Launch the Default Media Receiver and wait for its transport.
-        let status = try await request(NS.receiver, to: "receiver-0", ["type": "LAUNCH", "appId": Self.appId], timeout: 15)
-        try adopt(status: status)
+        let status = try await request(Namespace.receiver, to: CastWire.platformReceiver,
+                                       ["type": "LAUNCH", "appId": CastWire.defaultReceiverAppId], timeout: 15)
+        guard let app = CastWire.defaultReceiver(in: status) else { throw CastError.rejected("receiver did not start") }
+        transportId = app.transportId; sessionId = app.sessionId
+        send(Namespace.connection, to: app.transportId, ["type": "CONNECT"])
     }
 
-    private func adopt(status: [String: Any]) throws {
-        guard let s = status["status"] as? [String: Any], let apps = s["applications"] as? [[String: Any]],
-              let app = apps.first(where: { $0["appId"] as? String == Self.appId }),
-              let t = app["transportId"] as? String, let sid = app["sessionId"] as? String else { throw CastError.rejected("receiver did not start") }
-        transportId = t; sessionId = sid
-        send(NS.connection, to: t, ["type": "CONNECT"])
-    }
-
+    /// Loads the playlist, trying each HLS segment format in turn until the receiver accepts one.
     public func load(url: URL, title: String) async throws {
-        guard let t = transportId, let sid = sessionId else { throw CastError.closed }
+        guard let transport = transportId, let session = sessionId else { throw CastError.closed }
         var lastError: Error = CastError.timeout
-        for fmt in ["ts_aac", "ts", ""] {
-            var media: [String: Any] = ["contentId": url.absoluteString, "contentType": "application/x-mpegURL", "streamType": "LIVE",
-                                        "metadata": ["metadataType": 3, "title": title]]
-            if !fmt.isEmpty { media["hlsSegmentFormat"] = fmt }
+        for format in CastWire.segmentFormats {
             do {
-                let r = try await request(NS.media, to: t, ["type": "LOAD", "sessionId": sid, "media": media, "autoplay": true, "currentTime": 0], timeout: 20)
-                if let type = r["type"] as? String, type == "LOAD_FAILED" || type == "INVALID_REQUEST" { throw CastError.rejected(type) }
+                let answer = try await request(Namespace.media, to: transport,
+                                               ["type": "LOAD", "sessionId": session, "autoplay": true, "currentTime": 0,
+                                                "media": CastWire.loadMedia(url: url, title: title, segmentFormat: format)], timeout: 20)
+                if let type = answer["type"] as? String, type == "LOAD_FAILED" || type == "INVALID_REQUEST" { throw CastError.rejected(type) }
                 startStatusPolling()
                 return
             } catch { lastError = error }
         }
-        eventCont.yield(.loadFailed(lastError.localizedDescription))
+        eventContinuation.yield(.loadFailed(lastError.localizedDescription))
         throw lastError
     }
 
-    /// The device's last reported position, carried forward by our own clock while it is playing.
+    /// The device's last reported position, carried forward by our own clock while it is playing [s].
     public var playbackSeconds: Double? {
         positionLock.lock(); defer { positionLock.unlock() }
-        guard let r = reported else { return nil }
-        return r.playing ? r.time + Date().timeIntervalSince(r.at) : r.time
+        guard let reported else { return nil }
+        return reported.playing ? reported.time + Date().timeIntervalSince(reported.at) : reported.time
     }
 
     /// Asks the receiver where it is once a second. The answers arrive as MEDIA_STATUS messages.
     private func startStatusPolling() {
-        let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now() + 1, repeating: 1)
-        t.setEventHandler { [weak self] in
-            guard let self, let tid = self.transportId else { return }
-            self.send(NS.media, to: tid, ["type": "GET_STATUS", "requestId": self.nextIdUnlocked()])
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 1, repeating: 1)
+        timer.setEventHandler { [weak self] in
+            guard let self, let transport = self.transportId else { return }
+            self.send(Namespace.media, to: transport, ["type": "GET_STATUS", "requestId": self.nextIdOnQueue()])
         }
-        t.resume(); statusTimer = t
+        timer.resume(); statusTimer = timer
     }
 
     public func setVolume(_ level: Double) async {
-        send(NS.receiver, to: "receiver-0", ["type": "SET_VOLUME", "volume": ["level": max(0, min(1, level))], "requestId": nextId()])
+        send(Namespace.receiver, to: CastWire.platformReceiver, ["type": "SET_VOLUME", "volume": ["level": max(0, min(1, level))], "requestId": nextId()])
     }
 
     public func stop() async {
-        if let sid = sessionId { send(NS.receiver, to: "receiver-0", ["type": "STOP", "sessionId": sid, "requestId": nextId()]) }
-        try? await Task.sleep(for: .milliseconds(200))
+        if let session = sessionId {
+            send(Namespace.receiver, to: CastWire.platformReceiver, ["type": "STOP", "sessionId": session, "requestId": nextId()])
+        }
+        try? await Task.sleep(for: .milliseconds(200))          // let the STOP go out before the connection closes
         heartbeat?.cancel(); heartbeat = nil
         statusTimer?.cancel(); statusTimer = nil
-        conn?.cancel(); conn = nil
-        eventCont.finish()
+        connection?.cancel(); connection = nil
+        eventContinuation.finish()
     }
 
     // MARK: Plumbing
 
     private func nextId() -> Int { queue.sync { requestId += 1; return requestId } }
     /// For callers already running on `queue`, where `sync` would deadlock.
-    private func nextIdUnlocked() -> Int { requestId += 1; return requestId }
+    private func nextIdOnQueue() -> Int { requestId += 1; return requestId }
 
-    private func send(_ ns: String, to dest: String, _ obj: [String: Any]) {
-        guard let d = try? JSONSerialization.data(withJSONObject: obj), let s = String(data: d, encoding: .utf8) else { return }
-        sendRaw(ns, to: dest, s)
+    private func send(_ namespace: String, to destination: String, _ message: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: message), let json = String(data: data, encoding: .utf8) else { return }
+        sendRaw(namespace, to: destination, json)
     }
 
-    private func sendRaw(_ ns: String, to dest: String, _ json: String) {
-        conn?.send(content: CastWire.encode(source: "sender-0", destination: dest, namespace: ns, payload: json), completion: .contentProcessed { _ in })
+    private func sendRaw(_ namespace: String, to destination: String, _ json: String) {
+        connection?.send(content: CastWire.encode(source: CastWire.sender, destination: destination, namespace: namespace, payload: json),
+                         completion: .contentProcessed { _ in })
     }
 
-    private func request(_ ns: String, to dest: String, _ obj: [String: Any], timeout: Double) async throws -> [String: Any] {
-        var obj = obj
-        let id = nextId(); obj["requestId"] = id
-        guard let d = try? JSONSerialization.data(withJSONObject: obj), let json = String(data: d, encoding: .utf8) else { throw CastError.rejected("bad request") }
-        let box = try await withCheckedThrowingContinuation { (k: CheckedContinuation<JSONBox, Error>) in
+    /// Sends a message with a fresh request ID and waits for the answer that carries it.
+    ///
+    /// - Parameter timeout: [s]
+    private func request(_ namespace: String, to destination: String, _ message: [String: Any], timeout: Double) async throws -> [String: Any] {
+        var message = message
+        let id = nextId(); message["requestId"] = id
+        guard let data = try? JSONSerialization.data(withJSONObject: message), let json = String(data: data, encoding: .utf8) else {
+            throw CastError.rejected("bad request")
+        }
+        let box = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<JSONBox, Error>) in
             queue.async {
-                self.waiters[id] = { r in k.resume(with: r) }
-                self.sendRaw(ns, to: dest, json)
+                self.waiters[id] = { continuation.resume(with: $0) }
+                self.sendRaw(namespace, to: destination, json)
                 self.queue.asyncAfter(deadline: .now() + timeout) { self.waiters.removeValue(forKey: id)?(.failure(CastError.timeout)) }
             }
         }
-        return box.v
+        return box.value
     }
 
+    /// Pings the device every 5 s, which it expects of a live sender.
     private func startHeartbeat() {
-        let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now() + 5, repeating: 5)
-        t.setEventHandler { [weak self] in self?.send(NS.heartbeat, to: "receiver-0", ["type": "PING"]) }
-        t.resume(); heartbeat = t
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in self?.send(Namespace.heartbeat, to: CastWire.platformReceiver, ["type": "PING"]) }
+        timer.resume(); heartbeat = timer
     }
 
     private func receiveLoop() {
-        conn?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isDone, err in
+        connection?.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isDone, error in
             guard let self else { return }
-            if let data { self.buffer += data; self.drain() }
-            if err != nil || isDone { self.eventCont.yield(.lost); return }
+            if let data { self.buffer += data; self.handleMessages() }
+            if error != nil || isDone { self.eventContinuation.yield(.lost); return }
             self.receiveLoop()
         }
     }
 
-    private func drain() {
-        while buffer.count >= 4 {
-            let len = Int(buffer[0]) << 24 | Int(buffer[1]) << 16 | Int(buffer[2]) << 8 | Int(buffer[3])
-            guard buffer.count >= 4 + len else { return }
-            let frame = Array(buffer[4..<(4 + len)]); buffer.removeFirst(4 + len)
-            guard let m = CastWire.decode(frame), let d = m.payload.data(using: .utf8),
-                  let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { continue }
-            let type = o["type"] as? String
-            if m.namespace == NS.heartbeat, type == "PING" { send(NS.heartbeat, to: m.source, ["type": "PONG"]); continue }
-            if m.namespace == NS.connection, type == "CLOSE" { eventCont.yield(.lost); continue }
-            if m.namespace == NS.receiver, type == "RECEIVER_STATUS", launched,
-               let s = o["status"] as? [String: Any] {
-                let apps = (s["applications"] as? [[String: Any]]) ?? []
-                if !apps.contains(where: { $0["appId"] as? String == Self.appId && $0["sessionId"] as? String == sessionId }) { eventCont.yield(.takenOver) }
+    /// Acts on every complete message received: answers pings, notices closing and takeovers, records the position,
+    /// and hands answers to their waiters.
+    private func handleMessages() {
+        for message in CastWire.takeMessages(from: &buffer) {
+            guard let data = message.payload.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+            let type = object["type"] as? String
+            if message.namespace == Namespace.heartbeat, type == "PING" { send(Namespace.heartbeat, to: message.source, ["type": "PONG"]); continue }
+            if message.namespace == Namespace.connection, type == "CLOSE" { eventContinuation.yield(.lost); continue }
+            if message.namespace == Namespace.receiver, type == "RECEIVER_STATUS" {
+                if launched, !CastWire.stillOurs(object, sessionId: sessionId) { eventContinuation.yield(.takenOver) }
+                launched = true
             }
-            if m.namespace == NS.receiver, type == "RECEIVER_STATUS" { launched = true }
-            if m.namespace == NS.media, type == "MEDIA_STATUS", let st = (o["status"] as? [[String: Any]])?.first,
-               let time = (st["currentTime"] as? NSNumber)?.doubleValue {
-                let state = st["playerState"] as? String
-                positionLock.lock(); reported = (time, state == "PLAYING", Date()); positionLock.unlock()
+            if message.namespace == Namespace.media, type == "MEDIA_STATUS", let status = (object["status"] as? [[String: Any]])?.first,
+               let time = (status["currentTime"] as? NSNumber)?.doubleValue {
+                let playing = status["playerState"] as? String == "PLAYING"
+                positionLock.lock(); reported = (time, playing, Date()); positionLock.unlock()
             }
-            if let id = o["requestId"] as? Int, id != 0, let w = waiters.removeValue(forKey: id) { w(.success(JSONBox(o))) }
+            if let id = (object["requestId"] as? NSNumber)?.intValue, id != 0, let waiter = waiters.removeValue(forKey: id) {
+                waiter(.success(JSONBox(object)))
+            }
         }
     }
 }

@@ -177,14 +177,6 @@ docker run --rm -v interlude_data:/data -v "$PWD":/backup alpine tar czf /backup
 
 The volume is named after the folder `compose.yaml` is in, so for a folder called `interlude` it's `interlude_data`. Run `docker volume ls` to check. A jingle the Mac app has learned can be copied across: put its `profiles/<station>.json` and `.candidates` files into the volume's `profiles` folder and restart.
 
-**Comparing with the Mac.** To check the server against the Mac app, turn on `INTERLUDE_KEEP_RUNNING` in `compose.yaml`; the server then runs the live session all the time. Leave the Mac app playing the same station, and after a few days compare the two event logs:
-
-```
-scripts/compare-events.py ~/"Library/Containers/org.benbull.InterLude/Data/Library/Application Support/InterLude/events.jsonl" server-events.jsonl
-```
-
-To get `server-events.jsonl`, run `docker compose cp interlude:/var/lib/interlude/events.jsonl server-events.jsonl`.
-
 ## Where things are kept
 
 | File | What it holds |
@@ -214,22 +206,20 @@ The server keeps the same files in its `data` volume (`/var/lib/interlude` in th
 | `Web` | The web app, InterLude's one interface: `index.html`, `app.css` and `app.js`, served from disk as the Mac's panel, its phone remote and the server's page, plus the server's icons. |
 | `Tests` | Unit tests for the parts that can be tested without a network or speakers. |
 | `Tools` | Command-line programs used to measure and tune detection (below). |
-| `docs` | Notes on on-demand playback, release notes and screenshots. `docs/archive` holds the findings and manual test checklists from early development. |
-| `scripts` | Building and packaging the Mac app, installing the server's native libraries on Linux, preparing YAMNet, comparing two event logs, and `push-config.sh`, which puts the web app and station list on a running server without rebuilding its image. |
+| `docs` | Notes on on-demand playback, release notes and screenshots. `docs/archive` holds the measurements and reasoning from early development. |
+| `scripts` | Building and packaging the Mac app, installing the server's native libraries on Linux, preparing YAMNet, and `push-config.sh`, which puts the web app and station list on a running server without rebuilding its image. |
 
 ### Tools
 
-Run with `swift run --scratch-path ~/Library/Caches/InterLudeBuild <name>`. Recordings are for personal testing and are kept out of git.
+Run with `swift run --scratch-path ~/Library/Caches/InterLudeBuild <name>` from the checkout. Each tool's source begins with its full usage. Recordings are for personal testing and are kept out of git.
 
 | Tool | Use |
 |---|---|
 | `record <serviceId> <hoursAgo> <minutes> <dir>` | Save segments from the BBC's six hour rewind window. |
 | `classify <dir> <csv>` | Speech and music scores for a recording. `CLASSIFIER=yamnet:<models dir>` scores with the server's YAMNet instead (`YAMNET_RAW=1` before calibration). |
 | `evaluate <csv> [labels.json] [profile.json]` | Replay the speech rule over scores and report accuracy against labelled bulletins. |
-| `ident-check` | Find and test a station's news theme in recordings. `PLATFORM=portable` decodes with ffmpeg and uses the server's signal maths. |
-| `signoff-check` | Transcribe bulletins and report where the newsreader opens and signs off. `WHISPER=<model file>` uses whisper.cpp, as the server does. |
-| `serve <serviceId> [delay] [port]` | A session without the app, for testing with ffmpeg or curl, at `/test/live.m3u8`, or `/test/live.aac` as a Sonos speaker plays it. `REPLAY=<ISO time>` plays from that broadcast time instead; add `VERSION=<pid>` to play that BBC Sounds version on demand and `OFFSET=<seconds>` to start part way in. |
-| `cast-spike list` / `play <device> <url>` | List Cast speakers and groups, or play a stream on one. |
+| `ident-check <dir>:<start>,… …` | Find and test a station's news theme in recordings, given bulletin start times from the event log. `PLATFORM=portable` decodes with ffmpeg and uses the server's signal maths. |
+| `signoff-check <dir>:<start>,<end> …` | Transcribe bulletins and report where the newsreader opens and signs off. `WHISPER=<model file>` uses whisper.cpp, as the server does. |
 
 ## Sounds
 

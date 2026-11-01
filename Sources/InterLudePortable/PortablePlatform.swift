@@ -1,3 +1,8 @@
+//  PortablePlatform.swift
+//  InterLudePortable
+//
+//  The platform for machines without Apple's frameworks.
+
 import Foundation
 import InterLudeCore
 

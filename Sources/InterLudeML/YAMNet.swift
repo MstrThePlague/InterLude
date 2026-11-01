@@ -1,3 +1,9 @@
+//  YAMNet.swift
+//  InterLudeML
+//
+//  The Linux server's sound classifier: Google's YAMNet on ONNX Runtime, with its scores mapped onto Apple's
+//  classifier's so the detector's thresholds hold on both platforms.
+
 import Foundation
 import InterLudeCore
 
@@ -9,11 +15,16 @@ public final class YAMNetClassifier: SoundClassifying, @unchecked Sendable {
     private let speechClass: Int
     private let musicClass: Int
     private let calibrated: Bool
+    /// AudioSet classes YAMNet scores.
     public static let classes = 521
+    /// YAMNet's frame hop and length [s].
     static let frameHop = 0.48, frameLength = 0.96
+    /// Apple's window length and hop, which the scores are averaged into [s].
     static let windowLength = 3.0, windowHop = 1.5
 
     /// Loads `yamnet.onnx` and `yamnet_class_map.csv` from `directory`, as scripts/yamnet/convert.sh makes them.
+    ///
+    /// - Parameter calibrated: Whether to map scores onto Apple's scale. Off only for fitting the calibration.
     public init(directory: URL, calibrated: Bool = true) throws {
         self.calibrated = calibrated
         model = try ONNXModel(path: directory.appendingPathComponent("yamnet.onnx").path, input: "waveform:0", output: "Identity:0")
@@ -32,7 +43,7 @@ public final class YAMNetClassifier: SoundClassifying, @unchecked Sendable {
     public func classify(_ clips: [PCMAudio]) throws -> [SoundScore] {
         guard let rate = clips.first?.sampleRate else { return [] }
         var mono: [Float] = []
-        for c in clips { mono += Self.mono(c) }
+        for clip in clips { mono += clip.mono }
         let raw = try frames(Resample.to16k(mono, from: rate))
         return Self.windows(raw, duration: Double(mono.count) / rate).map {
             calibrated ? SoundScore(time: $0.time, duration: Self.windowLength,
@@ -46,8 +57,8 @@ public final class YAMNetClassifier: SoundClassifying, @unchecked Sendable {
         guard samples16k.count >= 16000 else { return [] }
         let out = try model.run(samples16k)
         guard out.shape.count == 2, out.shape[1] == Self.classes else { throw ONNXModel.Failure(message: "unexpected output shape \(out.shape)") }
-        return (0..<out.shape[0]).map { f in
-            (Double(out.values[f * Self.classes + speechClass]), Double(out.values[f * Self.classes + musicClass]))
+        return (0..<out.shape[0]).map { frame in
+            (Double(out.values[frame * Self.classes + speechClass]), Double(out.values[frame * Self.classes + musicClass]))
         }
     }
 
@@ -69,13 +80,6 @@ public final class YAMNetClassifier: SoundClassifying, @unchecked Sendable {
         }
         return out
     }
-
-    static func mono(_ a: PCMAudio) -> [Float] {
-        guard let l = a.channels.first else { return [] }
-        guard a.channels.count > 1 else { return l }
-        let r = a.channels[1]
-        return (0..<min(l.count, r.count)).map { (l[$0] + r[$0]) * 0.5 }
-    }
 }
 
 /// Piecewise-linear maps from YAMNet's scores to Apple's classifier's, fitted by matching quantiles of the two over the
@@ -85,6 +89,7 @@ public struct ScoreMap: Sendable, Equatable {
     public init(_ knots: [(x: Double, y: Double)]) { self.knots = knots }
     public static let identity = ScoreMap([(0, 0), (1, 1)])
 
+    /// Maps one score.
     public func map(_ x: Double) -> Double {
         guard let first = knots.first, let last = knots.last else { return x }
         if x <= first.x { return first.y }
@@ -113,19 +118,20 @@ enum Resample {
         return h.map(Float.init)
     }()
 
-    static func to16k(_ x: [Float], from rate: Double) -> [Float] {
-        if rate == 16000 { return x }
+    /// Resamples 48 kHz audio to 16 kHz, or returns 16 kHz audio as it is.
+    static func to16k(_ input: [Float], from rate: Double) -> [Float] {
+        if rate == 16000 { return input }
         precondition(rate == 48000, "YAMNet input must be 48 kHz or 16 kHz")
-        let h = taps, half = h.count / 2
-        var out = [Float](repeating: 0, count: x.count / 3)
-        x.withUnsafeBufferPointer { src in
-            h.withUnsafeBufferPointer { k in
+        let half = taps.count / 2
+        var out = [Float](repeating: 0, count: input.count / 3)
+        input.withUnsafeBufferPointer { source in
+            taps.withUnsafeBufferPointer { kernel in
                 for o in 0..<out.count {
-                    let c = o * 3
-                    var acc: Float = 0
-                    let lo = max(0, c - half), hi = min(src.count - 1, c + half)
-                    for i in lo...hi { acc += src[i] * k[i - c + half] }
-                    out[o] = acc
+                    let centre = o * 3
+                    var sum: Float = 0
+                    let low = max(0, centre - half), high = min(source.count - 1, centre + half)
+                    for i in low...high { sum += source[i] * kernel[i - centre + half] }
+                    out[o] = sum
                 }
             }
         }
