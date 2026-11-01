@@ -75,6 +75,23 @@ import Foundation
         #expect(chunks.map { String(decoding: $0, as: UTF8.self) } == ["seg/3.ts", "seg/4.ts", "seg/5.ts", "seg/6.ts"])
     }
 
+    /// When the session the stream began with stops, the stream ends instead of waiting for another.
+    @Test func aacStreamEndsWithItsSession() async {
+        final class Polls: @unchecked Sendable { let lock = NSLock(); var count = 0 }
+        let polls = Polls()
+        let stream = AACStream.frames(fetch: { path in
+            let n = polls.lock.withLock { polls.count += 1; return polls.count }
+            if n > 2 { return AACStream.ended }
+            let text = HLS.write(mediaSequence: 1, segments: [1]) { "seg/\($0).ts" }
+            return path == "live.m3u8" ? HTTPResponse(contentType: "application/vnd.apple.mpegurl", body: Data(text.utf8))
+                                      : HTTPResponse(contentType: "video/mp2t", body: Data(path.utf8))
+        }, poll: .milliseconds(10), audio: { $0 })
+        var chunks = 0
+        for await _ in stream { chunks += 1 }
+        #expect(chunks == 1)
+        #expect(polls.lock.withLock { polls.count } == 3)
+    }
+
     /// Plays the AAC stream at INTERLUDE_LIVE_SONOS_URL on the Sonos speaker at INTERLUDE_LIVE_SONOS for 20 seconds,
     /// checking that it plays, then stops it.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["INTERLUDE_LIVE_SONOS"] != nil))
