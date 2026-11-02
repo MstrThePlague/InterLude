@@ -197,4 +197,8 @@ The owner reviewed the BBC's terms for its online services before the first publ
 
 ## Not done yet (needs time or a person)
 
-- Phase 2 acceptance (5 weekdays of 6 Music logs against labels) and the Radio 2 3-day shadow run. The app logs every candidate block to `events.jsonl`; shadow mode and ident-only detection are built, and Radio 2 defaults to both.
+- Phase 2 acceptance (5 weekdays of 6 Music logs against labels) and the Radio 2 3-day shadow run. The app logs every candidate block to `events.jsonl`; shadow mode and ident-only detection are built, and stations marked `untested` in `stations.json` (Radio 2 and Radio 3) default to both.
+- Newsbeat outside 10:00 to 14:00: whether Radio 1, 1Xtra and Asian Network have bulletins at :00 at other times of day, and whether there is a long bulletin at 17:45 as well as 12:45. Only the 12:45 one is listed.
+- Radio 3's speech rule: presenter talk near the hour started five false mutes in four hours, and its sign-off ("BBC News just after two minutes past one") isn't recognised.
+- Radio Cymru 2's bulletins are in Welsh, which neither transcriber is set up for, so only the speech rule and the theme work there.
+- Bulletin minutes are learned per minute of the hour, not per hour of the day, so a station whose :30 bulletins stop in the evening keeps listening at :30 all day.
