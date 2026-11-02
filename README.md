@@ -179,7 +179,7 @@ The volume is named after the folder `compose.yaml` is in, so for a folder calle
 
 | File | What it holds |
 |---|---|
-| `Application Support/InterLude/stations.json` | The station list and stream address template. Edit a station's pool ID here if the BBC changes it, its `newsNames` to teach it what the station calls its news, or set `"news": false` for a stream with no bulletins; the change takes effect within a few seconds. |
+| `Application Support/InterLude/stations.json` | The station list and stream address template. Edit a station's pool ID here if the BBC changes it, its `newsNames` to teach it what the station calls its news, set `"news": false` for a stream with no bulletins, or `"untested": true` for one where the speech rule hasn't been checked (new profiles then start in shadow mode and mute only on the jingle, as Radio 2 and Radio 3 do); the change takes effect within a few seconds. |
 | `Application Support/InterLude/web/` | Optional `index.html`, `app.css` or `app.js` to use in place of the app's own, for trying changes to the panel and phone remote without a rebuild. |
 | `Application Support/InterLude/profiles/` | Per-station settings, bulletin minutes and the learned news theme. |
 | `Application Support/InterLude/events.jsonl` | One line per detected bulletin and per correction. Settings › Export diagnostics zips these up. |

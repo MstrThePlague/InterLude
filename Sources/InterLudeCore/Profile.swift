@@ -93,11 +93,16 @@ public struct StationProfile: Codable, Sendable, Equatable {
             }
             return profile
         }
+        return fresh(for: station)
+    }
+
+    /// A new profile with defaults suited to `station`.
+    public static func fresh(for station: Station) -> StationProfile {
         var profile = StationProfile()
         if !station.mutesNews { profile.muteNews = false }
-        if station.serviceId == "bbc_radio_two" {
-            // Radio 2's bulletins and speech content have not been measured, so only its jingle mutes, and only
-            // once it has been checked in shadow mode.
+        if station.untested == true {
+            // The speech rule hasn't been checked on this station, so only its jingle mutes, and only once that has
+            // been checked in shadow mode.
             profile.shadowMode = true; profile.detector.identOnly = true
         }
         return profile

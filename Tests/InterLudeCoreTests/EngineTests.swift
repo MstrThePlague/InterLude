@@ -393,3 +393,13 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     let card = RemoteState.NewsItem.describe(StationProfile(), kind: .music, hasNews: false, earlier: false, ambience: "silence")
     #expect(!card.available && !card.on)
 }
+
+@Test func untestedStationsStartCautious() throws {
+    let catalogue = try Catalogue.load(from: URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        .appendingPathComponent("../../Data/stations.json").standardized)
+    let two = try #require(catalogue.station("bbc_radio_two")), six = try #require(catalogue.station("bbc_6music"))
+    let cautious = StationProfile.fresh(for: two), usual = StationProfile.fresh(for: six)
+    #expect(cautious.shadowMode && cautious.detector.identOnly)
+    #expect(!usual.shadowMode && !usual.detector.identOnly && usual.muteNews)
+    #expect(!StationProfile.fresh(for: try #require(catalogue.station("bbc_radio_one_dance"))).muteNews)
+}

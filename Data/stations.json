@@ -3,8 +3,8 @@
   "stations": [
     {"name": "Radio 1", "serviceId": "bbc_radio_one", "poolId": "01505109", "kind": "music", "short": "1", "colour": "#E5007E", "group": "National", "newsNames": ["newsbeat"]},
     {"name": "Radio 1Xtra", "serviceId": "bbc_1xtra", "poolId": "92079267", "kind": "music", "short": "1X", "colour": "#D7001F", "group": "National", "newsNames": ["1xtra news", "one extra news", "newsbeat"]},
-    {"name": "Radio 2", "serviceId": "bbc_radio_two", "poolId": "74208725", "kind": "music", "short": "2", "colour": "#E66B21", "group": "National"},
-    {"name": "Radio 3", "serviceId": "bbc_radio_three", "poolId": "23461179", "kind": "music", "short": "3", "colour": "#9B1D74", "group": "National"},
+    {"name": "Radio 2", "serviceId": "bbc_radio_two", "poolId": "74208725", "kind": "music", "short": "2", "colour": "#E66B21", "group": "National", "untested": true},
+    {"name": "Radio 3", "serviceId": "bbc_radio_three", "poolId": "23461179", "kind": "music", "short": "3", "colour": "#9B1D74", "group": "National", "untested": true},
     {"name": "Radio 4", "serviceId": "bbc_radio_fourfm", "poolId": "55057080", "kind": "speech", "short": "4", "colour": "#1F6FB2", "group": "National"},
     {"name": "Radio 4 Extra", "serviceId": "bbc_radio_four_extra", "poolId": "26173715", "kind": "speech", "short": "4X", "colour": "#2A8C8C", "group": "National"},
     {"name": "Radio 5 Live", "serviceId": "bbc_radio_five_live", "poolId": "89021708", "kind": "speech", "short": "5", "colour": "#00A0D6", "group": "National"},

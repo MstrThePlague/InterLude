@@ -29,6 +29,9 @@ public struct Station: Codable, Sendable, Hashable, Identifiable {
     public var newsNames: [String]?
     /// False for a stream that carries no news bulletins, such as Radio 1 Dance, so nothing is ever muted there.
     public var news: Bool?
+    /// True where the speech rule hasn't been checked, such as Radio 2, whose presenters talk at length near the
+    /// hour: a new profile starts in shadow mode and mutes only on the station's jingle.
+    public var untested: Bool?
     public var id: String { serviceId }
     /// Whether InterLude looks for bulletins to mute: music stations that carry news.
     public var mutesNews: Bool { kind == .music && news != false }
@@ -87,6 +90,7 @@ public struct Catalogue: Codable, Sendable {
             if catalogue.stations[i].group == nil { catalogue.stations[i].group = match.group }
             if catalogue.stations[i].newsNames == nil { catalogue.stations[i].newsNames = match.newsNames }
             if catalogue.stations[i].news == nil { catalogue.stations[i].news = match.news }
+            if catalogue.stations[i].untested == nil { catalogue.stations[i].untested = match.untested }
         }
         let known = Set(catalogue.stations.map(\.serviceId))
         catalogue.stations += shipped.stations.filter { !known.contains($0.serviceId) }
