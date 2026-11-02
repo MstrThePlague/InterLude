@@ -22,14 +22,16 @@ public struct SpokenPhrase: Sendable, Equatable {
 /// Recognises a newsreader's opening and sign-off.
 public enum NewsPhrases {
     /// Phrases that open a bulletin on any station. The station's news names open one too, unless they are a trail.
-    static let openings = ["bbc news at", "this is bbc radio"]
+    /// "This is BBC Radio …" isn't one: presenters say it as a station ident, on Radio 3 at a quarter past.
+    static let openings = ["bbc news at"]
 
-    /// Phrases that close a bulletin on any station. The station's news names close one too.
+    /// Phrases that close a bulletin on any station.
     ///
-    /// Sign-offs heard include "6 Music News. Your next update's at 6.30", "That's 6 Music News, more at seven" and
-    /// "That's 6 Music News for tonight". The station's news name is only said again at the end, and callers only
-    /// look well into the bulletin (`StationProfile.signOffSearchStart`), so the presenter's "after the 6 Music News"
-    /// never counts.
+    /// Sign-offs heard include "6 Music News. Your next update's at 6.30", "That's 6 Music News, more at seven",
+    /// "That's 6 Music News for tonight", "This is Newsbeat at 10.33" and "… on Newsbeat with Jordan at 12.45". A news
+    /// name alone isn't one, since reports say "talking to Newsbeat"; it is after "that's" or "this is", or followed by
+    /// a time. Callers only look well into the bulletin (`StationProfile.signOffSearchStart`), so the presenter's
+    /// "after the 6 Music News" never counts.
     static let signOffs = ["next update", "next news", "next bulletin", "updates at", "update is at", "next full news",
                            "more news at", "that's the news", "that's the latest"]
 
@@ -80,6 +82,7 @@ public enum NewsPhrases {
             var preceding = earlier + words[..<at]
             while let last = preceding.last, ["the", "this", "our"].contains(last) { preceding.removeLast() }
             let lastOne = preceding.last ?? "", lastTwo = preceding.suffix(2).joined(separator: " ")
+            if lastOne == "latest" { return true }                  // "let's get the latest news from …"
             if trailBefore.contains(lastOne) || trailBefore.contains(lastTwo) { continue }
             let following = words[(at + wanted.count)...].joined(separator: " ") + " "
             if trailAfter.contains(where: { following.hasPrefix($0 + " ") }) { continue }
@@ -119,7 +122,7 @@ public enum NewsPhrases {
 
     /// Whether `text` is a spoken time, such as "6.30", "at 6 30", "7 o'clock" or "six thirty".
     static func isTime(_ text: String) -> Bool {
-        let pattern = #"^(at )?(\d{1,2}( \d{2})?|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)( (o'clock|thirty|am|pm))?$"#
+        let pattern = #"^(at )?(\d{1,2}( \d{2})?|\d{3,4}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)( (o'clock|thirty|am|pm))?$"#
         return text.range(of: pattern, options: .regularExpression) != nil
     }
 
@@ -134,14 +137,20 @@ public enum NewsPhrases {
     ///   - names: What the station calls its news, such as "6 music news", from `Station.newsNames`.
     /// - Returns: The end of the sign-off [s], or nil if none was heard.
     public static func signOff(in phrases: [SpokenPhrase], after: Double = 0, names: [String] = []) -> Double? {
-        let signOffs = signOffs + names.map(normalise)
+        let names = names.map(normalise)
+        let time = #"(\d{1,4}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)( |$)"#
+        func ends(_ text: String) -> Bool {
+            signOffs.contains(where: { text.contains($0) }) || names.contains { name in
+                text.contains("that's " + name) || text.contains("this is " + name + " ")
+                    || text.range(of: NSRegularExpression.escapedPattern(for: name) + #"( with [a-z']+)? at "# + time, options: .regularExpression) != nil
+            }
+        }
         for index in phrases.indices where phrases[index].start >= after {
-            let here = normalise(phrases[index].text)
-            var hit: Int?
-            if signOffs.contains(where: { here.contains($0) }) { hit = index }
-            else if index + 1 < phrases.count {
-                let both = here + " " + normalise(phrases[index + 1].text)
-                if signOffs.contains(where: { both.contains($0) }) { hit = index + 1 }
+            // This phrase, or it joined with up to two after it, for wording split across results.
+            var text = normalise(phrases[index].text), hit: Int?
+            for last in index..<min(phrases.count, index + 3) {
+                if last > index { text += " " + normalise(phrases[last].text) }
+                if ends(text) { hit = last; break }
             }
             guard let hit else { continue }
             // Carry on over the rest of the sign-off: more sign-off wording, or a time.
@@ -150,8 +159,8 @@ public enum NewsPhrases {
             while next < phrases.count, phrases[next].start - end < signOffGap {
                 let text = normalise(phrases[next].text)
                 let pair = next + 1 < phrases.count ? text + " " + normalise(phrases[next + 1].text) : text
-                if isTime(text) || signOffs.contains(where: { text.contains($0) }) { end = phrases[next].end; next += 1 }
-                else if signOffs.contains(where: { pair.contains($0) }) { end = phrases[next + 1].end; next += 2 }
+                if isTime(text) || ends(text) { end = phrases[next].end; next += 1 }
+                else if ends(pair) { end = phrases[next + 1].end; next += 2 }
                 else if ["your", "the", "and"].contains(text) { next += 1 }      // a fragment before the rest of it
                 else { break }
             }

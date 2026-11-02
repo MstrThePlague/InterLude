@@ -169,6 +169,16 @@ To decide how far back InterLude can play an earlier programme with the news ski
 
 **Schedule.** `https://rms.api.bbc.co.uk/v2/experience/inline/schedules/{serviceId}/{yyyy-mm-dd}` returns the day's `broadcast_summary` items: start, end, titles, synopses and image.
 
+## Other music stations (2 November 2026, 10:00 to 14:00 UTC)
+
+Four hours each of Radio 1, 1Xtra, Asian Network and Radio 3 from the rewind window, every quarter hour transcribed with `signoff-check <dir>:slots` and the speech rule replayed with `evaluate`.
+
+- **Radio 1, 1Xtra and Asian Network carry the same Newsbeat bulletin**, about three minutes from 33 s after each half hour, plus a 15-minute Newsbeat from 12:45:33 to 13:00:36. There were no bulletins at :00 in these hours.
+- **Wording.** Openings: "now the news with Callum Leslie. Radio One. Newsbeat." and "Asian Network news". Sign-offs: "This is Newsbeat at 10.33", "… on Newsbeat with Jordan at 12.45", and after the long bulletin "your next update in half an hour". Reports also say "talking to Newsbeat" mid-bulletin, so a news name alone can't be a sign-off. The on-device model writes Newsbeat as "news beat", "newsbeats" and "Newsby" too.
+- **Speech rule.** It muted all three half-hour bulletins on each station, but not the 12:45 one, which falls outside the default :00 and :30 slots. Talk near :00 gave 2 false starts on Radio 1 and Asian Network and 7 on 1Xtra, all under 90 s (so flagged doubtful and never learned from). Learned slot minutes should drop :00 for these stations.
+- **Radio 3** had one bulletin, "the latest BBC News, at one o'clock with John Hammond", signing off "BBC News just after two minutes past one". The speech rule gave 5 false starts from presenter talk and a mute running 3 minutes past the end, so Radio 3 stays `untested`. Its presenter's "This is BBC Radio 3" at a quarter past ended "this is bbc radio" as an opening phrase.
+- **After the wording changes** in 0.7.2, Radio 1's scan finds every half-hour opening within 3 s of where it starts, and the 10:30 and 11:30 sign-offs within a second of their real ends. The 13:30 sign-off was transcribed too badly to recognise, so that mute ends when music returns. Nothing was found at other quarter hours.
+
 ## Spec amendments made
 
 1. Wall-clock mapping of a segment uses `(index − 1) × 6.4` (the index is the end time). The stream clock runs about 29 s ahead of the system clock.

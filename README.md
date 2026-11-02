@@ -217,7 +217,7 @@ Run with `swift run --scratch-path ~/Library/Caches/InterLudeBuild <name>` from 
 | `classify <dir> <csv>` | Speech and music scores for a recording. `CLASSIFIER=yamnet:<models dir>` scores with the server's YAMNet instead (`YAMNET_RAW=1` before calibration). |
 | `evaluate <csv> [labels.json] [profile.json]` | Replay the speech rule over scores and report accuracy against labelled bulletins. |
 | `ident-check <dir>:<start>,… …` | Find and test a station's news theme in recordings, given bulletin start times from the event log. `PLATFORM=portable` decodes with ffmpeg and uses the server's signal maths. |
-| `signoff-check <dir>:<start>,<end> …` | Transcribe bulletins and report where the newsreader opens and signs off. `WHISPER=<model file>` uses whisper.cpp, as the server does. |
+| `signoff-check <dir>:<start>,<end> …` | Transcribe bulletins and report where the newsreader opens and signs off. `<dir>:slots` instead transcribes around every quarter hour of a recording, for finding a new station's bulletins and wording. `STATION=<serviceId>` uses that station's news names; `WHISPER=<model file>` uses whisper.cpp, as the server does. |
 
 ## Sounds
 

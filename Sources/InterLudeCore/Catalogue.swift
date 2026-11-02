@@ -73,8 +73,8 @@ public struct Catalogue: Codable, Sendable {
 
     /// The user's editable list, brought up to date with the bundled one.
     ///
-    /// Stations added to the bundled list since the copy was made are appended, and presentation fields and news names
-    /// that older copies lack are filled in. The user's own edits, such as a changed pool ID, win.
+    /// Stations added to the bundled list since the copy was made are appended, and presentation fields that older copies
+    /// lack are filled in, and news names added since are appended. The user's own edits, such as a changed pool ID, win.
     ///
     /// - Parameters:
     ///   - bundled: The list that ships with the app or server.
@@ -88,7 +88,11 @@ public struct Catalogue: Codable, Sendable {
             if catalogue.stations[i].short == nil { catalogue.stations[i].short = match.short }
             if catalogue.stations[i].colour == nil { catalogue.stations[i].colour = match.colour }
             if catalogue.stations[i].group == nil { catalogue.stations[i].group = match.group }
-            if catalogue.stations[i].newsNames == nil { catalogue.stations[i].newsNames = match.newsNames }
+            // News names are added to rather than kept as they are, so spellings found later reach saved lists.
+            if let shippedNames = match.newsNames {
+                let mine = catalogue.stations[i].newsNames ?? []
+                catalogue.stations[i].newsNames = mine + shippedNames.filter { !mine.contains($0) }
+            }
             if catalogue.stations[i].news == nil { catalogue.stations[i].news = match.news }
             if catalogue.stations[i].untested == nil { catalogue.stations[i].untested = match.untested }
         }

@@ -259,7 +259,7 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
                  SpokenPhrase(start: 16.5, end: 17.7, text: "Radio, 6 "),
                  SpokenPhrase(start: 18.5, end: 19.6, text: " BBC News at "),
                  SpokenPhrase(start: 19.6, end: 20.5, text: "5.30")]
-    #expect(NewsPhrases.opening(in: start) == 15.6)
+    #expect(NewsPhrases.opening(in: start) == 16.5)      // "… BBC News at"; the station ident before it isn't news
     let end = [SpokenPhrase(start: 32.5, end: 37.0, text: "said the waterway is now on the road to recovery."),
                SpokenPhrase(start: 37.2, end: 37.8, text: " Now, 6 "),
                SpokenPhrase(start: 37.8, end: 38.5, text: "music news."),
@@ -402,4 +402,47 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     #expect(cautious.shadowMode && cautious.detector.identOnly)
     #expect(!usual.shadowMode && !usual.detector.identOnly && usual.muteNews)
     #expect(!StationProfile.fresh(for: try #require(catalogue.station("bbc_radio_one_dance"))).muteNews)
+}
+
+@Test func newsbeatOpensAndSignsOffAsBroadcast() {
+    // Radio 1, 2 November 10:30 UTC (on-device transcript).
+    let names = ["newsbeat", "news beat", "newsbeats", "news beats", "newsby"]
+    let bulletin = [SpokenPhrase(start: 31.8, end: 32.4, text: " Charlie and "), SpokenPhrase(start: 32.4, end: 32.9, text: "Jerry are "),
+                    SpokenPhrase(start: 32.9, end: 33.3, text: "next and "), SpokenPhrase(start: 33.3, end: 35.3, text: "now the news with Callum Leslie."),
+                    SpokenPhrase(start: 35.3, end: 35.6, text: " Radio "), SpokenPhrase(start: 35.6, end: 36.3, text: "One."),
+                    SpokenPhrase(start: 36.3, end: 37.2, text: " Newsbeat."),
+                    SpokenPhrase(start: 148.8, end: 150.5, text: " King Kenny as well, talking to "),
+                    SpokenPhrase(start: 150.5, end: 151.2, text: "news beat the "), SpokenPhrase(start: 151.2, end: 152.2, text: "final episode, more than "),
+                    SpokenPhrase(start: 213.9, end: 214.8, text: "on Rangers in the "), SpokenPhrase(start: 214.8, end: 215.1, text: "final."),
+                    SpokenPhrase(start: 215.1, end: 215.5, text: " This is "), SpokenPhrase(start: 215.5, end: 216.1, text: "news beat at "),
+                    SpokenPhrase(start: 216.1, end: 217.0, text: "1033."),
+                    SpokenPhrase(start: 219.7, end: 221.0, text: " When you cozied up on the ")]
+    #expect(NewsPhrases.handover(in: bulletin, names: names) == 32.9)
+    #expect(NewsPhrases.opening(in: bulletin, names: names) == 35.6)
+    #expect(NewsPhrases.signOff(in: bulletin, after: 80, names: names) == 217.0)      // not "talking to news beat"
+    let trail = [SpokenPhrase(start: 219.0, end: 220.3, text: "you can hear one of those guys on Newsbeat with "),
+                 SpokenPhrase(start: 220.3, end: 221.0, text: "Jordan at 1245.")]
+    #expect(NewsPhrases.signOff(in: trail, names: names) == 221.0)
+}
+
+@Test func latestNewsIsAHandoverAndStationIdentsAreNot() {
+    #expect(NewsPhrases.handover(in: [SpokenPhrase(start: 30, end: 33, text: "let's get the latest news from Callum Leslie.")]) == 30)
+    let ident = [SpokenPhrase(start: 20, end: 24, text: "It's very nearly a quarter past 11:00. This is BBC Radio 3,")]
+    #expect(NewsPhrases.opening(in: ident) == nil && NewsPhrases.handover(in: ident) == nil)
+    // Radio 3's one o'clock news.
+    #expect(NewsPhrases.opening(in: [SpokenPhrase(start: 33, end: 36, text: "After the latest BBC News, at one o'clock with John Hammond.")]) == 33)
+}
+
+@Test func savedStationListsGainNewNewsNames() throws {
+    let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: folder) }
+    let template = "https://example/{poolId}/{serviceId}/{bitrate}"
+    let shipped = #"{"urlTemplate": "\#(template)", "stations": [{"name": "Radio 1", "serviceId": "bbc_radio_one", "poolId": "1", "kind": "music", "newsNames": ["newsbeat", "news beat"]}]}"#
+    let saved = #"{"urlTemplate": "\#(template)", "stations": [{"name": "Radio 1", "serviceId": "bbc_radio_one", "poolId": "2", "kind": "music", "newsNames": ["newsbeat", "my own"]}]}"#
+    try shipped.write(to: folder.appendingPathComponent("shipped.json"), atomically: true, encoding: .utf8)
+    try saved.write(to: folder.appendingPathComponent("saved.json"), atomically: true, encoding: .utf8)
+    let merged = try Catalogue.loadEditable(bundled: folder.appendingPathComponent("shipped.json"), editable: folder.appendingPathComponent("saved.json"))
+    #expect(merged.stations[0].newsNames == ["newsbeat", "my own", "news beat"])
+    #expect(merged.stations[0].poolId == "2")
 }
