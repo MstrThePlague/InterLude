@@ -33,7 +33,9 @@ A bulletin is found in a few ways, all running on the machine itself:
 
 1. **Speech near the hour or half hour.** Apple's built-in sound classifier scores speech and music every 1.5 seconds. Twenty seconds of sustained speech close to a bulletin slot starts a mute.
 2. **The news theme.** InterLude learns the station's news jingle from recent bulletins and starts the mute when it hears it, so the presenter's handover still plays.
-3. **The newsreader's words.** While a bulletin is muted, on-device speech recognition listens for the sign-off ("…your next update's at six thirty", "That's 6 Music News for tonight") and ends the mute there, so trails and the presenter's chat afterwards are not lost. If no sign-off is heard, the mute ends when music returns.
+3. **The newsreader's words.** From a minute before to three minutes after each bulletin slot, on-device speech recognition transcribes the stream as it arrives. The newsreader's opening ("BBC News at five thirty", "Newsbeat, I'm …") starts a mute straight away. A presenter's handover ("here's the news with …") starts one too, but only if speech carries on for ten seconds after it, and never when it's a trail such as "after the news" or "the news is next". While a bulletin is muted, it listens for the sign-off ("…your next update's at six thirty", "That's 6 Music News for tonight") and ends the mute there, so trails and the presenter's chat afterwards are not lost. If no sign-off is heard, the mute ends when music returns.
+
+Wording used across the BBC, such as "BBC News at" and "your next update", works on any station. What a station calls its own news ("Newsbeat", "6 Music News") is listed as `newsNames` in `stations.json`, so a station is added or corrected there rather than in code. Sign-offs are only looked for well into a bulletin: 45 seconds at first, then 60 % of the station's shortest usual bulletin once it has learned a few.
 
 The server version does the same with open models in place of Apple's: YAMNet for speech and music, and whisper.cpp for the newsreader. YAMNet's scores are mapped onto Apple's, so the same rules apply to both.
 
@@ -177,7 +179,7 @@ The volume is named after the folder `compose.yaml` is in, so for a folder calle
 
 | File | What it holds |
 |---|---|
-| `Application Support/InterLude/stations.json` | The station list and stream address template. Edit a station's pool ID here if the BBC changes it; the change takes effect within a few seconds. |
+| `Application Support/InterLude/stations.json` | The station list and stream address template. Edit a station's pool ID here if the BBC changes it, or its `newsNames` to teach it what the station calls its news; the change takes effect within a few seconds. |
 | `Application Support/InterLude/web/` | Optional `index.html`, `app.css` or `app.js` to use in place of the app's own, for trying changes to the panel and phone remote without a rebuild. |
 | `Application Support/InterLude/profiles/` | Per-station settings, bulletin minutes and the learned news theme. |
 | `Application Support/InterLude/events.jsonl` | One line per detected bulletin and per correction. Settings › Export diagnostics zips these up. |
