@@ -365,3 +365,31 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     d.identMatch(at: hour + 130, score: 0.9)                                             // a late theme after all
     #expect(d.openBlock != nil && d.openBlock!.id != id)
 }
+
+@Test func bulletinMinutesAreLearnedFromStarts() {
+    var profile = StationProfile()
+    // Eleven bulletins on the hour, some anchored a few seconds before it: not enough yet.
+    for i in 0..<11 { profile.learn(start: hour + Double(i) * 3600 + (i % 2 == 0 ? 35 : -5), end: hour + Double(i) * 3600 + 200) }
+    #expect(profile.detector.slotMinutes == [0, 30])
+    profile.learn(start: hour + 11 * 3600 + 40, end: hour + 11 * 3600 + 200)
+    #expect(profile.detector.slotMinutes == [0])                       // no half-hour bulletins seen
+    for i in 0..<4 { profile.learn(start: hour + Double(i) * 3600 + 45 * 60 + 30, end: hour + Double(i) * 3600 + 46 * 60 + 30) }
+    #expect(profile.detector.slotMinutes == [0, 45])                   // marked by "News got through"
+}
+
+@Test func bulletinMinutesSetByHandAreKept() {
+    var profile = StationProfile()
+    profile.detector.slotMinutes = [0, 30]; profile.slotMinutesByHand = true
+    for i in 0..<20 { profile.learn(start: hour + Double(i) * 3600 + 30, end: hour + Double(i) * 3600 + 200) }
+    #expect(profile.detector.slotMinutes == [0, 30])
+}
+
+@Test func streamsWithoutNewsNeverMute() {
+    var dance = Station(name: "Radio 1 Dance", serviceId: "bbc_radio_one_dance", poolId: "1", kind: .music)
+    #expect(dance.mutesNews)
+    dance.news = false
+    #expect(!dance.mutesNews)
+    #expect(!SessionSettings(station: dance, profile: StationProfile()).muteNews)
+    let card = RemoteState.NewsItem.describe(StationProfile(), kind: .music, hasNews: false, earlier: false, ambience: "silence")
+    #expect(!card.available && !card.on)
+}

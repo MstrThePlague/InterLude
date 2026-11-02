@@ -27,7 +27,11 @@ public struct Station: Codable, Sendable, Hashable, Identifiable {
     /// What the station's newsreaders call its news, lower case, such as "newsbeat" or "6 music news". Heard at the
     /// start or end of a bulletin, it marks the opening or sign-off; "BBC News" and "next update" work on any station.
     public var newsNames: [String]?
+    /// False for a stream that carries no news bulletins, such as Radio 1 Dance, so nothing is ever muted there.
+    public var news: Bool?
     public var id: String { serviceId }
+    /// Whether InterLude looks for bulletins to mute: music stations that carry news.
+    public var mutesNews: Bool { kind == .music && news != false }
     public init(name: String, serviceId: String, poolId: String, kind: StationKind) {
         self.name = name; self.serviceId = serviceId; self.poolId = poolId; self.kind = kind
     }
@@ -82,6 +86,7 @@ public struct Catalogue: Codable, Sendable {
             if catalogue.stations[i].colour == nil { catalogue.stations[i].colour = match.colour }
             if catalogue.stations[i].group == nil { catalogue.stations[i].group = match.group }
             if catalogue.stations[i].newsNames == nil { catalogue.stations[i].newsNames = match.newsNames }
+            if catalogue.stations[i].news == nil { catalogue.stations[i].news = match.news }
         }
         let known = Set(catalogue.stations.map(\.serviceId))
         catalogue.stations += shipped.stations.filter { !known.contains($0.serviceId) }

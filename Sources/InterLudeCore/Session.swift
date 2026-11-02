@@ -30,7 +30,7 @@ public struct SessionSettings: Sendable {
     public var startOffset = 0.0
     public init(station: Station, profile: StationProfile = StationProfile()) {
         self.station = station; self.profile = profile
-        delaySeconds = profile.delaySeconds; muteNews = profile.muteNews
+        delaySeconds = profile.delaySeconds; muteNews = profile.muteNews && station.mutesNews
     }
 }
 
@@ -213,7 +213,7 @@ public actor PlayerSession {
         if settings.muteNews && settings.profile.idents.isEmpty && !settings.onDemand {
             tasks.append(Task(priority: .utility) { await self.learnJingleFromRewind() })
         }
-        if settings.station.kind == .music, transcriber == nil, let make = Platform.current.makeTranscriber {
+        if settings.station.mutesNews, transcriber == nil, let make = Platform.current.makeTranscriber {
             let speech = make()
             transcriber = speech
             speechState = "checking"
@@ -270,7 +270,7 @@ public actor PlayerSession {
         await withTaskGroup(of: Void.self) { group in
             for index in from...to { group.addTask { _ = try? await store.segment(index) } }
         }
-        if settings.station.kind == .music, let make = Platform.current.makeTranscriber {
+        if settings.station.mutesNews, let make = Platform.current.makeTranscriber {
             // Ready the transcriber first when its model is already installed, so the first bulletin's sign-off is heard.
             let speech = make()
             if await speech.prepare(install: false) { transcriber = speech; speechState = "ready" }
@@ -717,7 +717,7 @@ public actor PlayerSession {
 
     /// Changes options that take effect at once, without a restart.
     public func setLiveOptions(muteNews: Bool, shadowMode: Bool) {
-        settings.muteNews = muteNews; settings.profile.shadowMode = shadowMode
+        settings.muteNews = muteNews && settings.station.mutesNews; settings.profile.shadowMode = shadowMode
     }
 
     /// "Not news": unmutes from the next segment the player fetches, then judges what follows again.
@@ -743,7 +743,14 @@ public actor PlayerSession {
     /// The news theme has been seen 11 to 41 s after the speech starts, so the window runs from 10 s before to 60 s
     /// after.
     private func learn(from block: NewsBlock) {
-        if let end = block.end { settings.profile.learn(start: block.start, end: end) }
+        if let end = block.end {
+            let slots = settings.profile.detector.slotMinutes
+            settings.profile.learn(start: block.start, end: end)
+            if settings.profile.detector.slotMinutes != slots {
+                detector.config.slotMinutes = settings.profile.detector.slotMinutes
+                write(["event": "slotsLearned", "minutes": settings.profile.detector.slotMinutes])
+            }
+        }
         let slice = featureRing.filter { $0.time >= block.start - 10 && $0.time < block.start + 60 }.map(\.frame)
         if slice.count > 1000 {
             settings.profile.candidates.append(slice)
@@ -790,7 +797,7 @@ public actor PlayerSession {
     /// Looks at the 150 s after each of the last eight bulletin slots in the BBC's six-hour rewind window, and learns
     /// the news theme if at least three share it. About 50 MB of downloads, once per station.
     private func learnJingleFromRewind() async {
-        guard settings.station.kind == .music, settings.profile.idents.isEmpty, let base, let prefix = segmentPrefix else { return }
+        guard settings.station.mutesNews, settings.profile.idents.isEmpty, let base, let prefix = segmentPrefix else { return }
         learningJingle = true
         defer { learningJingle = false }
         let live = HLS.startTime(ofIndex: liveEdge).timeIntervalSince1970
@@ -840,6 +847,7 @@ public actor PlayerSession {
         onDisk.startMinuteHistogram = settings.profile.startMinuteHistogram; onDisk.bulletinSeconds = settings.profile.bulletinSeconds
         onDisk.detector.minBulletinSeconds = settings.profile.detector.minBulletinSeconds
         onDisk.detector.maxBulletinSeconds = settings.profile.detector.maxBulletinSeconds
+        if !onDisk.slotMinutesByHand { onDisk.detector.slotMinutes = settings.profile.detector.slotMinutes }
         onDisk.save(settings.station)
     }
 

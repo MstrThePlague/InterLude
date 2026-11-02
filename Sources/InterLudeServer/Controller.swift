@@ -560,7 +560,7 @@ actor Controller {
             settings.ambience = id; saveSettings()
             await session?.setAmbience(ambienceURL)
         case .maxMute(let minutes): updateProfile(id) { $0.detector.maxMuteSeconds = minutes * 60 }
-        case .slots(let minutes): updateProfile(id) { $0.detector.slotMinutes = minutes }
+        case .slots(let minutes): updateProfile(id) { $0.detector.slotMinutes = minutes; $0.slotMinutesByHand = true }
         case .startAtLogin, .keepAwake, .port, .remote: break      // the Mac's own
         }
     }
@@ -600,7 +600,7 @@ actor Controller {
         state.muteElapsed = status.muteElapsed
         state.muteStartsIn = status.muteStartsIn
         state.justSkipped = status.replay?.justSkipped
-        state.canCorrect = detects && playing && station?.kind != .speech
+        state.canCorrect = detects && playing && station?.mutesNews == true
         if playing { state.footer = Wording.footer(delaySeconds: status.delaySeconds, replay: replay ? status.replay : nil) }
         state.station = settings.station
         state.speaker = settings.speaker
@@ -625,7 +625,7 @@ actor Controller {
         state.stream = "/stream/live.m3u8"
         state.streamID = playing ? streamID : nil
         state.settings = settingsItem(selectedStation)
-        state.news = .describe(profile(settings.station), kind: selectedStation?.kind, earlier: replay || (isEarlier && !playing && !startingNow),
+        state.news = .describe(profile(settings.station), kind: selectedStation?.kind, hasNews: selectedStation?.news != false, earlier: replay || (isEarlier && !playing && !startingNow),
                                ambience: settings.ambience)
         if playing && !status.recentBlocks.isEmpty {
             state.recentTitle = replay ? "News in this programme" : "Recent mutes"
@@ -671,7 +671,7 @@ actor Controller {
 
     /// The Settings sheet for the chosen station.
     private func settingsItem(_ station: Station?) -> RemoteState.SettingsItem {
-        let options = profile(settings.station), music = station?.kind == .music
+        let options = profile(settings.station), music = station?.mutesNews == true
         return .init(stationName: station?.name ?? settings.station, delay: options.delaySeconds, muteNews: options.muteNews,
                      jingleOnly: options.detector.identOnly, shadowMode: options.shadowMode, jingle: options.jingleStatus,
                      canForgetJingle: !options.idents.isEmpty || !options.candidates.isEmpty, newsNote: detects ? nil : Self.newsNote,

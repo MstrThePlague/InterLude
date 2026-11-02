@@ -670,7 +670,7 @@ function renderSettings() {
     const box = document.createElement("input"); box.className = "minutes"; box.value = st.slots; box.inputMode = "numeric";
     box.setAttribute("aria-label", "Bulletin minutes past the hour");
     box.addEventListener("change", () => change("slots", box.value));
-    rows.push(settingRow("Bulletin minutes", "Minutes past the hour, such as 0, 30", box));
+    rows.push(settingRow("Bulletin minutes", "Minutes past the hour, such as 0, 30. Learned from the bulletins found until you change them", box));
   }
   list.append(card(...rows));
   if (st.slots != null) list.append(hint("Speech from a minute before to three minutes after a bulletin minute counts as news. Once InterLude knows the jingle, muting starts at the jingle, and ends when the newsreader signs off."));

@@ -43,7 +43,7 @@ extension AppModel {
         state.muteElapsed = status.muteElapsed
         state.muteStartsIn = status.muteStartsIn
         state.justSkipped = status.replay?.justSkipped
-        state.canCorrect = isPlaying && onAirStation?.kind != .speech
+        state.canCorrect = isPlaying && onAirStation?.mutesNews == true
         state.note = learnedNote
         state.footer = isPlaying ? footerText : nil
         state.station = selectedStationID
@@ -72,7 +72,7 @@ extension AppModel {
                                       chosen: replaying, playing: isReplay ? source?.replay : nil)
         }
         if isReplay, let progress = status.replay { state.replay = .describe(progress) }
-        state.news = .describe(profile(selectedStationID), kind: selectedStation?.kind, earlier: isReplay || (mode == .earlier && !isPlaying && !isStarting),
+        state.news = .describe(profile(selectedStationID), kind: selectedStation?.kind, hasNews: selectedStation?.news != false, earlier: isReplay || (mode == .earlier && !isPlaying && !isStarting),
                                ambience: ambience)
         if isPlaying && !status.recentBlocks.isEmpty {
             state.recentTitle = isReplay ? "News in this programme" : "Recent mutes"
@@ -89,7 +89,7 @@ extension AppModel {
     /// Settings for the chosen station. The phone remote gets the shared ones; the panel also gets the Mac's own and
     /// the phone remote's link, which a phone could otherwise reset from under itself.
     private func remoteSettings(panel: Bool) -> RemoteState.SettingsItem {
-        let station = selectedStation, options = profile(selectedStationID), music = station?.kind == .music
+        let station = selectedStation, options = profile(selectedStationID), music = station?.mutesNews == true
         let link = panel ? remoteURL?.absoluteString ?? "" : ""
         var item = RemoteState.SettingsItem(
             stationName: station?.name ?? selectedStationID, delay: options.delaySeconds, muteNews: options.muteNews,
@@ -165,7 +165,7 @@ extension AppModel {
             if isPlaying { restart() }
         case .ambience(let sound): ambience = sound
         case .maxMute(let minutes): updateProfile(id) { $0.detector.maxMuteSeconds = minutes * 60 }
-        case .slots(let minutes): updateProfile(id) { $0.detector.slotMinutes = minutes }
+        case .slots(let minutes): updateProfile(id) { $0.detector.slotMinutes = minutes; $0.slotMinutesByHand = true }
         case .startAtLogin(let on): setStartAtLogin(on)
         case .keepAwake(let on): keepAwake = on
         case .port(let newPort): port = newPort

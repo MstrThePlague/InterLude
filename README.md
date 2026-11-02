@@ -2,7 +2,7 @@
 
 InterLude is a small macOS menu bar app that plays BBC radio about a minute behind live and quietly mutes the news bulletins. It plays on the Mac itself, on Chromecast speakers and groups, or on Sonos speakers and groups. It also runs as a web app on a Linux server (see [Running the server](#running-the-server)).
 
-I wanted 6 Music in the background all day without the hourly news, so it is tuned for music stations. Speech stations play normally.
+I wanted 6 Music in the background all day without the hourly news, so it is tuned for music stations. Speech stations, and streams with no news such as Radio 1 Dance, play normally.
 
 <p align="center">
   <img src="docs/images/mac-playing.png" width="260" alt="The InterLude panel on the Mac playing 6 Music live: the station name large, the track and artwork, and play, volume, station and speaker at the bottom">
@@ -31,7 +31,7 @@ The BBC's live streams are HLS: a playlist of 6.4 second audio segments. InterLu
 
 A bulletin is found in a few ways, all running on the machine itself:
 
-1. **Speech near the hour or half hour.** Apple's built-in sound classifier scores speech and music every 1.5 seconds. Twenty seconds of sustained speech close to a bulletin slot starts a mute.
+1. **Speech near a bulletin slot.** Apple's built-in sound classifier scores speech and music every 1.5 seconds. Twenty seconds of sustained speech close to a bulletin slot starts a mute. Slots start at :00 and :30; once a station has a dozen confirmed bulletins, its slots follow where they actually start, so a station with news only on the hour stops listening at :30, and one with bulletins at :45 starts listening there after **News got through** has marked a few. Setting the bulletin minutes in Settings fixes them instead.
 2. **The news theme.** InterLude learns the station's news jingle from recent bulletins and starts the mute when it hears it, so the presenter's handover still plays.
 3. **The newsreader's words.** From a minute before to three minutes after each bulletin slot, on-device speech recognition transcribes the stream as it arrives. The newsreader's opening ("BBC News at five thirty", "Newsbeat, I'm …") starts a mute straight away. A presenter's handover ("here's the news with …") starts one too, but only if speech carries on for ten seconds after it, and never when it's a trail such as "after the news" or "the news is next". While a bulletin is muted, it listens for the sign-off ("…your next update's at six thirty", "That's 6 Music News for tonight") and ends the mute there, so trails and the presenter's chat afterwards are not lost. If no sign-off is heard, the mute ends when music returns.
 
@@ -179,7 +179,7 @@ The volume is named after the folder `compose.yaml` is in, so for a folder calle
 
 | File | What it holds |
 |---|---|
-| `Application Support/InterLude/stations.json` | The station list and stream address template. Edit a station's pool ID here if the BBC changes it, or its `newsNames` to teach it what the station calls its news; the change takes effect within a few seconds. |
+| `Application Support/InterLude/stations.json` | The station list and stream address template. Edit a station's pool ID here if the BBC changes it, its `newsNames` to teach it what the station calls its news, or set `"news": false` for a stream with no bulletins; the change takes effect within a few seconds. |
 | `Application Support/InterLude/web/` | Optional `index.html`, `app.css` or `app.js` to use in place of the app's own, for trying changes to the panel and phone remote without a rebuild. |
 | `Application Support/InterLude/profiles/` | Per-station settings, bulletin minutes and the learned news theme. |
 | `Application Support/InterLude/events.jsonl` | One line per detected bulletin and per correction. Settings › Export diagnostics zips these up. |

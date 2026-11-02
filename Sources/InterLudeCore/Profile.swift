@@ -27,6 +27,8 @@ public struct StationProfile: Codable, Sendable, Equatable {
     public var startMinuteHistogram: [Int: Int] = [:]
     /// The lengths of recent confirmed bulletins [s].
     public var bulletinSeconds: [Double] = []
+    /// The bulletin minutes were set in Settings, so they are no longer learned.
+    public var slotMinutesByHand = false
 
     /// Candidates kept at once.
     static let maxCandidates = 8
@@ -43,6 +45,7 @@ public struct StationProfile: Codable, Sendable, Equatable {
         get(.delaySeconds, &delaySeconds); get(.muteNews, &muteNews); get(.favourite, &favourite); get(.shadowMode, &shadowMode)
         get(.detector, &detector); get(.idents, &idents); get(.candidates, &candidates); get(.candidateSources, &candidateSources)
         get(.startMinuteHistogram, &startMinuteHistogram); get(.bulletinSeconds, &bulletinSeconds)
+        get(.slotMinutesByHand, &slotMinutesByHand)
         // Candidates and themes from before the fingerprint changed shape can't be compared with new ones; drop them.
         let expected = IdentFeatures.bands
         if candidates.contains(where: { $0.first?.count != expected || $0.count < 1000 }) { candidates = []; candidateSources = [] }
@@ -51,6 +54,7 @@ public struct StationProfile: Codable, Sendable, Equatable {
 
     enum Keys: String, CodingKey {
         case delaySeconds, muteNews, favourite, shadowMode, detector, idents, candidates, candidateSources, startMinuteHistogram, bulletinSeconds
+        case slotMinutesByHand
     }
 
     /// Encodes everything except the candidates, which `save` writes to their own file.
@@ -61,6 +65,7 @@ public struct StationProfile: Codable, Sendable, Equatable {
         try container.encode(detector, forKey: .detector); try container.encode(idents, forKey: .idents)
         try container.encode(candidateSources, forKey: .candidateSources)
         try container.encode(startMinuteHistogram, forKey: .startMinuteHistogram); try container.encode(bulletinSeconds, forKey: .bulletinSeconds)
+        try container.encode(slotMinutesByHand, forKey: .slotMinutesByHand)
     }
 
     /// The profile's JSON file, `profiles/<serviceId>.json` in the support directory.
@@ -89,7 +94,7 @@ public struct StationProfile: Codable, Sendable, Equatable {
             return profile
         }
         var profile = StationProfile()
-        if station.kind == .speech { profile.muteNews = false }
+        if !station.mutesNews { profile.muteNews = false }
         if station.serviceId == "bbc_radio_two" {
             // Radio 2's bulletins and speech content have not been measured, so only its jingle mutes, and only
             // once it has been checked in shadow mode.
@@ -116,8 +121,30 @@ public struct StationProfile: Codable, Sendable, Equatable {
         return max(45, sorted[sorted.count / 20] * 0.6)
     }
 
+    /// Confirmed bulletins needed before the bulletin minutes are learned.
+    static let slotLearningMinimum = 12
+    /// Start minutes counted at most; beyond this the counts are halved, so a schedule change is followed.
+    static let slotHistoryLength = 200
+
+    /// The bulletin minutes the start minutes so far point to, or nil until enough are known.
+    ///
+    /// Each start is counted at the nearest quarter hour, since bulletins start up to a minute either side of their
+    /// minute (the theme a few seconds before it, the newsreader up to 46 s after). A quarter hour is a bulletin
+    /// minute if at least 15 % of bulletins, and at least three, started there. So a station whose half-hour bulletins
+    /// never come stops listening at :30, and one whose bulletins are at :45 starts listening there once
+    /// "News got through" has marked a few.
+    public var learnedSlotMinutes: [Int]? {
+        let total = startMinuteHistogram.values.reduce(0, +)
+        guard total >= Self.slotLearningMinimum else { return nil }
+        var counts: [Int: Int] = [:]
+        for (minute, count) in startMinuteHistogram { counts[(Int((Double(minute) / 15).rounded()) * 15) % 60, default: 0] += count }
+        let slots = counts.filter { $0.value >= max(3, Int((Double(total) * 0.15).rounded(.up))) }.keys.sorted()
+        return slots.isEmpty ? nil : slots
+    }
+
     /// Learns a confirmed bulletin's start minute and length, and once five are known, tightens the range of lengths
-    /// the detector treats as normal to the middle 90 %, with a margin.
+    /// the detector treats as normal to the middle 90 %, with a margin. Once enough are known, and unless they were
+    /// set in Settings, the bulletin minutes follow `learnedSlotMinutes`.
     ///
     /// - Parameters:
     ///   - start: The bulletin's start, on the stream clock [s since 1970].
@@ -125,6 +152,10 @@ public struct StationProfile: Codable, Sendable, Equatable {
     public mutating func learn(start: Double, end: Double) {
         let minute = Int((start.truncatingRemainder(dividingBy: 3600)) / 60)
         startMinuteHistogram[minute, default: 0] += 1
+        if startMinuteHistogram.values.reduce(0, +) > Self.slotHistoryLength {
+            startMinuteHistogram = startMinuteHistogram.mapValues { $0 / 2 }.filter { $0.value > 0 }
+        }
+        if !slotMinutesByHand, let slots = learnedSlotMinutes { detector.slotMinutes = slots }
         bulletinSeconds.append(end - start)
         if bulletinSeconds.count > Self.maxBulletinLengths { bulletinSeconds.removeFirst() }
         if bulletinSeconds.count >= 5 {

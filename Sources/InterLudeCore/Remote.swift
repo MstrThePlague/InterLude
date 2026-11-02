@@ -512,14 +512,16 @@ extension RemoteState.NewsItem {
     /// - Parameters:
     ///   - profile: The station's settings.
     ///   - kind: Music or speech.
+    ///   - hasNews: False for a stream with no bulletins, from `Station.news`.
     ///   - earlier: Whether bulletins are skipped rather than muted: an earlier programme playing, or Earlier showing
     ///     with nothing playing.
     ///   - ambience: The ID of the sound played during bulletins.
-    public static func describe(_ profile: StationProfile, kind: StationKind?, earlier: Bool, ambience: String) -> Self {
-        let speech = kind == .speech
+    public static func describe(_ profile: StationProfile, kind: StationKind?, hasNews: Bool = true, earlier: Bool, ambience: String) -> Self {
+        let speech = kind == .speech || !hasNews
         let title = earlier ? "Skip news" : "Mute news"
         let detail: String
-        if speech { detail = "Off for speech stations, where talk is the programme." }
+        if !hasNews { detail = "Off: this stream has no news bulletins." }
+        else if speech { detail = "Off for speech stations, where talk is the programme." }
         else if profile.shadowMode { detail = "Shadow mode: bulletins are noted but not muted." }
         else if !profile.muteNews { detail = "Off. Bulletins will play." }
         else if earlier {
