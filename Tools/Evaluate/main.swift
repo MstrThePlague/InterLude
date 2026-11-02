@@ -7,7 +7,8 @@
 //
 //  <scores.csv> comes from `classify`. labels.json lists the bulletins as heard by ear:
 //      [{"start": "2026-10-12T05:30:46Z", "end": "2026-10-12T05:34:36Z"}, ...]
-//  profile.json is a DetectorConfig to try in place of the defaults.
+//  profile.json is a DetectorConfig to try in place of the defaults. STATION=<serviceId> adds that station's long
+//  bulletins from Data/stations.json.
 //
 //  Reports each block detected, then, with labels: how many bulletins were fully muted, the most news left audible
 //  in any bulletin, blocks that matched no bulletin (false starts), and the most music lost at a bulletin's edge.
@@ -22,6 +23,11 @@ if arguments.count >= 4, let data = FileManager.default.contents(atPath: argumen
     config = try JSONDecoder().decode(DetectorConfig.self, from: data)
 }
 var detector = NewsDetector(config: config)
+// STATION=<serviceId> uses that station's long bulletins from Data/stations.json.
+if let id = ProcessInfo.processInfo.environment["STATION"],
+   let station = try? Catalogue.load(from: URL(fileURLWithPath: "Data/stations.json")).station(id) {
+    detector.longBulletins = station.longBulletins ?? []
+}
 for line in try String(contentsOfFile: arguments[1], encoding: .utf8).split(separator: "\n").dropFirst() {
     let fields = line.split(separator: ",")
     guard fields.count >= 5, let segmentStart = Double(fields[1]), let offset = Double(fields[2]),

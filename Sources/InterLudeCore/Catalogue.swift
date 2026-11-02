@@ -10,6 +10,20 @@ import Foundation
 /// Whether a station is mostly music, where bulletins are muted, or speech, where talk is the programme.
 public enum StationKind: String, Codable, Sendable { case music, speech }
 
+/// A bulletin longer than the usual few minutes, at the same UK time every day, such as Newsbeat's 15 minutes at
+/// 12:45 on Radio 1.
+public struct LongBulletin: Codable, Sendable, Hashable {
+    /// When it starts, UK time, as "HH:MM".
+    public var at: String
+    public var minutes: Double
+    public init(at: String, minutes: Double) { self.at = at; self.minutes = minutes }
+    /// Minutes after midnight, UK time, or nil if `at` is unreadable.
+    public var minuteOfDay: Int? {
+        let parts = at.split(separator: ":").compactMap { Int($0) }
+        return parts.count == 2 ? parts[0] * 60 + parts[1] : nil
+    }
+}
+
 /// One BBC station as described in `stations.json`.
 public struct Station: Codable, Sendable, Hashable, Identifiable {
     public var name: String
@@ -32,6 +46,8 @@ public struct Station: Codable, Sendable, Hashable, Identifiable {
     /// True where the speech rule hasn't been checked, such as Radio 2, whose presenters talk at length near the
     /// hour: a new profile starts in shadow mode and mutes only on the station's jingle.
     public var untested: Bool?
+    /// Bulletins at fixed times that run longer than the longest mute, which may run their length.
+    public var longBulletins: [LongBulletin]?
     public var id: String { serviceId }
     /// Whether InterLude looks for bulletins to mute: music stations that carry news.
     public var mutesNews: Bool { kind == .music && news != false }
@@ -95,6 +111,7 @@ public struct Catalogue: Codable, Sendable {
             }
             if catalogue.stations[i].news == nil { catalogue.stations[i].news = match.news }
             if catalogue.stations[i].untested == nil { catalogue.stations[i].untested = match.untested }
+            if catalogue.stations[i].longBulletins == nil { catalogue.stations[i].longBulletins = match.longBulletins }
         }
         let known = Set(catalogue.stations.map(\.serviceId))
         catalogue.stations += shipped.stations.filter { !known.contains($0.serviceId) }

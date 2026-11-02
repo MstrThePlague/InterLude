@@ -179,6 +179,8 @@ Four hours each of Radio 1, 1Xtra, Asian Network and Radio 3 from the rewind win
 - **Radio 3** had one bulletin, "the latest BBC News, at one o'clock with John Hammond", signing off "BBC News just after two minutes past one". The speech rule gave 5 false starts from presenter talk and a mute running 3 minutes past the end, so Radio 3 stays `untested`. Its presenter's "This is BBC Radio 3" at a quarter past ended "this is bbc radio" as an opening phrase.
 - **After the wording changes** in 0.7.2, Radio 1's scan finds every half-hour opening within 3 s of where it starts, and the 10:30 and 11:30 sign-offs within a second of their real ends. The 13:30 sign-off was transcribed too badly to recognise, so that mute ends when music returns. Nothing was found at other quarter hours.
 
+- **The 12:45 Newsbeat (0.8.0).** Listed as a long bulletin, it was muted in full on Radio 1 and Asian Network when the speech rule was replayed over the recordings (1Xtra: all but the first 19 s, where speech became sustained late). With the usual 5 s of music to close a block, a song clip at 12:47:30 ended the mute for 4 s, so long bulletins need 30 s of music. Without a transcript, the replayed mute ran 1 to 2 minutes past the 13:00:36 end; in the app the sign-off ("your next update in half an hour") ends it there.
+
 ## Spec amendments made
 
 1. Wall-clock mapping of a segment uses `(index − 1) × 6.4` (the index is the end time). The stream clock runs about 29 s ahead of the system clock.

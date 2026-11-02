@@ -106,10 +106,14 @@ public struct NewsDetector: Sendable {
     static let anchorReach = 120.0
     /// After a sign-off, talk for this long does not start another block [s].
     static let pauseAfterSignOff = 240.0
+    /// Music that must last this long to close a long bulletin, which plays clips of songs between reports [s].
+    static let longBulletinMusicSeconds = 30.0
     /// Score windows kept for re-judging after "Not news": about 10 minutes.
     static let historyLength = 400
 
     public var config: DetectorConfig
+    /// The station's long bulletins: near these, a slot opens whatever the minute, and a mute may run their length.
+    public var longBulletins: [LongBulletin] = []
     public private(set) var blocks: [NewsBlock] = []
     /// When the current run of speech started, if one is going.
     private var runStart: Double?
@@ -135,15 +139,43 @@ public struct NewsDetector: Sendable {
     /// The block still going, if any.
     public var openBlock: NewsBlock? { blocks.last(where: \.isOpen) }
 
-    /// Whether `time` falls in a bulletin slot: by default from a minute before to three minutes after :00 or :30.
+    /// Whether `time` falls in a bulletin slot: by default from a minute before to three minutes after :00 or :30,
+    /// or near one of the station's long bulletins.
     func inSlot(_ time: Double) -> Bool {
         guard config.requireSlot else { return true }
+        if longBulletin(near: time) != nil { return true }
         let minute = (time.truncatingRemainder(dividingBy: 3600)) / 60
         return config.slotMinutes.contains { slot in
             var after = minute - Double(slot)               // minutes after the slot, wrapped to −30...30
             if after > 30 { after -= 60 } else if after < -30 { after += 60 }
             return after >= -config.slotBeforeMinutes && after <= config.slotAfterMinutes
         }
+    }
+
+    /// UK time, which long bulletins are given in.
+    static let ukCalendar: Calendar = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "Europe/London") ?? TimeZone(secondsFromGMT: 0)!
+        return calendar
+    }()
+
+    /// The long bulletin whose slot `time` falls in, as for any other slot, if any.
+    public func longBulletin(near time: Double) -> LongBulletin? {
+        guard !longBulletins.isEmpty else { return nil }
+        let parts = Self.ukCalendar.dateComponents([.hour, .minute, .second], from: Date(timeIntervalSince1970: time))
+        let minute = Double((parts.hour ?? 0) * 60 + (parts.minute ?? 0)) + Double(parts.second ?? 0) / 60
+        return longBulletins.first { bulletin in
+            guard let start = bulletin.minuteOfDay else { return false }
+            var after = minute - Double(start)              // minutes after it, wrapped to −720...720
+            if after > 720 { after -= 1440 } else if after < -720 { after += 1440 }
+            return after >= -config.slotBeforeMinutes && after <= config.slotAfterMinutes
+        }
+    }
+
+    /// The longest a block starting at `start` may stay muted [s]: the usual limit, or a long bulletin's length
+    /// with two minutes to spare.
+    public func maxMute(forBlockAt start: Double) -> Double {
+        longBulletin(near: start).map { max(config.maxMuteSeconds, $0.minutes * 60 + 120) } ?? config.maxMuteSeconds
     }
 
     /// The latest real block that a theme or opening heard at `time` belongs to: one that started within
@@ -177,9 +209,11 @@ public struct NewsDetector: Sendable {
         // An open block closes when music has lasted long enough, or when it has gone on too long.
         if let open = blocks.lastIndex(where: \.isOpen) {
             if isMusic { if musicRunStart == nil { musicRunStart = sample.time } } else { musicRunStart = nil }
-            if let musicStart = musicRunStart, sample.time + sample.duration - musicStart >= config.sustainedMusicSeconds {
+            let musicNeeded = longBulletin(near: blocks[open].start) != nil
+                ? max(config.sustainedMusicSeconds, Self.longBulletinMusicSeconds) : config.sustainedMusicSeconds
+            if let musicStart = musicRunStart, sample.time + sample.duration - musicStart >= musicNeeded {
                 close(open, at: musicStart + sample.duration / 2, timedOut: false, why: "music returned")
-            } else if sample.time - blocks[open].start > config.maxMuteSeconds {
+            } else if sample.time - blocks[open].start > maxMute(forBlockAt: blocks[open].start) {
                 close(open, at: sample.time, timedOut: true, why: "longest mute reached")
             }
             return
@@ -198,7 +232,8 @@ public struct NewsDetector: Sendable {
         blocks[index].end = end
         blocks[index].timedOut = timedOut
         let length = end - blocks[index].start
-        blocks[index].doubtful = length < config.minBulletinSeconds || length > config.maxBulletinSeconds
+        let longest = longBulletin(near: blocks[index].start).map { $0.minutes * 60 * 1.3 } ?? config.maxBulletinSeconds
+        blocks[index].doubtful = length < config.minBulletinSeconds || length > longest
         blocks[index].evidence += "; closed: \(why), \(Int(length))s"
         runStart = nil; musicRunStart = nil; pendingHandover = nil
     }

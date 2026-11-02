@@ -177,6 +177,12 @@ public actor PlayerSession {
         self.catalogue = catalogue; self.settings = settings; self.token = token
         self.cacheRoot = cacheRoot; self.eventLog = eventLog
         detector = NewsDetector(config: settings.profile.detector)
+        detector.longBulletins = settings.station.longBulletins ?? []
+    }
+
+    /// The playout's longest mute or skip: the usual limit, or room for the station's longest bulletin.
+    private var playoutMaxMute: Double {
+        max(settings.profile.detector.maxMuteSeconds, (settings.station.longBulletins ?? []).map { $0.minutes * 60 + 120 }.max() ?? 0)
     }
 
     // MARK: Lifecycle
@@ -227,7 +233,7 @@ public actor PlayerSession {
     /// Starts live playback: fetches from two minutes before the first segment listed up to the live edge, and
     /// analyses it all before listing anything.
     private func startLive(store: SegmentStore) async throws {
-        var live = Playout(liveEdge: liveEdge, delaySeconds: settings.delaySeconds, maxMuteSeconds: settings.profile.detector.maxMuteSeconds)
+        var live = Playout(liveEdge: liveEdge, delaySeconds: settings.delaySeconds, maxMuteSeconds: playoutMaxMute)
         let from = live.next - 20
         analysedThrough = from - 1
         try await withThrowingTaskGroup(of: Void.self) { group in
@@ -275,7 +281,7 @@ public actor PlayerSession {
             let speech = make()
             if await speech.prepare(install: false) { transcriber = speech; speechState = "ready" }
         }
-        replay = ReplayPlayout(start: first, maxSkipSeconds: settings.profile.detector.maxMuteSeconds)
+        replay = ReplayPlayout(start: first, maxSkipSeconds: playoutMaxMute)
         await analyse(upTo: to)
         try Task.checkCancellation()
         guard var listing = replay else { return }
@@ -528,8 +534,14 @@ public actor PlayerSession {
         } else {
             blockAudio += newMono
         }
-        if blockAudio.count > Int(480 * rate) { return }           // longer than any bulletin: leave it to the music rule
+        // Only the last minute is kept, which is all each transcription needs.
+        if blockAudio.count > Int(60 * rate) {
+            let drop = blockAudio.count - Int(60 * rate)
+            blockAudio.removeFirst(drop)
+            blockAudioStart += Double(drop) / rate
+        }
         let end = blockAudioStart + Double(blockAudio.count) / rate
+        if end - block.start > detector.maxMute(forBlockAt: block.start) { return }     // longer than any bulletin: leave it to the music rule
         guard end - transcribedThrough >= 5 else { return }
         let from = max(blockAudioStart, transcribedThrough - 20)    // overlap, so phrases split across calls are kept
         let samples = Array(blockAudio.dropFirst(Int((from - blockAudioStart) * rate)))
@@ -743,7 +755,8 @@ public actor PlayerSession {
     /// The news theme has been seen 11 to 41 s after the speech starts, so the window runs from 10 s before to 60 s
     /// after.
     private func learn(from block: NewsBlock) {
-        if let end = block.end {
+        // A long bulletin's start and length would skew the usual ones, and teach a slot every hour.
+        if let end = block.end, detector.longBulletin(near: block.start) == nil {
             let slots = settings.profile.detector.slotMinutes
             settings.profile.learn(start: block.start, end: end)
             if settings.profile.detector.slotMinutes != slots {

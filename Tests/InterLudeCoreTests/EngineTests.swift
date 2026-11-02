@@ -446,3 +446,21 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
     #expect(merged.stations[0].newsNames == ["newsbeat", "my own", "news beat"])
     #expect(merged.stations[0].poolId == "2")
 }
+
+@Test func longBulletinsOpenAtTheirUKTimeAndRunTheirLength() {
+    var d = NewsDetector()
+    d.longBulletins = [LongBulletin(at: "12:45", minutes: 15)]
+    let winter: Double = 1_793_623_500          // 2026-11-02 12:45 UTC, which is 12:45 in the UK
+    let summer: Double = 1_783_165_500          // 2026-07-04 11:45 UTC, which is 12:45 BST
+    #expect(d.longBulletin(near: winter + 30) != nil && d.longBulletin(near: summer + 30) != nil)
+    #expect(d.longBulletin(near: winter + 3600) == nil && d.longBulletin(near: summer - 3600 + 30) == nil)
+    #expect(d.maxMute(forBlockAt: winter + 30) == 1020 && d.maxMute(forBlockAt: winter + 1800) == 480)
+
+    for s in samples(from: winter + 30, speech: true, seconds: 120) { d.ingest(s) }
+    #expect(d.openBlock?.start == winter + 30)
+    for s in samples(from: winter + 150, speech: false, seconds: 15) { d.ingest(s) }     // a song clip in a report
+    for s in samples(from: winter + 165, speech: true, seconds: 600) { d.ingest(s) }     // past the usual longest mute
+    #expect(d.openBlock?.start == winter + 30)
+    for s in samples(from: winter + 765, speech: false, seconds: 40) { d.ingest(s) }     // music returns
+    #expect(d.openBlock == nil && d.blocks.count == 1 && d.blocks[0].doubtful == false && !d.blocks[0].timedOut)
+}
