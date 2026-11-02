@@ -108,6 +108,14 @@ public struct StationProfile: Codable, Sendable, Equatable {
         }
     }
 
+    /// How far into a bulletin a sign-off may be [s]: 45 s, or once five lengths are known, 60 % of the shortest
+    /// usual one, so a presenter's "after the news" or a mid-bulletin "next" is not taken for the end.
+    public var signOffSearchStart: Double {
+        guard bulletinSeconds.count >= 5 else { return 45 }
+        let sorted = bulletinSeconds.sorted()
+        return max(45, sorted[sorted.count / 20] * 0.6)
+    }
+
     /// Learns a confirmed bulletin's start minute and length, and once five are known, tightens the range of lengths
     /// the detector treats as normal to the middle 90 %, with a margin.
     ///

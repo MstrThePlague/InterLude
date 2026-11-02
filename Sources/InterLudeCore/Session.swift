@@ -149,6 +149,9 @@ public actor PlayerSession {
     /// The last 6 s of mono audio, as context for the next chunk's fingerprints.
     private var lastMono: [Float] = []
 
+    /// Live, how far the audio around a slot has been transcribed.
+    private var slotHeardThrough: Double = 0
+
     // Earlier programmes: the last few minutes of audio, to listen for the newsreader at every slot.
     private var slotAudio: [Float] = []
     private var slotAudioEnd: Double = 0
@@ -471,6 +474,7 @@ public actor PlayerSession {
                 rejudgePending()
                 if replay != nil { await listenAtSlots(chunkStart: chunkStart, newMono: newMono) }
                 await listenForNewsreader(chunkStart: chunkStart, newMono: newMono)
+                if replay == nil { await listenLiveAtSlots(chunkStart: chunkStart, newMono: newMono) }
             }
             analysedThrough = chunkEnd
             index = chunkEnd + 1
@@ -535,7 +539,8 @@ public actor PlayerSession {
             listenedTo.insert(block.id)
             write(["event": "transcribing", "block": block.id.uuidString, "phrases": phrases.count])
         }
-        if !block.anchoredOnIdent, let opening = NewsPhrases.opening(in: phrases), from + opening < block.start + 90 {
+        let names = settings.station.newsNames ?? []
+        if !block.anchoredOnIdent, let opening = NewsPhrases.opening(in: phrases, names: names), from + opening < block.start + 90 {
             detector.anchorStart(at: from + opening - 3, why: "newsreader's opening heard")
         }
         // Speech alone opened this block. Once the station's theme is known, a bulletin shows it (or the newsreader's
@@ -546,7 +551,7 @@ public actor PlayerSession {
             detector.rejectOpenBlock(at: current.start, why: "no news theme or newsreader heard: presenter talk")
             write(["event": "released", "block": block.id.uuidString])
         }
-        if let signOff = NewsPhrases.signOff(in: phrases, after: block.start + 45 - from) {
+        if let signOff = NewsPhrases.signOff(in: phrases, after: block.start + settings.profile.signOffSearchStart - from, names: names) {
             detector.endBlock(at: from + signOff + 0.3, why: "newsreader signed off")
             signedOff.insert(block.id)
             write(["event": "signOff", "block": block.id.uuidString, "at": from + signOff])
@@ -566,6 +571,7 @@ public actor PlayerSession {
         let keep = Int((before + after + 20) * rate)
         if slotAudio.count > keep { slotAudio.removeFirst(slotAudio.count - keep) }
         guard let speech = transcriber, speechState == "ready" else { return }
+        let names = settings.station.newsNames ?? []
         let audioStart = slotAudioEnd - Double(slotAudio.count) / rate
         var hour = ((audioStart - after) / 3600).rounded(.down) * 3600
         while hour <= slotAudioEnd {
@@ -575,12 +581,13 @@ public actor PlayerSession {
                 checkedSlots.insert(Int(slot))
                 let from = max(audioStart, slot - before)
                 let samples = Array(slotAudio.dropFirst(Int((from - audioStart) * rate)).prefix(Int((slot + after - from) * rate)))
+                // A handover isn't used here: by now the speech after it has been analysed, so it can't be confirmed.
                 guard let phrases = try? await speech.transcribe(samples: samples, sampleRate: rate),
-                      let opening = NewsPhrases.opening(in: phrases) else { continue }
+                      let opening = NewsPhrases.opening(in: phrases, names: names) else { continue }
                 detector.newsreaderOpening(at: from + opening - 3)
                 write(["event": "slotOpening", "slot": slot, "at": from + opening])
                 // A short bulletin can be over within the window: then its sign-off is in this transcript too.
-                if let signOff = NewsPhrases.signOff(in: phrases, after: opening + 45),
+                if let signOff = NewsPhrases.signOff(in: phrases, after: opening + settings.profile.signOffSearchStart, names: names),
                    let block = detector.blocks.last(where: { !$0.falseStart && abs($0.start - (from + opening - 3)) < 1 }) {
                     detector.endBlock(at: from + signOff + 0.3, why: "newsreader signed off")
                     signedOff.insert(block.id)
@@ -590,6 +597,33 @@ public actor PlayerSession {
             }
             hour += 3600
         }
+    }
+
+    /// Live, the analysis is only about a delay ahead of the listener, so near each slot the latest audio is
+    /// transcribed as it arrives, as during a bulletin. The newsreader's opening opens a block there and then; a
+    /// handover ("here's the news") opens one once speech carries on from it. This catches bulletins on stations whose
+    /// theme isn't known yet, and a presenter talking straight into the news, whose speech started before the slot.
+    private func listenLiveAtSlots(chunkStart: Double, newMono: [Float]) async {
+        let rate = Self.sampleRate
+        let chunkEnd = chunkStart + Double(newMono.count) / rate
+        guard let speech = transcriber, speechState == "ready", detector.openBlock == nil,
+              detector.inSlot(chunkStart) || detector.inSlot(chunkEnd), chunkEnd - slotHeardThrough >= 5 else { return }
+        // monoTail holds the last 30 s, already including this chunk; overlap the last call so split phrases are kept.
+        let tailStart = chunkEnd - Double(monoTail.count) / rate
+        let from = max(tailStart, slotHeardThrough - 15)
+        let samples = Array(monoTail.dropFirst(Int((from - tailStart) * rate)))
+        slotHeardThrough = chunkEnd
+        guard let phrases = try? await speech.transcribe(samples: samples, sampleRate: rate), !phrases.isEmpty else { return }
+        let names = settings.station.newsNames ?? []
+        if let opening = NewsPhrases.opening(in: phrases, names: names) {
+            detector.newsreaderOpening(at: from + opening - 3)
+            write(["event": "slotOpening", "at": from + opening])
+        } else if let handover = NewsPhrases.handover(in: phrases, names: names) {
+            detector.newsHandover(at: from + handover)
+            write(["event": "slotHandover", "at": from + handover])
+        } else { return }
+        logBlocks()
+        rejudgePending()
     }
 
     /// Makes the segments already listed but not yet fetched follow the latest view of the timeline, for example

@@ -24,6 +24,9 @@ public struct Station: Codable, Sendable, Hashable, Identifiable {
     public var colour: String?
     /// The heading the station appears under in the station list, such as "National" or "Local".
     public var group: String?
+    /// What the station's newsreaders call its news, lower case, such as "newsbeat" or "6 music news". Heard at the
+    /// start or end of a bulletin, it marks the opening or sign-off; "BBC News" and "next update" work on any station.
+    public var newsNames: [String]?
     public var id: String { serviceId }
     public init(name: String, serviceId: String, poolId: String, kind: StationKind) {
         self.name = name; self.serviceId = serviceId; self.poolId = poolId; self.kind = kind
@@ -63,8 +66,8 @@ public struct Catalogue: Codable, Sendable {
 
     /// The user's editable list, brought up to date with the bundled one.
     ///
-    /// Stations added to the bundled list since the copy was made are appended, and presentation fields that older
-    /// copies lack are filled in. The user's own edits, such as a changed pool ID, win.
+    /// Stations added to the bundled list since the copy was made are appended, and presentation fields and news names
+    /// that older copies lack are filled in. The user's own edits, such as a changed pool ID, win.
     ///
     /// - Parameters:
     ///   - bundled: The list that ships with the app or server.
@@ -78,6 +81,7 @@ public struct Catalogue: Codable, Sendable {
             if catalogue.stations[i].short == nil { catalogue.stations[i].short = match.short }
             if catalogue.stations[i].colour == nil { catalogue.stations[i].colour = match.colour }
             if catalogue.stations[i].group == nil { catalogue.stations[i].group = match.group }
+            if catalogue.stations[i].newsNames == nil { catalogue.stations[i].newsNames = match.newsNames }
         }
         let known = Set(catalogue.stations.map(\.serviceId))
         catalogue.stations += shipped.stations.filter { !known.contains($0.serviceId) }

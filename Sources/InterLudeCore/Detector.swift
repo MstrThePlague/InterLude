@@ -40,6 +40,9 @@ public struct DetectorConfig: Codable, Sendable, Equatable {
     public var minBulletinSeconds = 90.0
     /// Bulletins longer than this are flagged as doubtful [s].
     public var maxBulletinSeconds = 360.0
+    /// A handover to the news ("here's the news") near a slot opens a bulletin once speech has carried on from it
+    /// this long [s].
+    public var handoverSpeechSeconds = 10.0
 
     public init() {}
 
@@ -53,11 +56,13 @@ public struct DetectorConfig: Codable, Sendable, Equatable {
         get(.slotMinutes, &slotMinutes); get(.slotBeforeMinutes, &slotBeforeMinutes); get(.slotAfterMinutes, &slotAfterMinutes)
         get(.requireSlot, &requireSlot); get(.identOnly, &identOnly); get(.maxMuteSeconds, &maxMuteSeconds)
         get(.minBulletinSeconds, &minBulletinSeconds); get(.maxBulletinSeconds, &maxBulletinSeconds)
+        get(.handoverSpeechSeconds, &handoverSpeechSeconds)
     }
 
     enum Keys: String, CodingKey {
         case speechThreshold, sustainedSpeechSeconds, gapSeconds, musicThreshold, speechCeilingForMusic, sustainedMusicSeconds
         case slotMinutes, slotBeforeMinutes, slotAfterMinutes, requireSlot, identOnly, maxMuteSeconds, minBulletinSeconds, maxBulletinSeconds
+        case handoverSpeechSeconds
     }
 }
 
@@ -120,6 +125,8 @@ public struct NewsDetector: Sendable {
     private var awaitingBreak = false
     /// After the newsreader signs off, talk (trails, the presenter) does not start a new block until this time.
     private var openingsPausedUntil: Double = 0
+    /// A handover to the news heard near a slot, waiting for speech to carry on from it.
+    private var pendingHandover: Double?
     /// Recent runs of speech, so "News got through" can find the bulletin the listener just heard.
     public private(set) var speechRuns: [(start: Double, end: Double)] = []
 
@@ -178,8 +185,10 @@ public struct NewsDetector: Sendable {
             return
         }
 
-        // Otherwise sustained speech that started near a slot opens one.
+        // Otherwise a handover followed by speech opens one, or sustained speech that started near a slot.
         musicRunStart = nil
+        if let cue = pendingHandover, isMusic || sample.time - cue > 60 { pendingHandover = nil }
+        if openOnHandover() { return }
         guard !config.identOnly, !suppressUntilMusic, sample.time >= openingsPausedUntil, let start = runStart,
               lastSpeech - start >= config.sustainedSpeechSeconds, inSlot(start) else { return }
         blocks.append(NewsBlock(start: start, evidence: "speech>=\(config.speechThreshold) for \(Int(lastSpeech - start))s near a slot"))
@@ -191,7 +200,7 @@ public struct NewsDetector: Sendable {
         let length = end - blocks[index].start
         blocks[index].doubtful = length < config.minBulletinSeconds || length > config.maxBulletinSeconds
         blocks[index].evidence += "; closed: \(why), \(Int(length))s"
-        runStart = nil; musicRunStart = nil
+        runStart = nil; musicRunStart = nil; pendingHandover = nil
     }
 
     /// The news theme was heard.
@@ -245,6 +254,32 @@ public struct NewsDetector: Sendable {
         block.anchoredOnIdent = true
         blocks.append(block)
         runStart = nil
+    }
+
+    /// A presenter's handover to the news was heard, such as "here's the news with …".
+    ///
+    /// Presenters mention the news for other reasons too, so near a slot this opens a block only once speech has
+    /// carried on from it for `handoverSpeechSeconds`, now or as later windows arrive. Like the newsreader's opening,
+    /// it catches a presenter talking straight into the bulletin. The block's start is not taken as exact, so once the
+    /// station's theme is known, a block with neither theme nor opening is still released as presenter talk.
+    ///
+    /// - Parameter time: Where the handover starts [s since 1970].
+    public mutating func newsHandover(at time: Double) {
+        guard inSlot(time), openBlock == nil, !config.identOnly, !suppressUntilMusic, !awaitingBreak, time >= openingsPausedUntil else { return }
+        if let last = blocks.last, let end = last.end, time - end < 30 { return }      // the tail of the last bulletin
+        pendingHandover = time
+        openOnHandover()
+    }
+
+    /// Opens a block at the pending handover if speech has carried on from it long enough.
+    @discardableResult
+    private mutating func openOnHandover() -> Bool {
+        guard let cue = pendingHandover, openBlock == nil, let start = runStart, start <= cue + config.gapSeconds,
+              lastSpeech - cue >= config.handoverSpeechSeconds else { return false }
+        blocks.append(NewsBlock(start: cue, evidence: "handover to the news heard near a slot, then speech for \(Int(lastSpeech - cue))s"))
+        pendingHandover = nil
+        runStart = nil
+        return true
     }
 
     /// The newsreader signed off: the bulletin ends there, even if the presenter talks on, and talk for the next

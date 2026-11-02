@@ -3,7 +3,9 @@
 //
 //  Finds the newsreader's opening and sign-off in a transcript of a bulletin. Newsroom wording is the same whoever
 //  presents the show, for example "BBC News at 5.30. This is …" and "6 Music News. Your next update's at 6.30.",
-//  so a short list of phrases is enough to mark where a bulletin really starts and ends.
+//  so a short list of phrases, plus the station's own name for its news from `stations.json` (such as "Newsbeat"),
+//  is enough to mark where a bulletin really starts and ends. A presenter's "here's the news" is a weaker sign, a
+//  handover, which only counts near a slot and once speech carries on from it.
 
 import Foundation
 
@@ -19,25 +21,34 @@ public struct SpokenPhrase: Sendable, Equatable {
 
 /// Recognises a newsreader's opening and sign-off.
 public enum NewsPhrases {
-    /// Phrases that open a bulletin.
-    static let openings = ["bbc news at", "this is bbc radio", "6 music news with", "six music news with"]
+    /// Phrases that open a bulletin on any station. The station's news names open one too, unless they are a trail.
+    static let openings = ["bbc news at", "this is bbc radio"]
 
-    /// Phrases that close a bulletin.
+    /// Phrases that close a bulletin on any station. The station's news names close one too.
     ///
     /// Sign-offs heard include "6 Music News. Your next update's at 6.30", "That's 6 Music News, more at seven" and
     /// "That's 6 Music News for tonight". The station's news name is only said again at the end, and callers only
-    /// consider phrases 45 s or more into the bulletin, so the presenter's "after the 6 Music News" never counts.
+    /// look well into the bulletin (`StationProfile.signOffSearchStart`), so the presenter's "after the 6 Music News"
+    /// never counts.
     static let signOffs = ["next update", "next news", "next bulletin", "updates at", "update is at", "next full news",
-                           "more news at", "music news", "that's the news"]
+                           "more news at", "that's the news", "that's the latest"]
+
+    /// Words just before "news" or a news name that make it a trail for the bulletin rather than the bulletin, as in
+    /// "after the news" or "before Newsbeat". "The", "this" and "our" are skipped over first.
+    static let trailBefore = ["after", "before", "until", "till", "from", "about", "on", "of", "ahead of", "up to", "good", "bad",
+                              "great", "fake", "some", "any", "more"]
+    /// Words just after that make it a trail, or not news at all, as in "the news is next" or "news that …".
+    static let trailAfter = ["is next", "next", "coming up", "is coming", "in a minute", "in a moment", "in a few", "shortly",
+                             "soon", "later", "at the top", "on the hour", "that", "of", "about", "is that", "for you", "from"]
 
     /// Most phrases a sign-off's tail may be apart from the phrase before it [s].
     static let signOffGap = 1.5
 
     /// Lower case, with curly apostrophes straightened, commas and full stops removed and spaces collapsed.
     static func normalise(_ text: String) -> String {
-        text.lowercased().replacingOccurrences(of: "’", with: "'").replacingOccurrences(of: ",", with: " ")
-            .replacingOccurrences(of: ".", with: " ")
-            .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        var text = text.lowercased().replacingOccurrences(of: "’", with: "'")
+        for mark in [",", ".", "?", "!", ";", ":", "\""] { text = text.replacingOccurrences(of: mark, with: " ") }
+        return text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
     }
 
     /// Joins each phrase with the ones after it, so wording split across results is still found.
@@ -55,9 +66,55 @@ public enum NewsPhrases {
         }
     }
 
-    /// The start of the first opening phrase in `phrases`, or nil if there is none [s].
-    public static func opening(in phrases: [SpokenPhrase]) -> Double? {
-        windows(phrases, span: 2).first(where: { window in openings.contains(where: { window.text.contains($0) }) })?.start
+    /// Whether `term` is said in `text` other than as a trail, judging the words around it.
+    ///
+    /// - Parameters:
+    ///   - term: Whole words to look for, normalised.
+    ///   - text: Normalised text.
+    ///   - before: Normalised text just before `text`, so a trail split across phrases is still seen.
+    static func mentions(_ term: String, in text: String, before: String = "") -> Bool {
+        let words = text.split(separator: " ").map(String.init), wanted = term.split(separator: " ").map(String.init)
+        guard !wanted.isEmpty, words.count >= wanted.count else { return false }
+        let earlier = before.split(separator: " ").map(String.init)
+        for at in 0...(words.count - wanted.count) where Array(words[at..<at + wanted.count]) == wanted {
+            var preceding = earlier + words[..<at]
+            while let last = preceding.last, ["the", "this", "our"].contains(last) { preceding.removeLast() }
+            let lastOne = preceding.last ?? "", lastTwo = preceding.suffix(2).joined(separator: " ")
+            if trailBefore.contains(lastOne) || trailBefore.contains(lastTwo) { continue }
+            let following = words[(at + wanted.count)...].joined(separator: " ") + " "
+            if trailAfter.contains(where: { following.hasPrefix($0 + " ") }) { continue }
+            return true
+        }
+        return false
+    }
+
+    /// The start of the first opening in `phrases`, or nil if there is none [s].
+    ///
+    /// - Parameters:
+    ///   - phrases: The transcript.
+    ///   - names: What the station calls its news, such as "newsbeat", from `Station.newsNames`.
+    public static func opening(in phrases: [SpokenPhrase], names: [String] = []) -> Double? {
+        let names = names.map(normalise)
+        return windows(phrases, span: 2).enumerated().first(where: { index, window in
+            let before = index > 0 ? normalise(phrases[index - 1].text) : ""
+            return openings.contains(where: { window.text.contains($0) }) || names.contains(where: { mentions($0, in: window.text, before: before) })
+        })?.element.start
+    }
+
+    /// The start of the first handover to the news in `phrases`, such as "here's the news with …", or nil [s].
+    ///
+    /// Weaker than an opening, since presenters mention the news for other reasons; callers only use it near a slot,
+    /// and only once speech has carried on from it.
+    ///
+    /// - Parameters:
+    ///   - phrases: The transcript.
+    ///   - names: What the station calls its news, from `Station.newsNames`.
+    public static func handover(in phrases: [SpokenPhrase], names: [String] = []) -> Double? {
+        let terms = ["news"] + names.map(normalise)
+        return windows(phrases, span: 2).enumerated().first(where: { index, window in
+            let before = index > 0 ? normalise(phrases[index - 1].text) : ""
+            return terms.contains(where: { mentions($0, in: window.text, before: before) })
+        })?.element.start
     }
 
     /// Whether `text` is a spoken time, such as "6.30", "at 6 30", "7 o'clock" or "six thirty".
@@ -74,8 +131,10 @@ public enum NewsPhrases {
     /// - Parameters:
     ///   - phrases: The transcript.
     ///   - after: Only phrases starting at or after this time count, so the opening is never taken for a sign-off [s].
+    ///   - names: What the station calls its news, such as "6 music news", from `Station.newsNames`.
     /// - Returns: The end of the sign-off [s], or nil if none was heard.
-    public static func signOff(in phrases: [SpokenPhrase], after: Double = 0) -> Double? {
+    public static func signOff(in phrases: [SpokenPhrase], after: Double = 0, names: [String] = []) -> Double? {
+        let signOffs = signOffs + names.map(normalise)
         for index in phrases.indices where phrases[index].start >= after {
             let here = normalise(phrases[index].text)
             var hit: Int?

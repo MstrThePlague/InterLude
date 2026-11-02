@@ -273,7 +273,66 @@ let hour: Double = 1_791_781_200 - (1_791_781_200.truncatingRemainder(dividingBy
                             SpokenPhrase(start: 187.1, end: 187.6, text: " That's "), SpokenPhrase(start: 187.6, end: 187.9, text: "6 music "),
                             SpokenPhrase(start: 187.9, end: 188.3, text: "news for "), SpokenPhrase(start: 188.3, end: 188.9, text: "tonight."),
                             SpokenPhrase(start: 192.4, end: 193.2, text: " This is 6 Music.")]
-    #expect(NewsPhrases.signOff(in: lastOfTheEvening, after: 45) == 188.3)
+    #expect(NewsPhrases.signOff(in: lastOfTheEvening, after: 45, names: ["6 music news", "six music news"]) == 188.3)
+    #expect(NewsPhrases.signOff(in: lastOfTheEvening, after: 45) == nil)        // another station's name doesn't count
+}
+
+@Test func stationNewsNamesOpenAndCloseUnlessTrailed() {
+    let names = ["newsbeat"]
+    let trail = [SpokenPhrase(start: 2, end: 5, text: "Stay with us, Newsbeat is coming up"),
+                 SpokenPhrase(start: 6, end: 9, text: "but first, after Newsbeat, the new single.")]
+    #expect(NewsPhrases.opening(in: trail, names: names) == nil)
+    let opening = [SpokenPhrase(start: 2, end: 4, text: "Right, it's 12.30."),
+                   SpokenPhrase(start: 4.5, end: 6, text: "Newsbeat. I'm Sam,"), SpokenPhrase(start: 6, end: 9, text: "here are the headlines.")]
+    #expect(NewsPhrases.opening(in: opening, names: names) == 2)
+    #expect(NewsPhrases.opening(in: opening) == nil)
+    let end = [SpokenPhrase(start: 120, end: 123, text: "and that's Newsbeat."), SpokenPhrase(start: 123.2, end: 124, text: "More at 5.")]
+    #expect(NewsPhrases.signOff(in: end, after: 60, names: names) == 123)
+}
+
+@Test func handoverToTheNewsIgnoresTrails() {
+    func heard(_ text: String) -> Double? { NewsPhrases.handover(in: [SpokenPhrase(start: 1, end: 4, text: text)]) }
+    #expect(heard("Now here's the news with Jo Smith.") == 1)
+    #expect(heard("It's time for the news.") == 1)
+    #expect(heard("BBC News at half past.") == 1)
+    #expect(heard("We'll have more after the news.") == nil)
+    #expect(heard("Slim after this news.") == nil)
+    #expect(heard("The news is next, but first…") == nil)
+    #expect(heard("News in a minute.") == nil)
+    #expect(heard("Some good news from Glastonbury.") == nil)
+    #expect(heard("Newsome's new record.") == nil)
+    #expect(NewsPhrases.handover(in: [SpokenPhrase(start: 1, end: 3, text: "Coming up after the"),
+                                      SpokenPhrase(start: 3, end: 4, text: "news, the chart.")]) == nil)
+}
+
+@Test func handoverOpensOnceSpeechCarriesOn() {
+    var d = NewsDetector()
+    // The presenter talks from :28:30, before the slot window, straight into the news.
+    for s in samples(from: hour + 1710, speech: true, seconds: 80) { d.ingest(s) }
+    #expect(d.openBlock == nil)
+    d.newsHandover(at: hour + 1785)
+    #expect(d.openBlock == nil)                                     // not yet 10 s of speech after it
+    for s in samples(from: hour + 1790, speech: true, seconds: 10) { d.ingest(s) }
+    #expect(d.openBlock?.start == hour + 1785 && d.openBlock?.anchoredOnIdent == false)
+}
+
+@Test func handoverWithoutSpeechOrAwayFromSlotDoesNothing() {
+    var d = NewsDetector()
+    d.newsHandover(at: hour + 1795)
+    for s in samples(from: hour + 1795, speech: false, seconds: 90) { d.ingest(s) }   // a song follows
+    #expect(d.blocks.isEmpty)
+    var e = NewsDetector()
+    for s in samples(from: hour + 900, speech: true, seconds: 15) { e.ingest(s) }
+    e.newsHandover(at: hour + 905)                                  // quarter past: no bulletin due
+    for s in samples(from: hour + 915, speech: true, seconds: 15) { e.ingest(s) }
+    #expect(e.blocks.isEmpty)
+}
+
+@Test func signOffSearchStartFollowsLearnedLengths() {
+    var profile = StationProfile()
+    #expect(profile.signOffSearchStart == 45)
+    for length in [150.0, 160, 170, 180, 190] { profile.learn(start: hour + 1830, end: hour + 1830 + length) }
+    #expect(profile.signOffSearchStart == 90)
 }
 
 @Test func signOffEndsTheBlockAndPausesReopening() {
