@@ -130,9 +130,9 @@ InterLude also runs as a web app on a Linux machine, so it works with no Mac inv
 
 <p align="center">
   <img src="docs/images/web-phone.png" width="250" alt="The web app on a phone playing 6 Music live: the station name large, with play, volume, station and speaker in a dock at the bottom">
-  <img src="docs/images/web-desktop.png" width="560" alt="The web app on a computer, with the Earlier programme list beside the player">
+  <img src="docs/images/web-desktop.png" width="560" alt="The web app on a computer, playing an earlier programme with two bulletins skipped, beside the Skip news switch and the day's programme list">
 </p>
-<p align="center"><sub>In a browser: on a phone, and on a computer with yesterday's programmes.</sub></p>
+<p align="center"><sub>In a browser: on a phone, and on a computer with today's programmes beside an earlier one.</sub></p>
 
 It ships as a Docker image for x86-64 Linux. You need Docker with Compose, and about 1 GB of memory free.
 
