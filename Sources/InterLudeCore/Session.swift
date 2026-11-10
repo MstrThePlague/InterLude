@@ -1040,8 +1040,7 @@ public actor PlayerSession {
             progress.skipCount = passed.count
             progress.skippedSeconds = passed.reduce(0) { $0 + $1.seconds }
             if let cut = passed.last, out - cut.out < 2 { progress.justSkipped = cut.seconds }
-            progress.news = detector.blocks.filter { !$0.falseStart && ($0.end ?? .infinity) > programme.start.timeIntervalSince1970 - 60 }
-                .map { Date(timeIntervalSince1970: $0.start)...Date(timeIntervalSince1970: $0.end ?? analysedEnd.timeIntervalSince1970) }
+            progress.news = Self.newsRanges(detector.blocks, from: programme.start, analysedThrough: analysedEnd)
             status.replay = progress
             if status.muted, let block = detector.blocks.last(where: { !$0.falseStart && $0.start <= heard && ($0.end ?? .infinity) > heard }) {
                 status.muteElapsed = heard - block.start
@@ -1074,6 +1073,18 @@ public actor PlayerSession {
         }
         status.notices = notices
         return status
+    }
+
+    /// Where the news is in an earlier programme, for its progress bar: each real bulletin from its start to its end,
+    /// or to how far the analysis has got while it is still open.
+    ///
+    /// A bulletin opened in the chunk being analysed can start after `analysedThrough`, so its range ends at its start
+    /// rather than before it.
+    static func newsRanges(_ blocks: [NewsBlock], from start: Date, analysedThrough: Date) -> [ClosedRange<Date>] {
+        blocks.filter { !$0.falseStart && ($0.end ?? .infinity) > start.timeIntervalSince1970 - 60 }.map { block in
+            let lower = Date(timeIntervalSince1970: block.start)
+            return lower...max(lower, Date(timeIntervalSince1970: block.end ?? analysedThrough.timeIntervalSince1970))
+        }
     }
 
     /// The bulletins worth listing to the listener, newest first: those they have reached, and of those only the ones

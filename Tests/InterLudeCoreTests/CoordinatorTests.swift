@@ -178,3 +178,14 @@ import Foundation
     book.loaded([], station: "a", day: 0, current: "b")             // overtaken by another station
     #expect(book.programmes.count == 1 && book.loading)
 }
+
+@Test func aBulletinOpenedAheadOfTheAnalysisDoesNotStop() {
+    // Seen on the server: while an earlier programme started, a bulletin opened on the news theme a few seconds after
+    // the point the analysis had reached, and building its range for the progress bar stopped the program.
+    let start = Date(timeIntervalSince1970: hour)
+    let open = NewsBlock(start: hour + 130)
+    let ranges = PlayerSession.newsRanges([open, NewsBlock(start: hour + 10, end: hour + 70)], from: start,
+                                          analysedThrough: start.addingTimeInterval(120))
+    #expect(ranges.count == 2 && ranges[0].lowerBound == ranges[0].upperBound)
+    #expect(ranges[1].upperBound == start.addingTimeInterval(70))
+}
