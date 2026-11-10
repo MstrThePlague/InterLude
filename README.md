@@ -15,10 +15,10 @@ I wanted 6 Music in the background all day without the hourly news, so it is tun
 
 ## What it does
 
-- Plays any of 64 BBC stations (national, nations and local) a fixed time behind live (60 seconds by default).
+- Plays any of 64 BBC stations (national, nations and local) a fixed time behind live (60 seconds by default, and never less). The station list has a search field, so a local station is a few letters away.
 - Recognises each bulletin as it arrives and replaces it with silence, or with ocean waves, a woodland stream or birdsong if you prefer. When the bulletin ends, the station comes back.
 - Plays on the Mac, on a Chromecast or Cast group, or on a Sonos room or group, and you can switch speaker while it plays. Speakers appear and disappear in the list as they join and leave the network, and Sonos groups follow what you set up in the Sonos app.
-- **Earlier** plays a programme from the last 30 days from its start, with the bulletins cut out rather than muted. The last 11 hours come from the live stream; anything older comes from the programme's BBC Sounds episode.
+- **Earlier** plays a programme from the last 30 days, with the bulletins cut out rather than muted. Stop it and Play carries on where you left off; tap the progress bar to move to any point. The last 11 hours come from the live stream; anything older comes from the programme's BBC Sounds episode.
 - One interface everywhere: the Mac's menu bar panel, the phone remote and the server's web app are the same page, so they look and work alike. On a wide window, Earlier and the news sit beside the player.
 - A phone remote: scan a QR code and control InterLude from a phone on the same Wi-Fi, or from anywhere on your tailnet if the Mac runs Tailscale.
 - Learns a station's news theme from the last few hours of broadcast, the first time you play it (so far proven on 6 Music).
@@ -39,7 +39,15 @@ Wording used across the BBC, such as "BBC News at" and "your next update", works
 
 The server version does the same with open models in place of Apple's: YAMNet for speech and music, and whisper.cpp for the newsreader. YAMNet's scores are mapped onto Apple's, so the same rules apply to both.
 
-Muted segments are replaced one for one with segments carrying the same timestamps, so the player sees one continuous stream and the delay never drifts. If a mute is wrong, **Not news** brings the sound back within a few seconds, and **News got through** teaches it from a bulletin it missed.
+Muted segments are replaced one for one with segments carrying the same timestamps, so the player sees one continuous stream and the delay never drifts. If a mute is wrong, **Not news** brings the sound back within a few seconds, and **News got through** teaches it from a bulletin it missed. **Recent mutes** lists only bulletins you have reached that were muted, or that you put right; talk the detector let go of by itself stays in the event log.
+
+Before playing live, InterLude analyses the last two minutes, in case a bulletin is already running; the page shows how far it has got. Well away from every bulletin slot no bulletin can be running, so it starts at once and analyses behind you. Changes in Settings, such as jingle only, the longest mute or the bulletin minutes, apply to what is playing straight away, and **Forget** on the news jingle stays forgotten.
+
+The delay can't be set below a minute. Talk that started near a slot is taken back after 45 seconds if neither the news theme nor the newsreader is heard, and transcribing takes a few seconds more; with less delay you would hear the start of that mute before it was taken back. The event log records, for every bulletin, how far ahead of you it was found (`lead`), so the margin can be checked.
+
+### Stations still being learned
+
+On Radio 2, Radio 3 and Radio Cymru 2 the speech rule hasn't been checked yet: Radio 2's presenters talk at length near the hour, Radio 3's announcers sound like newsreaders, and Radio Cymru 2's news is in Welsh, which the newsreader rules don't understand. These start in shadow mode: InterLude notes bulletins but lets them play. The player says so, lists the bulletins it has found, and once it has found a couple offers **Start muting**. That mutes on the station's jingle if it has learned one, otherwise on the speech rule whose finds you have just seen.
 
 ### Earlier programmes
 
@@ -48,7 +56,7 @@ Switch the panel from **Live** to **Earlier**, step back through the days, and p
 - **From the live stream** if it began in the last 11 hours or so. The BBC's live origin lists six hours of segments but keeps about eleven, so InterLude fetches them by index.
 - **On demand** if it is older (up to 30 days) and has finished. InterLude asks the BBC's media selector for the episode, opens the HLS stream it offers, and lines the episode's segments up with the time they were broadcast, so the detector works exactly as it does live.
 
-Because the whole programme already exists, the analysis runs about ten minutes ahead of you, faster than real time. That leaves time for one more check: InterLude transcribes from a minute before to two minutes after each of the station's bulletin minutes, and the newsreader's opening starts a bulletin there even when the presenter talked straight into the news. A bulletin is then **left out** rather than silenced, and the segments after it are given timestamps that carry straight on, so the programme simply continues. The panel shows how far through you are, where the news was, and how much has been skipped. Seeking within a programme isn't supported yet.
+Because the whole programme already exists, the analysis runs about ten minutes ahead of you, faster than real time. That leaves time for one more check: InterLude transcribes from a minute before to two minutes after each of the station's bulletin minutes, and the newsreader's opening starts a bulletin there even when the presenter talked straight into the news. A bulletin is then **left out** rather than silenced, and the segments after it are given timestamps that carry straight on, so the programme simply continues. The panel shows how far through you are, where the news was, and how much has been skipped. Tap the bar to move there: InterLude starts again from that point, which takes a few seconds while it analyses ahead. Stopping remembers where you were, so Play (or the phone's Play) resumes there; **Start again from the beginning** plays it from the top.
 
 The details are in [docs/on-demand.md](docs/on-demand.md).
 
@@ -179,7 +187,7 @@ The volume is named after the folder `compose.yaml` is in, so for a folder calle
 
 | File | What it holds |
 |---|---|
-| `Application Support/InterLude/stations.json` | The station list and stream address template. Edit a station's pool ID here if the BBC changes it, its `newsNames` to teach it what the station calls its news, set `"news": false` for a stream with no bulletins, `"longBulletins": [{"at": "12:45", "minutes": 15}]` for bulletins longer than the longest mute (UK time), or `"untested": true` for one where the speech rule hasn't been checked (new profiles then start in shadow mode and mute only on the jingle, as Radio 2 and Radio 3 do); the change takes effect within a few seconds. |
+| `Application Support/InterLude/stations.json` | The station list and stream address template. Edit a station's pool ID here if the BBC changes it, its `newsNames` to teach it what the station calls its news, set `"news": false` for a stream with no bulletins, `"longBulletins": [{"at": "12:45", "minutes": 15}]` for bulletins longer than the longest mute (UK time), `"untested": true` for one where the speech rule hasn't been checked (new profiles then start in shadow mode and mute only on the jingle, as Radio 2, Radio 3 and Radio Cymru 2 do), or `"openings"` and `"signOffs"` with a station's own wording for the newsreader's opening and sign-off, such as for news in another language; the change takes effect within a few seconds. |
 | `Application Support/InterLude/web/` | Optional `index.html`, `app.css` or `app.js` to use in place of the app's own, for trying changes to the panel and phone remote without a rebuild. |
 | `Application Support/InterLude/profiles/` | Per-station settings, bulletin minutes and the learned news theme. |
 | `Application Support/InterLude/events.jsonl` | One line per detected bulletin and per correction. Settings › Export diagnostics zips these up. |
@@ -192,7 +200,7 @@ The server keeps the same files in its `data` volume (`/var/lib/interlude` in th
 
 | Folder | Contents |
 |---|---|
-| `Sources/InterLudeCore` | Everything that isn't user interface or tied to Apple's frameworks: stream handling, MPEG-TS, detection, playout, the phone remote's routes and state, the Cast protocol, and Sonos control and its AAC stream. Builds and tests on Linux too. |
+| `Sources/InterLudeCore` | Everything that isn't user interface or tied to Apple's frameworks: stream handling, MPEG-TS, detection, playout, the phone remote's routes and state, the Cast protocol, and Sonos control and its AAC stream. `Coordinator.swift` holds what the Mac app and the server both do around a session: profiles, per-station settings, the Earlier schedule, resume points and the player's wording. Builds and tests on Linux too. |
 | `Sources/InterLudeApple` | The Mac's implementations of what the core asks the platform for: AAC decoding and encoding, the sound classifier, speech recognition, signal maths, the local server, and Cast and Sonos discovery. |
 | `Sources/InterLudePortable` | Implementations that work away from the Mac, on Linux and Windows: decoding and encoding audio with ffmpeg. |
 | `Sources/InterLudeHTTP` | The web server for macOS and Linux, on Hummingbird. |
@@ -202,7 +210,7 @@ The server keeps the same files in its `data` volume (`/var/lib/interlude` in th
 | `Sources/InterLudeServer` | `interlude-server`, InterLude as a web app on a Linux host. `Dockerfile` and `compose.yaml` build and run it; `interlude-server --check <audio>` runs its models on a file. |
 | `Sources/InterLudeApp` | The Mac app: the menu bar item and window, which show the web app in a web view, and the model behind it. |
 | `Web` | The web app, InterLude's one interface: `index.html`, `app.css` and `app.js`, served from disk as the Mac's panel, its phone remote and the server's page, plus the server's icons. |
-| `Tests` | Unit tests for the parts that can be tested without a network or speakers. |
+| `Tests` | Unit tests for the parts that can be tested without a network or speakers. `Tests/Corpus` holds labelled recordings as classifier scores (numbers only, no audio), which the tests replay the speech rule over on every push, failing if it does worse than the figures recorded. |
 | `Tools` | Command-line programs used to measure and tune detection (below). |
 | `docs` | Notes on on-demand playback, release notes and screenshots. `docs/archive` holds the measurements and reasoning from early development. |
 | `scripts` | Building and packaging the Mac app, installing the server's native libraries on Linux, preparing YAMNet, and `push-config.sh`, which puts the web app and station list on a running server without rebuilding its image. |
@@ -215,7 +223,7 @@ Run with `swift run --scratch-path ~/Library/Caches/InterLudeBuild <name>` from 
 |---|---|
 | `record <serviceId> <hoursAgo> <minutes> <dir>` | Save segments from the BBC's six hour rewind window. |
 | `classify <dir> <csv>` | Speech and music scores for a recording. `CLASSIFIER=yamnet:<models dir>` scores with the server's YAMNet instead (`YAMNET_RAW=1` before calibration). |
-| `evaluate <csv> [labels.json] [profile.json]` | Replay the speech rule over scores and report accuracy against labelled bulletins. |
+| `evaluate <csv> [labels.json] [profile.json]` | Replay the speech rule over scores and report accuracy against labelled bulletins. The same measures run in the tests over `Tests/Corpus`; its README says how to add a recording. |
 | `ident-check <dir>:<start>,… …` | Find and test a station's news theme in recordings, given bulletin start times from the event log. `PLATFORM=portable` decodes with ffmpeg and uses the server's signal maths. |
 | `signoff-check <dir>:<start>,<end> …` | Transcribe bulletins and report where the newsreader opens and signs off. `<dir>:slots` instead transcribes around every quarter hour of a recording, for finding a new station's bulletins and wording. `STATION=<serviceId>` uses that station's news names; `WHISPER=<model file>` uses whisper.cpp, as the server does. |
 

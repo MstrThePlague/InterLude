@@ -145,7 +145,8 @@ import Foundation
 
     @Test func settingsAreChecked() {
         #expect(route("POST", "/remote/abc123/api/setting?k=delay&v=90") == .command(.setting(.delay(90))))
-        #expect(route("POST", "/remote/abc123/api/setting?k=delay&v=47") == .command(.setting(.delay(45))))
+        #expect(route("POST", "/remote/abc123/api/setting?k=delay&v=67") == .command(.setting(.delay(65))))
+        #expect(route("POST", "/remote/abc123/api/setting?k=delay&v=30") == nil)     // below the shortest delay
         #expect(route("POST", "/remote/abc123/api/setting?k=delay&v=20") == nil)
         #expect(route("POST", "/remote/abc123/api/setting?k=delay&v=601") == nil)
         #expect(route("POST", "/remote/abc123/api/setting?k=delay&v=nan") == nil)

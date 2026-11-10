@@ -53,11 +53,17 @@
       </div>
     </div>
     <div class="lede">Plays a minute behind live and mutes each news bulletin for you.</div>
-    <div class="hint" id="startNote" hidden>Starting. The first start takes about 20 seconds while InterLude builds its delay.</div>
+    <div class="hint startnote" id="startNote" hidden>
+      <span id="startText">Starting. InterLude checks the last few minutes for a bulletin before it plays.</span>
+      <div class="bar" role="progressbar" aria-label="Starting" aria-valuemin="0" aria-valuemax="100" id="startBarBox"><i class="heard" id="startBar"></i></div>
+    </div>
     <button class="btn golive" id="goLive" hidden>Play live instead</button>
+    <button class="link startover" id="startOver" hidden>Start again from the beginning</button>
     <button class="tolist" id="toList" hidden aria-controls="earlier">Choose a programme<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="m5 9 7 7 7-7"/></svg></button>
-    <div class="progress" id="progress" hidden aria-label="Position in programme">
-      <div class="bar" id="bar"><i class="analysed" id="analysed"></i><i class="heard" id="heard"></i></div>
+    <div class="progress" id="progress" hidden>
+      <div class="seek" id="seek" role="slider" tabindex="0" aria-label="Position in programme. Tap to move there" aria-valuemin="0" aria-valuemax="100">
+        <div class="bar" id="bar"><i class="analysed" id="analysed"></i><i class="heard" id="heard"></i></div>
+      </div>
       <div class="progress-text"><span id="position"></span><span id="skipped"></span></div>
     </div>
   </section>
@@ -87,6 +93,13 @@
   </div>
 
   <div class="col side">
+  <section class="card learning" id="learning" hidden aria-live="polite">
+    <b id="learningTitle"></b>
+    <p id="learningDetail"></p>
+    <div class="found" id="learningFound"></div>
+    <button class="btn" id="startMuting" hidden>Start muting</button>
+  </section>
+
   <section class="card news" id="news" hidden>
     <div class="set">
       <div class="label"><span id="newsTitle">Mute news</span><small id="newsDetail"></small></div>
@@ -122,6 +135,7 @@
 
 <dialog id="stationSheet" aria-labelledby="stationSheetTitle">
   <div class="sheet-head"><h2 id="stationSheetTitle">Station</h2><button class="link" data-close>Done</button></div>
+  <div class="sheet-search"><input type="search" id="stationFilter" placeholder="Search stations" aria-label="Search stations" autocomplete="off" enterkeyhint="search"></div>
   <div class="sheet-body" tabindex="-1" id="stationList"></div>
 </dialog>
 <dialog id="speakerSheet" aria-labelledby="speakerSheetTitle">

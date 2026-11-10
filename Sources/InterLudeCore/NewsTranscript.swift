@@ -96,11 +96,12 @@ public enum NewsPhrases {
     /// - Parameters:
     ///   - phrases: The transcript.
     ///   - names: What the station calls its news, such as "newsbeat", from `Station.newsNames`.
-    public static func opening(in phrases: [SpokenPhrase], names: [String] = []) -> Double? {
-        let names = names.map(normalise)
+    ///   - extra: The station's own openings, from `Station.openings`.
+    public static func opening(in phrases: [SpokenPhrase], names: [String] = [], extra: [String] = []) -> Double? {
+        let names = names.map(normalise), all = openings + extra.map(normalise)
         return windows(phrases, span: 2).enumerated().first(where: { index, window in
             let before = index > 0 ? normalise(phrases[index - 1].text) : ""
-            return openings.contains(where: { window.text.contains($0) }) || names.contains(where: { mentions($0, in: window.text, before: before) })
+            return all.contains(where: { window.text.contains($0) }) || names.contains(where: { mentions($0, in: window.text, before: before) })
         })?.element.start
     }
 
@@ -135,9 +136,10 @@ public enum NewsPhrases {
     ///   - phrases: The transcript.
     ///   - after: Only phrases starting at or after this time count, so the opening is never taken for a sign-off [s].
     ///   - names: What the station calls its news, such as "6 music news", from `Station.newsNames`.
+    ///   - extra: The station's own sign-offs, from `Station.signOffs`.
     /// - Returns: The end of the sign-off [s], or nil if none was heard.
-    public static func signOff(in phrases: [SpokenPhrase], after: Double = 0, names: [String] = []) -> Double? {
-        let names = names.map(normalise)
+    public static func signOff(in phrases: [SpokenPhrase], after: Double = 0, names: [String] = [], extra: [String] = []) -> Double? {
+        let names = names.map(normalise), signOffs = signOffs + extra.map(normalise)
         let time = #"(\d{1,4}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)( |$)"#
         func ends(_ text: String) -> Bool {
             signOffs.contains(where: { text.contains($0) }) || names.contains { name in

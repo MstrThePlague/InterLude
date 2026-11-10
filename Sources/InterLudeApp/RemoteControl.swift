@@ -33,8 +33,11 @@ extension AppModel {
         state.subheadline = subheadline
         // In Earlier, Play replays the programme last picked, or plays live if none was.
         if mode == .earlier && !isPlaying && !isStarting, let programme = replaying, programme.canPlay {
-            state.subheadline = "Play starts \(programme.title) from \(programme.start.formatted(date: .omitted, time: .shortened))"
+            let offset = bookmarks.offset(for: programme)
+            state.subheadline = Wording.playStarts(programme, at: offset)
+            if offset > 0 { state.resumeAt = Wording.clock(offset) }
         }
+        state.startProgress = isStarting ? startProgress : nil
         state.artwork = artworkURL?.absoluteString
         state.error = errorText
         state.playing = isPlaying || isStarting
@@ -50,9 +53,7 @@ extension AppModel {
         if let id = source?.station.serviceId, id != selectedStationID { state.onAir = id }
         state.offerLive = offersLive
         state.speaker = selectedOutputID
-        state.stations = orderedStations.map {
-            .init(id: $0.serviceId, name: $0.name, short: $0.short, colour: $0.colour, group: $0.group, favourite: profile($0.serviceId).favourite)
-        }
+        state.stations = profiles.items(stations)
         let speakers = outputs.filter { $0.isSpeaker && !$0.isGroup }
         let groups = outputs.filter { $0.isSpeaker && $0.isGroup }
         state.speakers = ([Output.thisMac] + speakers + groups).map { output in
@@ -67,17 +68,17 @@ extension AppModel {
         state.mode = mode.rawValue
         state.pageVersion = Self.webFiles.version
         if mode == .earlier {
-            let problem: String? = if case .failed(let message) = scheduleState { message } else { nil }
-            state.earlier = .describe(day: scheduleDay, programmes: programmes, loading: scheduleState == .loading, problem: problem,
-                                      chosen: replaying, playing: isReplay ? source?.replay : nil)
+            state.earlier = schedule.item(chosen: replaying, playing: isReplay ? source?.replay : nil)
         }
         if isReplay, let progress = status.replay { state.replay = .describe(progress) }
         state.news = .describe(profile(selectedStationID), kind: selectedStation?.kind, hasNews: selectedStation?.news != false, earlier: isReplay || (mode == .earlier && !isPlaying && !isStarting),
                                ambience: ambience)
+        let onAirProfile = profile(onAirStation?.serviceId ?? selectedStationID)
         if isPlaying && !status.recentBlocks.isEmpty {
-            state.recentTitle = isReplay ? "News in this programme" : "Recent mutes"
+            state.recentTitle = RemoteState.RecentItem.title(replay: isReplay, shadow: onAirProfile.shadowMode)
             state.recent = RemoteState.RecentItem.list(status.recentBlocks)
         }
+        if isPlaying && !isReplay { state.learning = .describe(station: onAirStation, profile: onAirProfile, blocks: status.recentBlocks) }
         if errorText != nil && !isPlaying && !isStarting {
             state.recover = (castFailed ? ["here"] : []) + (castFailed || stationFailed ? ["retry"] : [])
         }
@@ -89,15 +90,10 @@ extension AppModel {
     /// Settings for the chosen station. The phone remote gets the shared ones; the panel also gets the Mac's own and
     /// the phone remote's link, which a phone could otherwise reset from under itself.
     private func remoteSettings(panel: Bool) -> RemoteState.SettingsItem {
-        let station = selectedStation, options = profile(selectedStationID), music = station?.mutesNews == true
         let link = panel ? remoteURL?.absoluteString ?? "" : ""
-        var item = RemoteState.SettingsItem(
-            stationName: station?.name ?? selectedStationID, delay: options.delaySeconds, muteNews: options.muteNews,
-            jingleOnly: options.detector.identOnly, shadowMode: options.shadowMode, jingle: options.jingleStatus,
-            canForgetJingle: !options.idents.isEmpty || !options.candidates.isEmpty, newsNote: nil,
-            bitrate: bitrate / 1000, ambience: ambience, ambienceChoices: Self.ambienceChoices.map { [$0.id, $0.name] }, link: link,
-            qr: link.isEmpty ? nil : "qr.png", maxMute: music ? options.detector.maxMuteSeconds / 60 : nil,
-            slots: music ? options.detector.slotMinutes.map(String.init).joined(separator: ", ") : nil)
+        var item = RemoteState.SettingsItem.describe(station: selectedStation, id: selectedStationID, profile: profile(selectedStationID),
+                                                     newsNote: nil, bitrate: bitrate, ambience: ambience, link: link,
+                                                     qr: link.isEmpty ? nil : "qr.png")
         if panel {
             let note: String?
             if !remoteEnabled { note = nil }
@@ -138,6 +134,9 @@ extension AppModel {
         case .day(let day): if mode == .earlier { scheduleDay = day }
         case .reloadSchedule: if mode == .earlier { loadSchedule(force: true) }
         case .programme(let id): if mode == .earlier, let programme = programmes.first(where: { $0.id == id }) { play(programme) }
+        case .seek(let fraction): if isReplay, let programme = source?.replay { play(from: ReplayBookmarks.offset(at: fraction, in: programme)) }
+        case .startOver: if isReplay || (mode == .earlier && replaying != nil) { play(from: 0) }
+        case .startMuting: if let station = onAirStation { updateProfile(station.serviceId, RemoteSetting.startMuting) }
         case .setting(let setting): apply(setting)
         case .resetLink: resetRemoteLink()
         case .favourite(let id): if stations.contains(where: { $0.serviceId == id }) { updateProfile(id) { $0.favourite.toggle() } }
@@ -151,21 +150,20 @@ extension AppModel {
     /// Applies a change from the Settings sheet to the chosen station, restarting the session when it must.
     private func apply(_ setting: RemoteSetting) {
         let id = selectedStationID
+        if let change = setting.profileChange {
+            updateProfile(id, change)
+            guard source?.station.serviceId == id else { return }
+            if case .forgetJingle = setting { forgetJingleInSession() }
+            if case .delay = setting, isPlaying, !isReplay { restart() }
+            return
+        }
         switch setting {
-        case .delay(let seconds):
-            updateProfile(id) { $0.delaySeconds = seconds }
-            if isPlaying && !isReplay && source?.station.serviceId == id { restart() }
-        case .muteNews(let on): updateProfile(id) { $0.muteNews = on }
-        case .jingleOnly(let on): updateProfile(id) { $0.detector.identOnly = on }
-        case .shadowMode(let on): updateProfile(id) { $0.shadowMode = on }
-        case .forgetJingle: updateProfile(id) { $0.idents = []; $0.candidates = []; $0.candidateSources = [] }
         case .bitrate(let newBitrate):
             guard newBitrate != bitrate else { return }
             bitrate = newBitrate
             if isPlaying { restart() }
         case .ambience(let sound): ambience = sound
-        case .maxMute(let minutes): updateProfile(id) { $0.detector.maxMuteSeconds = minutes * 60 }
-        case .slots(let minutes): updateProfile(id) { $0.detector.slotMinutes = minutes; $0.slotMinutesByHand = true }
+        case .delay, .muteNews, .jingleOnly, .shadowMode, .forgetJingle, .maxMute, .slots: break    // per station, above
         case .startAtLogin(let on): setStartAtLogin(on)
         case .keepAwake(let on): keepAwake = on
         case .port(let newPort): port = newPort

@@ -97,6 +97,8 @@ public struct NewsBlock: Sendable, Codable, Equatable, Identifiable {
     /// The start was moved to the news theme or the newsreader's opening, so it is exact.
     public var anchoredOnIdent = false
     public var isOpen: Bool { end == nil }
+    /// Put right by the listener: "Not news", "Wasn't news" or "News got through".
+    public var correctedByHand: Bool { evidence.contains("by user") }
     public init(start: Double, end: Double? = nil, evidence: String = "") { self.start = start; self.end = end; self.evidence = evidence }
 }
 
@@ -121,7 +123,6 @@ public struct NewsDetector: Sendable {
     private var lastSpeech: Double = 0
     /// When the current run of music started, while a block is open.
     private var musicRunStart: Double?
-    private var suppressUntilMusic = false
     private var history: [ScoreSample] = []
     /// Speech before this time no longer counts towards a run.
     private var freshAfter: Double = 0
@@ -195,7 +196,6 @@ public struct NewsDetector: Sendable {
         if awaitingBreak && sample.time >= freshAfter && sample.speech < 0.4 { awaitingBreak = false }
         let isSpeech = sample.speech >= config.speechThreshold && sample.time >= freshAfter && !awaitingBreak
         let isMusic = sample.music >= config.musicThreshold && sample.speech < config.speechCeilingForMusic
-        if isMusic { suppressUntilMusic = false }
 
         // Follow runs of speech, bridging pauses up to `gapSeconds`.
         if isSpeech {
@@ -223,7 +223,7 @@ public struct NewsDetector: Sendable {
         musicRunStart = nil
         if let cue = pendingHandover, isMusic || sample.time - cue > 60 { pendingHandover = nil }
         if openOnHandover() { return }
-        guard !config.identOnly, !suppressUntilMusic, sample.time >= openingsPausedUntil, let start = runStart,
+        guard !config.identOnly, sample.time >= openingsPausedUntil, let start = runStart,
               lastSpeech - start >= config.sustainedSpeechSeconds, inSlot(start) else { return }
         blocks.append(NewsBlock(start: start, evidence: "speech>=\(config.speechThreshold) for \(Int(lastSpeech - start))s near a slot"))
     }
@@ -255,7 +255,7 @@ public struct NewsDetector: Sendable {
             blocks[index].anchoredOnIdent = true
             return
         }
-        guard openBlock == nil, !suppressUntilMusic else { return }
+        guard openBlock == nil else { return }
         if let last = blocks.last, let end = last.end, time - end < 30 { return }      // the tail of the last bulletin
         var block = NewsBlock(start: time, evidence: "news theme heard (\(String(format: "%.2f", score)))")
         block.anchoredOnIdent = true
@@ -300,7 +300,7 @@ public struct NewsDetector: Sendable {
     ///
     /// - Parameter time: Where the handover starts [s since 1970].
     public mutating func newsHandover(at time: Double) {
-        guard inSlot(time), openBlock == nil, !config.identOnly, !suppressUntilMusic, !awaitingBreak, time >= openingsPausedUntil else { return }
+        guard inSlot(time), openBlock == nil, !config.identOnly, !awaitingBreak, time >= openingsPausedUntil else { return }
         if let last = blocks.last, let end = last.end, time - end < 30 { return }      // the tail of the last bulletin
         pendingHandover = time
         openOnHandover()
@@ -347,7 +347,6 @@ public struct NewsDetector: Sendable {
         guard let index = blocks.lastIndex(where: \.isOpen) else { return }
         blocks[index].falseStart = true
         close(index, at: time, timedOut: false, why: why)
-        suppressUntilMusic = false
         freshAfter = time
         awaitingBreak = true
         runStart = nil; musicRunStart = nil
@@ -356,7 +355,9 @@ public struct NewsDetector: Sendable {
 
     /// "Wasn't news" on a recent block.
     public mutating func markFalseStart(id: UUID) {
-        if let index = blocks.firstIndex(where: { $0.id == id }) { blocks[index].falseStart = true }
+        guard let index = blocks.firstIndex(where: { $0.id == id }), !blocks[index].falseStart else { return }
+        blocks[index].falseStart = true
+        blocks[index].evidence += "; marked wrong by user"
     }
 
     /// "News got through": the listener has just heard a bulletin that was not muted.

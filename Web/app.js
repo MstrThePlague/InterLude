@@ -145,7 +145,9 @@ function render(s) {
   const showSub = !!s.subheadline && s.subheadline !== s.headline && s.subheadline !== s.stationName && !(!s.playing && s.subheadline === "Ready to play");
   $("subheadline").textContent = showSub ? s.subheadline : "";
   $("subheadline").hidden = !showSub;
-  $("startNote").hidden = !(s.stream && s.state === "starting");
+  renderStart(s);
+  // An earlier programme can start again from the top: while it plays, or picked with a place to resume from.
+  $("startOver").hidden = !(s.state === "earlier" || s.state === "muted" && !!s.replay || (!s.playing && !!s.resumeAt));
   $("goLive").hidden = !s.offerLive;
   if (station) $("goLive").textContent = "Play " + station.name + " live instead";
   document.documentElement.dataset.mood = s.state === "muted" ? "muted" : s.state === "earlier" ? "earlier" : "live";
@@ -201,6 +203,7 @@ function render(s) {
     $("newsToggle").disabled = !s.news.available;
   }
   $("correct").hidden = !s.canCorrect;
+  renderLearning(s.learning);
   renderRecent(s);
   const alert = $("alert");
   if (s.justSkipped != null) {
@@ -232,10 +235,40 @@ function render(s) {
   requestAnimationFrame(fitDock);
 }
 
+/** The note while a session starts, with how far it has got once that is known. */
+function renderStart(s) {
+  const starting = s.state === "starting";
+  $("startNote").hidden = !starting;
+  if (!starting) return;
+  const known = s.startProgress != null;
+  $("startBarBox").hidden = !known;
+  const pct = Math.round((s.startProgress || 0) * 100);
+  $("startBar").style.width = pct + "%";
+  $("startBarBox").setAttribute("aria-valuenow", String(pct));
+}
+
+// The note on a station whose news detection is still being checked, with "Start muting" once it has found a few.
+let shownLearning = "";
+function renderLearning(l) {
+  $("learning").hidden = !l;
+  const key = JSON.stringify(l || null);
+  if (!l || key === shownLearning) return;
+  shownLearning = key;
+  $("learningTitle").textContent = l.title;
+  $("learningDetail").textContent = l.detail;
+  const found = $("learningFound");
+  found.replaceChildren();
+  for (const t of l.found) { const c = document.createElement("span"); c.textContent = t; found.append(c); }
+  $("startMuting").hidden = !l.canStartMuting;
+}
+
 /** The progress bar for an earlier programme, or hides it. */
 function renderReplay(r) {
   $("progress").hidden = !r;
   if (!r) return;
+  const seek = $("seek");
+  seek.setAttribute("aria-valuenow", String(Math.round(r.heard * 100)));
+  seek.setAttribute("aria-valuetext", r.position);
   $("heard").style.width = (r.heard * 100) + "%";
   $("analysed").style.width = (r.analysed * 100) + "%";
   const bar = $("bar");
@@ -381,14 +414,22 @@ function star(st) {
   b.addEventListener("click", async e => { e.stopPropagation(); if (await send("favourite", { id: st.id })) renderStations(); });
   return b;
 }
-/** Fills the station sheet: favourites first, then each group. */
+/** Whether a station matches the search: every word typed starts a word of its name or its group. */
+function matches(st, query) {
+  const words = (st.name + " " + (st.group || "")).toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  return query.toLowerCase().split(/\s+/).filter(Boolean).every(q => words.some(w => w.startsWith(q)));
+}
+/** Fills the station sheet: favourites first, then each group, narrowed by the search field. */
 function renderStations() {
   const list = $("stationList"), scroll = list.scrollTop;
   list.replaceChildren();
+  const query = $("stationFilter").value.trim();
+  const shown = query ? state.stations.filter(st => matches(st, query)) : state.stations;
+  if (!shown.length) { const p = document.createElement("p"); p.className = "hint"; p.textContent = "No stations match “" + query + "”."; list.append(p); }
   const groups = [];
-  const fav = state.stations.filter(x => x.favourite);
+  const fav = shown.filter(x => x.favourite);
   if (fav.length) groups.push(["Favourites", fav]);
-  for (const st of state.stations.filter(x => !x.favourite)) {
+  for (const st of shown.filter(x => !x.favourite)) {
     const name = st.group || "Stations";
     let g = groups.find(x => x[0] === name && x[1] !== fav);
     if (!g) { g = [name, []]; groups.push(g); }
@@ -463,7 +504,20 @@ $("volume").addEventListener("input", e => {
 });
 // Opens a sheet with focus on its contents, so Done isn't ringed as if tabbed to.
 function showSheet(id) { const d = $(id); d.showModal(); d.querySelector(".sheet-body").focus({ preventScroll: true }); }
-$("quickStation").addEventListener("click", () => { if (!state) return; renderStations(); showSheet("stationSheet"); });
+$("quickStation").addEventListener("click", () => {
+  if (!state) return;
+  $("stationFilter").value = "";
+  renderStations(); showSheet("stationSheet");
+  // With a mouse, typing searches at once; on a touch screen the keyboard waits for a tap on the field.
+  if (matchMedia("(pointer: fine)").matches) $("stationFilter").focus({ preventScroll: true });
+});
+$("stationFilter").addEventListener("input", () => { if (state) { renderStations(); $("stationList").scrollTop = 0; } });
+// Return picks the only station left, as a tap on it would.
+$("stationFilter").addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  const rows = $("stationList").querySelectorAll("button.row");
+  if (rows.length === 1) { e.preventDefault(); rows[0].click(); }
+});
 $("quickSpeaker").addEventListener("click", () => { if (!state) return; renderSpeakers(); showSheet("speakerSheet"); });
 function openSettings() { if (!state || !state.settings) return; renderSettings(); showSheet("settingsSheet"); }
 $("gearBtn").addEventListener("click", openSettings);
@@ -492,6 +546,39 @@ $("modeEarlier").addEventListener("click", async () => {
   if (state && state.mode !== "earlier" && await send("mode", { m: "earlier" })) showList();
 });
 $("toList").addEventListener("click", showList);
+$("startMuting").addEventListener("click", async () => {
+  if (await send("startmuting")) toast("Bulletins on this station will be muted from now on.");
+});
+$("startOver").addEventListener("click", async () => {
+  if (playsHere() && !here) playHere();
+  await send("startover");
+});
+// A tap on the progress bar moves there. Arrow keys move a minute at a time, sent once they stop.
+let seekTimer = null, seekWanted = null;
+function seekTo(fraction) {
+  fraction = Math.min(1, Math.max(0, fraction));
+  $("heard").style.width = (fraction * 100) + "%";
+  seekWanted = fraction;
+  clearTimeout(seekTimer);
+  seekTimer = setTimeout(async () => {
+    const f = seekWanted; seekWanted = null;
+    $("seek").setAttribute("aria-disabled", "true");
+    if (await send("seek", { f: f.toFixed(4) })) toast("Moving there. It takes a few seconds to start.");
+    $("seek").removeAttribute("aria-disabled");
+  }, 600);
+}
+$("seek").addEventListener("click", e => {
+  const box = $("bar").getBoundingClientRect();
+  if (box.width > 0) seekTo((e.clientX - box.left) / box.width);
+});
+$("seek").addEventListener("keydown", e => {
+  if (!state || !state.replay || !["ArrowLeft", "ArrowRight", "Home"].includes(e.key)) return;
+  e.preventDefault();
+  const minutes = parseFloat((state.replay.position.match(/of (?:(\d+) h )?(\d+) min/) || []).slice(1).map(x => x || 0).reduce((h, m) => h * 60 + +m, 0)) || 60;
+  const step = 1 / minutes;
+  const from = seekWanted ?? state.replay.heard;
+  seekTo(e.key === "Home" ? 0 : from + (e.key === "ArrowRight" ? step : -step));
+});
 /** Scrolls the Earlier list into view where it sits below the player, as on a phone, and not where it sits beside it. */
 function showList() {
   if (getComputedStyle(dock).position === "fixed") $("earlier").scrollIntoView({ behavior: "smooth", block: "start" });
@@ -649,8 +736,8 @@ function renderSettings() {
     b.addEventListener("click", () => { if (st.bitrate !== kbps) change("bitrate", String(kbps)); });
     rate.append(b);
   }
-  list.append(card(slider("Delay behind live", st.delay, 30, 600, 5, "s", "delay"), settingRow("Bitrate", null, rate)));
-  list.append(hint("A longer delay gives InterLude more time to recognise a bulletin before you hear it. Changing the delay or bitrate starts the stream again."));
+  list.append(card(slider("Delay behind live", st.delay, 60, 600, 5, "s", "delay"), settingRow("Bitrate", null, rate)));
+  list.append(hint("A longer delay gives InterLude more time to recognise a bulletin before you hear it. A minute is the least that lets it take back a mute that turns out to be the presenter. Changing the delay or bitrate starts the stream again."));
 
   list.append(title("News detection for " + st.stationName));
   if (st.newsNote) list.append(hint(st.newsNote));

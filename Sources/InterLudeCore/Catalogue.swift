@@ -41,6 +41,11 @@ public struct Station: Codable, Sendable, Hashable, Identifiable {
     /// What the station's newsreaders call its news, lower case, such as "newsbeat" or "6 music news". Heard at the
     /// start or end of a bulletin, it marks the opening or sign-off; "BBC News" and "next update" work on any station.
     public var newsNames: [String]?
+    /// Wording that opens this station's bulletins, lower case, on top of the English that opens any BBC bulletin
+    /// ("bbc news at"). For a station whose news is in another language, such as Welsh on Radio Cymru 2.
+    public var openings: [String]?
+    /// Wording that closes this station's bulletins, lower case, on top of the English ones such as "next update".
+    public var signOffs: [String]?
     /// False for a stream that carries no news bulletins, such as Radio 1 Dance, so nothing is ever muted there.
     public var news: Bool?
     /// True where the speech rule hasn't been checked, such as Radio 2, whose presenters talk at length near the
@@ -110,6 +115,8 @@ public struct Catalogue: Codable, Sendable {
                 catalogue.stations[i].newsNames = mine + shippedNames.filter { !mine.contains($0) }
             }
             if catalogue.stations[i].news == nil { catalogue.stations[i].news = match.news }
+            if catalogue.stations[i].openings == nil { catalogue.stations[i].openings = match.openings }
+            if catalogue.stations[i].signOffs == nil { catalogue.stations[i].signOffs = match.signOffs }
             if catalogue.stations[i].untested == nil { catalogue.stations[i].untested = match.untested }
             if catalogue.stations[i].longBulletins == nil { catalogue.stations[i].longBulletins = match.longBulletins }
         }

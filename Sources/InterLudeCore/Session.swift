@@ -28,9 +28,13 @@ public struct SessionSettings: Sendable {
     public var onDemand = false
     /// How far into `replay` to start [s].
     public var startOffset = 0.0
+    /// The shortest delay offered [s]. Presenter talk is released 45 s after it starts if no news theme or newsreader
+    /// is heard, and transcribing takes up to about ten seconds more, so with less delay than this the listener would
+    /// hear the start of a mute that is then taken back.
+    public static let shortestDelay = 60.0
     public init(station: Station, profile: StationProfile = StationProfile()) {
         self.station = station; self.profile = profile
-        delaySeconds = profile.delaySeconds; muteNews = profile.muteNews && station.mutesNews
+        delaySeconds = max(Self.shortestDelay, profile.delaySeconds); muteNews = profile.muteNews && station.mutesNews
     }
 }
 
@@ -69,6 +73,9 @@ public struct SessionStatus: Sendable {
     public var speechModel = "unavailable"
     /// Set while an earlier programme is playing.
     public var replay: ReplayStatus?
+    /// While starting, how much of the audio needed before the first segment is listed has been fetched and analysed,
+    /// from 0 to 1.
+    public var startProgress: Double?
     public init() {}
 }
 
@@ -163,6 +170,13 @@ public actor PlayerSession {
     private var state: SessionStatus.State = .starting
     private let eventLog: URL?
     private let cacheRoot: URL
+    /// The analysis that runs last, so each new run waits for it and no two run at once.
+    private var analysisTail: Task<Void, Never>?
+    /// Counts "Forget" on the jingle, so a theme still being worked out from older bulletins is thrown away.
+    private var identGeneration = 0
+    /// While starting: the segments to fetch and analyse before listing, and how many have been fetched.
+    private var startSpan: ClosedRange<Int>?
+    private var startFetched = 0
 
     /// The sample rate of the stations' audio [Hz].
     static let sampleRate = 48_000.0
@@ -183,6 +197,12 @@ public actor PlayerSession {
     /// The playout's longest mute or skip: the usual limit, or room for the station's longest bulletin.
     private var playoutMaxMute: Double {
         max(settings.profile.detector.maxMuteSeconds, (settings.station.longBulletins ?? []).map { $0.minutes * 60 + 120 }.max() ?? 0)
+    }
+
+    /// How long after its slot a bulletin may still be running [s]: the longest usual one, at least six minutes, or the
+    /// station's longest long bulletin with two minutes to spare.
+    private var longestBulletin: Double {
+        max(360, settings.profile.detector.maxBulletinSeconds, (settings.station.longBulletins ?? []).map { $0.minutes * 60 + 120 }.max() ?? 0)
     }
 
     // MARK: Lifecycle
@@ -230,15 +250,38 @@ public actor PlayerSession {
         }
     }
 
-    /// Starts live playback: fetches from two minutes before the first segment listed up to the live edge, and
-    /// analyses it all before listing anything.
+    /// Starts live playback from two minutes before the first segment listed up to the live edge.
+    ///
+    /// Near a bulletin slot that audio is all fetched and analysed before anything is listed, since a bulletin may
+    /// already be running. Well away from every slot no bulletin can open, so listing starts at once and the
+    /// analysis catches up behind it, long before the listener reaches the next slot.
     private func startLive(store: SegmentStore) async throws {
         var live = Playout(liveEdge: liveEdge, delaySeconds: settings.delaySeconds, maxMuteSeconds: playoutMaxMute)
         let from = live.next - 20
         analysedThrough = from - 1
+        let listener = HLS.startTime(ofIndex: live.next).timeIntervalSince1970
+        let quiet = Self.quietStart(listener: listener, edge: HLS.startTime(ofIndex: liveEdge).timeIntervalSince1970,
+                                    detector: detector, longestBulletin: longestBulletin)
+        write(["event": "startLive", "quiet": quiet, "station": settings.station.serviceId])
+        if quiet {
+            for _ in 0..<live.windowSize { await tick(&live) }
+            playout = live
+            running = true
+            state = .playing
+            tasks.append(Task {
+                await withTaskGroup(of: Void.self) { group in
+                    for index in from...self.liveEdge { group.addTask { _ = try? await store.segment(index) } }
+                }
+                await self.analyse(upTo: self.liveEdge)
+                self.rejudgePending()
+            })
+            return
+        }
+        startSpan = from...liveEdge; startFetched = 0
+        defer { startSpan = nil }
         try await withThrowingTaskGroup(of: Void.self) { group in
             for index in from...liveEdge { group.addTask { _ = try await store.segment(index) } }
-            try await group.waitForAll()
+            for try await _ in group { startFetched += 1 }
         }
         await analyse(upTo: liveEdge)
         try Task.checkCancellation()
@@ -246,6 +289,24 @@ public actor PlayerSession {
         playout = live
         running = true
         state = .playing
+    }
+
+    /// Whether a live start can list segments before analysing: no bulletin can be running at the listener's start
+    /// or open before the analysis has caught up.
+    ///
+    /// - Parameters:
+    ///   - listener: The broadcast time the listener starts at [s since 1970].
+    ///   - edge: The newest audio [s since 1970].
+    ///   - detector: For the station's slots and long bulletins.
+    ///   - longestBulletin: How long after a slot a bulletin may still be running [s].
+    /// - Returns: False if any slot falls between a bulletin's length before the listener and two minutes past the
+    ///   edge, or if the station needs no slot at all to open one.
+    static func quietStart(listener: Double, edge: Double, detector: NewsDetector, longestBulletin: Double) -> Bool {
+        guard detector.config.requireSlot else { return false }
+        // The latest slot window that could hold a bulletin still running, through to where the analysis will be.
+        let earliest = listener - longestBulletin - 60, latest = edge + 120
+        for time in stride(from: earliest, through: latest, by: 15) where detector.inSlot(time) { return false }
+        return true
     }
 
     // MARK: Earlier programmes
@@ -273,8 +334,11 @@ public actor PlayerSession {
                                                          : "\(programme.title) is no longer available. The BBC keeps about the last 11 hours.")
         }
         analysedThrough = from - 1
+        startSpan = from...to; startFetched = 0
+        defer { startSpan = nil }
         await withTaskGroup(of: Void.self) { group in
             for index in from...to { group.addTask { _ = try? await store.segment(index) } }
+            for await _ in group { startFetched += 1 }
         }
         if settings.station.mutesNews, let make = Platform.current.makeTranscriber {
             // Ready the transcriber first when its model is already installed, so the first bulletin's sign-off is heard.
@@ -449,67 +513,110 @@ public actor PlayerSession {
 
     // MARK: Analysis
 
+    /// Analyses new segments up to `end`, after any analysis already running, so two never interleave.
+    ///
+    /// A start that has been given up on (another programme chosen) cancels its analysis, so it doesn't hold up the
+    /// next one.
+    private func analyse(upTo end: Int) async {
+        let previous = analysisTail
+        let run = Task { await previous?.value; await self.runAnalysis(upTo: end) }
+        analysisTail = run
+        await withTaskCancellationHandler { await run.value } onCancel: { run.cancel() }
+    }
+
+    /// What decoding, classifying and fingerprinting one chunk gives. Worked out away from the session, so the
+    /// player's requests are answered meanwhile.
+    private struct ChunkWork: Sendable {
+        var parsed: [(index: Int, info: TSSegmentInfo)] = []
+        var buffers: [PCMAudio] = []
+        var indices: [Int] = []
+        var scores: [SoundScore] = []
+        /// The fingerprint frames of the context and the new audio, the first starting `contextSamples` before the chunk.
+        var frames: [[Float]] = []
+        var mono: [Float] = []
+        var matches: [(offset: Int, score: Float)] = []
+    }
+
+    /// Decodes, classifies and fingerprints a chunk. Pure work on its inputs, so it can run on any thread.
+    ///
+    /// - Parameters:
+    ///   - segments: The chunk's segments as fetched, by index.
+    ///   - context: The previous segment's audio, given to the classifier so no window is cut short.
+    ///   - lastMono: The last few seconds of mono audio, as context for the fingerprints.
+    ///   - idents: The news themes to look for.
+    private static func work(segments: [(Int, Data)], context: PCMAudio?, lastMono: [Float], idents: [IdentReference],
+                             classifier: any SoundClassifying) -> ChunkWork {
+        var result = ChunkWork()
+        for (index, data) in segments {
+            guard let info = TS.parse(data), !info.frames.isEmpty else { continue }
+            result.parsed.append((index, info))
+            if let audio = try? Decode.pcm(frames: info.frames) { result.buffers.append(audio); result.indices.append(index) }
+        }
+        guard !result.buffers.isEmpty else { return result }
+        result.scores = (try? classifier.classify((context.map { [$0] } ?? []) + result.buffers)) ?? []
+        var mono = lastMono
+        for buffer in result.buffers { mono += buffer.mono }
+        result.mono = mono
+        result.frames = IdentFeatures.extract(mono)
+        result.matches = idents.compactMap { reference in
+            IdentMatcher.bestMatch(reference: reference.features, in: result.frames).flatMap { $0.score >= reference.threshold ? $0 : nil }
+        }
+        return result
+    }
+
     /// Classifies new segments in chunks of up to ten, with the previous segment as context so no window is cut
     /// short, then lets the theme matcher and the transcriber look at the same audio.
-    private func analyse(upTo end: Int) async {
+    private func runAnalysis(upTo end: Int) async {
         guard let store else { return }
         var index = analysedThrough + 1
         let classifier = Platform.current.makeClassifier()
-        // A start that has been given up on (another programme chosen) stops analysing here, so it doesn't hold up
-        // the next one.
+        let platform = Platform.current
         while index <= end && !Task.isCancelled {
             let chunkEnd = min(index + 9, end)
-            var buffers: [PCMAudio] = [], indices: [Int] = []
-            let context = lastAnalysisSegment.map { [$0] } ?? []
-            for k in index...chunkEnd {
-                guard let data = await store.cached(k), let info = TS.parse(data), !info.frames.isEmpty else { continue }
-                remember(index: k, info: info)
-                if let audio = try? Decode.pcm(frames: info.frames) { buffers.append(audio); indices.append(k) }
-            }
-            if let firstNew = indices.first {
-                let scores = (try? classifier.classify(context + buffers)) ?? []
-                let contextSeconds = context.first?.duration ?? 0
+            var segments: [(Int, Data)] = []
+            for k in index...chunkEnd { if let data = await store.cached(k) { segments.append((k, data)) } }
+            let context = lastAnalysisSegment, lastMono = lastMono, idents = settings.profile.idents
+            let work = await Task.detached(priority: .userInitiated) {
+                Platform.$scoped.withValue(platform) {
+                    Self.work(segments: segments, context: context, lastMono: lastMono, idents: idents, classifier: classifier)
+                }
+            }.value
+            for (k, info) in work.parsed { remember(index: k, info: info) }
+            if let firstNew = work.indices.first {
+                let contextSeconds = context?.duration ?? 0
                 let chunkStart = HLS.startTime(ofIndex: firstNew).timeIntervalSince1970
                 let clipStart = chunkStart - contextSeconds
-                for score in scores.sorted(by: { $0.time < $1.time }) where score.time >= contextSeconds - 0.001 {
+                for score in work.scores.sorted(by: { $0.time < $1.time }) where score.time >= contextSeconds - 0.001 {
                     detector.ingest(ScoreSample(time: clipStart + score.time, duration: score.duration, speech: score.speech, music: score.music))
                 }
-                lastAnalysisSegment = buffers.last
-                let newMono = updateIdents(chunkStart: chunkStart, buffers: buffers)
+                lastAnalysisSegment = work.buffers.last
+                let newMono = takeIdents(work, chunkStart: chunkStart, contextSamples: lastMono.count)
                 logBlocks()
                 rejudgePending()
                 if replay != nil { await listenAtSlots(chunkStart: chunkStart, newMono: newMono) }
                 await listenForNewsreader(chunkStart: chunkStart, newMono: newMono)
                 if replay == nil { await listenLiveAtSlots(chunkStart: chunkStart, newMono: newMono) }
             }
-            analysedThrough = chunkEnd
+            analysedThrough = max(analysedThrough, chunkEnd)
             index = chunkEnd + 1
         }
     }
 
-    /// Fingerprints the new audio, with a little earlier audio as context, keeps the frames for learning, and looks
-    /// for the known news theme.
+    /// Keeps a chunk's fingerprint frames for learning, and passes any match of the known news theme to the detector.
     ///
     /// - Returns: The chunk's new audio as mono.
-    @discardableResult
-    private func updateIdents(chunkStart: Double, buffers: [PCMAudio]) -> [Float] {
-        let context = lastMono
-        var mono = context
-        for buffer in buffers { mono += buffer.mono }
-        lastMono = Array(mono.suffix(Int(Self.sampleRate) * 6))
-        let firstFrameTime = chunkStart - Double(context.count) / Self.sampleRate
-        let frames = IdentFeatures.extract(mono)
-        for (i, frame) in frames.enumerated() {
+    private func takeIdents(_ work: ChunkWork, chunkStart: Double, contextSamples: Int) -> [Float] {
+        lastMono = Array(work.mono.suffix(Int(Self.sampleRate) * 6))
+        let firstFrameTime = chunkStart - Double(contextSamples) / Self.sampleRate
+        for (i, frame) in work.frames.enumerated() {
             let time = firstFrameTime + Double(i) * IdentFeatures.frameSeconds
             if time >= chunkStart - 0.001 { featureRing.append((time, frame)) }
         }
         if featureRing.count > 20_000 { featureRing.removeFirst(featureRing.count - 20_000) }
-        for reference in settings.profile.idents {
-            if let match = IdentMatcher.bestMatch(reference: reference.features, in: frames), match.score >= reference.threshold {
-                detector.identMatch(at: firstFrameTime + Double(match.offset) * IdentFeatures.frameSeconds - IdentMatcher.leadSeconds, score: match.score)
-            }
+        for match in work.matches {
+            detector.identMatch(at: firstFrameTime + Double(match.offset) * IdentFeatures.frameSeconds - IdentMatcher.leadSeconds, score: match.score)
         }
-        return Array(mono.dropFirst(context.count))
+        return Array(work.mono.dropFirst(contextSamples))
     }
 
     /// While a bulletin is being muted, transcribes its latest audio and looks for the newsreader's opening (when the
@@ -552,7 +659,7 @@ public actor PlayerSession {
             write(["event": "transcribing", "block": block.id.uuidString, "phrases": phrases.count])
         }
         let names = settings.station.newsNames ?? []
-        if !block.anchoredOnIdent, let opening = NewsPhrases.opening(in: phrases, names: names), from + opening < block.start + 90 {
+        if !block.anchoredOnIdent, let opening = NewsPhrases.opening(in: phrases, names: names, extra: settings.station.openings ?? []), from + opening < block.start + 90 {
             detector.anchorStart(at: from + opening - 3, why: "newsreader's opening heard")
         }
         // Speech alone opened this block. Once the station's theme is known, a bulletin shows it (or the newsreader's
@@ -561,9 +668,10 @@ public actor PlayerSession {
         if let current = detector.blocks.first(where: { $0.id == block.id }), current.isOpen, !current.anchoredOnIdent,
            !settings.profile.idents.isEmpty, end >= current.start + 45 {
             detector.rejectOpenBlock(at: current.start, why: "no news theme or newsreader heard: presenter talk")
-            write(["event": "released", "block": block.id.uuidString])
+            // Negative when the listener had already reached the block, and so heard the start of a mute taken back.
+            write(["event": "released", "block": block.id.uuidString, "lead": current.start - listener])
         }
-        if let signOff = NewsPhrases.signOff(in: phrases, after: block.start + settings.profile.signOffSearchStart - from, names: names) {
+        if let signOff = NewsPhrases.signOff(in: phrases, after: block.start + settings.profile.signOffSearchStart - from, names: names, extra: settings.station.signOffs ?? []) {
             detector.endBlock(at: from + signOff + 0.3, why: "newsreader signed off")
             signedOff.insert(block.id)
             write(["event": "signOff", "block": block.id.uuidString, "at": from + signOff])
@@ -595,11 +703,11 @@ public actor PlayerSession {
                 let samples = Array(slotAudio.dropFirst(Int((from - audioStart) * rate)).prefix(Int((slot + after - from) * rate)))
                 // A handover isn't used here: by now the speech after it has been analysed, so it can't be confirmed.
                 guard let phrases = try? await speech.transcribe(samples: samples, sampleRate: rate),
-                      let opening = NewsPhrases.opening(in: phrases, names: names) else { continue }
+                      let opening = NewsPhrases.opening(in: phrases, names: names, extra: settings.station.openings ?? []) else { continue }
                 detector.newsreaderOpening(at: from + opening - 3)
                 write(["event": "slotOpening", "slot": slot, "at": from + opening])
                 // A short bulletin can be over within the window: then its sign-off is in this transcript too.
-                if let signOff = NewsPhrases.signOff(in: phrases, after: opening + settings.profile.signOffSearchStart, names: names),
+                if let signOff = NewsPhrases.signOff(in: phrases, after: opening + settings.profile.signOffSearchStart, names: names, extra: settings.station.signOffs ?? []),
                    let block = detector.blocks.last(where: { !$0.falseStart && abs($0.start - (from + opening - 3)) < 1 }) {
                     detector.endBlock(at: from + signOff + 0.3, why: "newsreader signed off")
                     signedOff.insert(block.id)
@@ -627,7 +735,7 @@ public actor PlayerSession {
         slotHeardThrough = chunkEnd
         guard let phrases = try? await speech.transcribe(samples: samples, sampleRate: rate), !phrases.isEmpty else { return }
         let names = settings.station.newsNames ?? []
-        if let opening = NewsPhrases.opening(in: phrases, names: names) {
+        if let opening = NewsPhrases.opening(in: phrases, names: names, extra: settings.station.openings ?? []) {
             detector.newsreaderOpening(at: from + opening - 3)
             write(["event": "slotOpening", "at": from + opening])
         } else if let handover = NewsPhrases.handover(in: phrases, names: names) {
@@ -679,9 +787,13 @@ public actor PlayerSession {
 
     /// Logs blocks that have opened or closed, and learns from bulletins that ran their normal course.
     private func logBlocks() {
+        let listener = listenerIndex().map { HLS.startTime(ofIndex: $0).timeIntervalSince1970 }
         for block in detector.blocks where loggedState[block.id] != block.isOpen {
             loggedState[block.id] = block.isOpen
-            write(["event": block.isOpen ? "open" : "close", "block": blockJSON(block)])
+            var event: [String: Any] = ["event": block.isOpen ? "open" : "close", "block": blockJSON(block)]
+            // How long before the listener reaches it the block was found [s]: the margin the delay leaves.
+            if block.isOpen, let listener { event["lead"] = block.start - listener }
+            write(event)
             // A bulletin that ran its normal course (music returned, sensible length) teaches the jingle too.
             if !block.isOpen && !block.falseStart && !block.timedOut && !block.doubtful && !block.evidence.hasPrefix("marked") { learn(from: block) }
         }
@@ -727,9 +839,33 @@ public actor PlayerSession {
         catch { notices.append("Could not load the sound for bulletins (\(url.lastPathComponent)); muting with silence") }
     }
 
-    /// Changes options that take effect at once, without a restart.
-    public func setLiveOptions(muteNews: Bool, shadowMode: Bool) {
-        settings.muteNews = muteNews && settings.station.mutesNews; settings.profile.shadowMode = shadowMode
+    /// Takes the station's settings as changed in Settings, so they apply from the next segment without a restart:
+    /// muting, shadow mode, jingle only, the longest mute and bulletin minutes set by hand. What the session has
+    /// learned is kept. The delay can't change while playing; callers start a new session for that.
+    ///
+    /// - Parameter profile: The station's profile as just saved.
+    public func applyProfile(_ profile: StationProfile) {
+        settings.muteNews = profile.muteNews && settings.station.mutesNews
+        settings.profile.muteNews = profile.muteNews
+        settings.profile.shadowMode = profile.shadowMode
+        settings.profile.detector.identOnly = profile.detector.identOnly
+        settings.profile.detector.maxMuteSeconds = profile.detector.maxMuteSeconds
+        settings.profile.slotMinutesByHand = profile.slotMinutesByHand
+        if profile.slotMinutesByHand { settings.profile.detector.slotMinutes = profile.detector.slotMinutes }
+        detector.config = settings.profile.detector
+        rejudgePending()
+    }
+
+    /// The detector's settings now, for tests.
+    var detectorConfig: DetectorConfig { detector.config }
+
+    /// "Forget" on the news jingle: drops the theme and the candidates it was learned from, here and on disk, so the
+    /// next bulletin doesn't write them back. A theme still being worked out from older bulletins is thrown away.
+    public func forgetJingle() {
+        identGeneration += 1
+        settings.profile.idents = []; settings.profile.candidates = []; settings.profile.candidateSources = []
+        saveLearning()
+        write(["event": "forgetJingle", "station": settings.station.serviceId])
     }
 
     /// "Not news": unmutes from the next segment the player fetches, then judges what follows again.
@@ -754,7 +890,7 @@ public actor PlayerSession {
     ///
     /// The news theme has been seen 11 to 41 s after the speech starts, so the window runs from 10 s before to 60 s
     /// after.
-    private func learn(from block: NewsBlock) {
+    func learn(from block: NewsBlock) {
         // A long bulletin's start and length would skew the usual ones, and teach a slot every hour.
         if let end = block.end, detector.longBulletin(near: block.start) == nil {
             let slots = settings.profile.detector.slotMinutes
@@ -780,10 +916,10 @@ public actor PlayerSession {
 
     /// Looks for a shared theme among the candidates off the actor, since it takes a few seconds, then adopts it.
     private func promoteIdent() {
-        let candidates = settings.profile.candidates
+        let candidates = settings.profile.candidates, generation = identGeneration
         Task.detached(priority: .utility) { [weak self] in
             let reference = IdentMatcher.promote(candidates: candidates)
-            await self?.adoptIdent(reference, source: "recent bulletins", keepExisting: true)
+            await self?.adoptIdent(reference, source: "recent bulletins", keepExisting: true, generation: generation)
         }
     }
 
@@ -793,7 +929,9 @@ public actor PlayerSession {
     ///   - reference: The theme, or nil if none was found.
     ///   - source: Where it was learned, for the notice and the log.
     ///   - keepExisting: Whether to keep the current theme when none was found.
-    private func adoptIdent(_ reference: IdentReference?, source: String, keepExisting: Bool) {
+    ///   - generation: `identGeneration` when the work began; if the jingle was forgotten since, nothing is adopted.
+    private func adoptIdent(_ reference: IdentReference?, source: String, keepExisting: Bool, generation: Int) {
+        guard generation == identGeneration else { return }
         let had = !settings.profile.idents.isEmpty
         if let reference { settings.profile.idents = [reference] } else if !keepExisting { settings.profile.idents = [] }
         if !had, reference != nil {
@@ -811,6 +949,7 @@ public actor PlayerSession {
     /// the news theme if at least three share it. About 50 MB of downloads, once per station.
     private func learnJingleFromRewind() async {
         guard settings.station.mutesNews, settings.profile.idents.isEmpty, let base, let prefix = segmentPrefix else { return }
+        let generation = identGeneration
         learningJingle = true
         defer { learningJingle = false }
         let live = HLS.startTime(ofIndex: liveEdge).timeIntervalSince1970
@@ -848,7 +987,7 @@ public actor PlayerSession {
             windows.append(await Task.detached(priority: .utility) { IdentFeatures.extract(clip) }.value)
         }
         let reference = await Task.detached(priority: .utility) { IdentMatcher.promote(candidates: windows) }.value
-        adoptIdent(reference, source: "the last few hours", keepExisting: true)
+        adoptIdent(reference, source: "the last few hours", keepExisting: true, generation: generation)
         write(["event": "rewindLearning", "slots": slots.count, "learned": reference != nil])
     }
 
@@ -880,6 +1019,11 @@ public actor PlayerSession {
         var status = SessionStatus()
         status.state = state; status.delaySeconds = settings.delaySeconds; status.muteNews = settings.muteNews
         status.needsRestart = needsRestart; status.learningJingle = learningJingle; status.speechModel = speechState
+        if let span = startSpan {
+            let total = Double(span.count)
+            let analysed = Double(max(0, min(analysedThrough, span.upperBound) - span.lowerBound + 1))
+            status.startProgress = min(1, 0.3 * Double(startFetched) / total + 0.7 * analysed / total)
+        }
         let muting = settings.muteNews && !settings.profile.shadowMode
         if let listing = replay, let programme = settings.replay {
             let out = listing.nextOut - 1 - Playout.headStart
@@ -905,8 +1049,7 @@ public actor PlayerSession {
                 status.muteStartsIn = max(0, floor(block.start / segmentDuration) * segmentDuration - heard)
             }
             status.nowPlaying = NowPlaying(artist: programme.subtitle ?? settings.station.name, title: programme.title, imageURL: programme.imageURL)
-            status.recentBlocks = Array(detector.blocks.filter { $0.start >= programme.start.timeIntervalSince1970 - 60 && $0.start <= heard }
-                .suffix(8).reversed())
+            status.recentBlocks = Self.heardBlocks(detector.blocks.filter { $0.start >= programme.start.timeIntervalSince1970 - 60 }, heard: heard)
             status.notices = notices
             return status
         }
@@ -926,9 +1069,21 @@ public actor PlayerSession {
         }
         let shownFrom = Date().addingTimeInterval(-settings.delaySeconds)
         status.nowPlaying = tracks.last(where: { $0.observedAt <= shownFrom })?.track
-        status.recentBlocks = Array(detector.blocks.suffix(8).reversed())
+        if let index = listenerIndex() {
+            status.recentBlocks = Self.heardBlocks(detector.blocks, heard: HLS.startTime(ofIndex: index).timeIntervalSince1970)
+        }
         status.notices = notices
         return status
+    }
+
+    /// The bulletins worth listing to the listener, newest first: those they have reached, and of those only the ones
+    /// muted or put right by hand. Talk the detector let go by itself, and bulletins still ahead, stay in the log.
+    ///
+    /// - Parameters:
+    ///   - blocks: The detector's blocks, oldest first.
+    ///   - heard: The broadcast time the listener is hearing [s since 1970].
+    static func heardBlocks(_ blocks: [NewsBlock], heard: Double) -> [NewsBlock] {
+        Array(blocks.filter { $0.start <= heard && (!$0.falseStart || $0.correctedByHand) }.suffix(8).reversed())
     }
 
     // MARK: Serving

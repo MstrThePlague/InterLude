@@ -58,7 +58,7 @@ actor Controller {
     private var catalogue: Catalogue
     /// The web app's files' version, which open pages compare with their own.
     private var pageVersion: @Sendable () -> String? = { nil }
-    private var profiles: [String: StationProfile] = [:]
+    private var profiles = ProfileBook()
     private var settings: ServerSettings
     private let settingsURL: URL
     /// Whether a sound classifier is installed, without which no bulletin can be recognised.
@@ -82,6 +82,11 @@ actor Controller {
 
     private var session: PlayerSession?
     private var starting: Task<PlayerSession, Error>?
+    /// The session being started, for its progress.
+    private var startingSession: PlayerSession?
+    private var startProgress: Double?
+    /// How far into the earlier programme the session starting or playing began [s].
+    private var startOffset = 0.0
     /// Counts sessions started and stopped, so a slow start that has been overtaken is thrown away.
     private var generation = 0
     private var streamID = 0
@@ -92,13 +97,12 @@ actor Controller {
     private var watcher: Task<Void, Never>?
 
     // Earlier programmes, as on the Mac.
-    private var programmes: [Programme] = []
-    private var scheduleDay = 0
-    private var scheduleLoading = false
-    private var scheduleProblem: String?
-    private var scheduleFor: (station: String, day: Int, at: Date)?
+    private var schedule = ScheduleBook()
+    private var programmes: [Programme] { schedule.programmes }
     /// The programme last picked in Earlier, which Play starts there.
     private var replaying: Programme?
+    /// Where each earlier programme was left.
+    private var bookmarks = ReplayBookmarks()
     /// What the session playing or starting was started for: its station, and the programme if it is an earlier one.
     /// Kept apart from the Live / Earlier choice and the station being browsed, so either view can be looked through
     /// without stopping what plays.
@@ -122,7 +126,7 @@ actor Controller {
         if catalogue.station(saved.station) == nil { saved.station = catalogue.stations.first?.serviceId ?? saved.station }
         settings = saved
         saved.save(settingsURL)
-        for station in catalogue.stations { profiles[station.serviceId] = StationProfile.load(station) }
+        profiles.load(catalogue.stations)
         if saved.mode == "earlier" { Task { await self.loadSchedule() } }
         Task { await self.discover() }
     }
@@ -134,10 +138,10 @@ actor Controller {
     func use(_ newCatalogue: Catalogue) async {
         let old = catalogue
         catalogue = newCatalogue
-        for station in newCatalogue.stations where profiles[station.serviceId] == nil { profiles[station.serviceId] = StationProfile.load(station) }
+        profiles.load(newCatalogue.stations)
         if newCatalogue.station(settings.station) == nil, let first = newCatalogue.stations.first {
             settings.station = first.serviceId; saveSettings()
-            replaying = nil; programmes = []
+            replaying = nil; schedule.clear()
             if isEarlier { loadSchedule() }
         }
         guard let playing = source else { return }
@@ -283,12 +287,15 @@ actor Controller {
     private var offersLive: Bool { !isEarlier && source.map { $0.replay != nil || $0.station.serviceId != settings.station } ?? false }
     /// The station playing or starting, or the one chosen when nothing is.
     private var playingStation: Station? { source?.station ?? selectedStation }
-    private func profile(_ id: String) -> StationProfile { profiles[id] ?? StationProfile() }
+    private func profile(_ id: String) -> StationProfile { profiles.profile(id) }
 
-    /// Changes a station's profile and saves it.
-    private func updateProfile(_ id: String, _ change: (inout StationProfile) -> Void) {
-        var updated = profile(id); change(&updated); profiles[id] = updated
-        if let station = catalogue.station(id) { updated.save(station) }
+    /// Changes a station's profile as saved, and passes it to the session if that station plays.
+    private func updateProfile(_ id: String, _ change: (inout StationProfile) -> Void) async {
+        guard let station = catalogue.station(id) else { return }
+        var updated = profiles.update(station, change)
+        guard source?.station.serviceId == id else { return }
+        if !detects { updated.muteNews = false }        // as at the start: nothing can be recognised
+        await (session ?? startingSession)?.applyProfile(updated)
     }
 
     private func saveSettings() { settings.save(settingsURL) }
@@ -341,8 +348,10 @@ actor Controller {
 
     /// Starts a session for `what`, or for the current choice: the station live, or in Earlier the programme picked
     /// (the first playable one if none was). Returns the start in progress, or nil if there is nothing to play.
+    ///
+    /// - Parameter offset: How far into an earlier programme to start [s]; nil carries on from where it was left.
     @discardableResult
-    private func start(_ what: (station: Station, replay: Programme?)? = nil) -> Task<PlayerSession, Error>? {
+    private func start(_ what: (station: Station, replay: Programme?)? = nil, offset: Double? = nil) -> Task<PlayerSession, Error>? {
         if let starting { return starting }
         guard session == nil else { return nil }
         let station: Station, replay: Programme?
@@ -361,7 +370,12 @@ actor Controller {
         sessionSettings.bitrate = settings.bitrate
         sessionSettings.ambience = ambienceURL
         if !detects { sessionSettings.muteNews = false }
-        if let programme = replay { sessionSettings.replay = programme; sessionSettings.onDemand = !Schedule.isPlayable(programme) }
+        startOffset = 0
+        if let programme = replay {
+            sessionSettings.replay = programme; sessionSettings.onDemand = !Schedule.isPlayable(programme)
+            startOffset = offset ?? bookmarks.offset(for: programme)
+            sessionSettings.startOffset = startOffset
+        }
         generation += 1
         let thisGeneration = generation, catalogue = catalogue, frozenSettings = sessionSettings
         let task = Task { () throws -> PlayerSession in
@@ -369,14 +383,25 @@ actor Controller {
             // the playlist and segments.
             let newSession = PlayerSession(catalogue: catalogue, settings: frozenSettings, token: "stream", cacheRoot: try AppPaths.cacheDirectory(),
                                            eventLog: try AppPaths.supportDirectory().appendingPathComponent("events.jsonl"))
+            if thisGeneration == self.generation { self.startingSession = newSession }
             try await newSession.start()
             return newSession
         }
         starting = task
+        startProgress = 0
+        Task { await self.followStart(thisGeneration) }
         lastRequest = Date()
         log(replay.map { "starting \($0.title) on \(station.name)" } ?? "starting \(station.name), \(Int(sessionSettings.delaySeconds)) s behind live")
         Task { await self.started(task, generation: thisGeneration) }
         return task
+    }
+
+    /// Follows the progress of a session starting, twice a second.
+    private func followStart(_ startedAs: Int) async {
+        while startedAs == generation, starting != nil {
+            if let progress = await startingSession?.status().startProgress { startProgress = progress }
+            try? await Task.sleep(for: .milliseconds(500))
+        }
     }
 
     /// Takes a session that has finished starting, unless it has been overtaken by a newer start or a stop.
@@ -384,12 +409,12 @@ actor Controller {
         do {
             let newSession = try await task.value
             guard startedAs == generation else { await newSession.stop(); return }
-            session = newSession; starting = nil; streamID = startedAs
+            session = newSession; starting = nil; startingSession = nil; startProgress = nil; streamID = startedAs
             watch(newSession)
             await startCast()
         } catch {
             guard startedAs == generation else { return }
-            starting = nil
+            starting = nil; startingSession = nil; startProgress = nil
             errorText = friendly(error)
             source = nil
             log("couldn't start: \(errorText ?? "")")
@@ -401,8 +426,9 @@ actor Controller {
         await stopCast()
         generation += 1
         starting?.cancel()          // a session still starting stops its analysis rather than finishing unheard
-        starting = nil
+        starting = nil; startingSession = nil; startProgress = nil
         watcher?.cancel(); watcher = nil
+        if let progress = status.replay { bookmarks.remember(progress) }
         let stopping = session
         session = nil
         source = nil
@@ -410,11 +436,19 @@ actor Controller {
         if let stopping { await stopping.stop(); log("stopped\(reason.map { ": \($0)" } ?? "")") }
     }
 
-    /// Starts what was playing again, whichever view is showing.
+    /// Starts what was playing again, whichever view is showing, an earlier programme from where it had got to.
     private func restart() async {
         let what = source
         await stop()
         start(what)
+    }
+
+    /// Plays the earlier programme playing, or picked, from `offset` [s].
+    private func play(from offset: Double) async {
+        guard let programme = source?.replay ?? replaying, let station = source?.station ?? selectedStation else { return }
+        await stop()
+        bookmarks.forget(programme)
+        start((station, programme), offset: offset)
     }
 
     /// Follows the session once a second, as the Mac's status timer does, and stops it when nobody is listening.
@@ -435,9 +469,10 @@ actor Controller {
         let latest = await watched.status()
         // The session saves what it learns, so read the profile again when that may have changed.
         if latest.recentBlocks.count != status.recentBlocks.count || latest.learningJingle != status.learningJingle, let station = playingStation {
-            profiles[station.serviceId] = StationProfile.load(station)
+            profiles.reload(station)
         }
         status = latest
+        if latest.finished, let programme = latest.replay?.programme { bookmarks.forget(programme) }
         if latest.finished { await stop("\(latest.replay?.programme.title ?? "the programme") finished"); return false }
         if latest.needsRestart { log("playback was interrupted, starting again"); await restart(); return false }
         if case .failed(let message) = latest.state { errorText = message } else if errorText != nil { errorText = nil }
@@ -457,27 +492,14 @@ actor Controller {
 
     /// Reads the station's schedule for the chosen day, kept for five minutes per station and day.
     private func loadSchedule(force: Bool = false) {
-        let id = settings.station, day = scheduleDay
-        if !force, let cached = scheduleFor, cached.station == id, cached.day == day, Date().timeIntervalSince(cached.at) < 300, !programmes.isEmpty { return }
-        scheduleLoading = true; scheduleProblem = nil
+        let id = settings.station, day = schedule.day
+        guard schedule.begin(station: id, force: force) else { return }
         Task {
-            do {
-                let list = try await OnDemand.day(serviceId: id, daysAgo: day)
-                self.scheduleLoaded(list, station: id, day: day)
-            } catch {
-                self.scheduleFailed("Couldn't get the schedule: \(error.localizedDescription)", station: id, day: day)
+            switch await ScheduleBook.fetch(station: id, day: day) {
+            case .success(let list): self.schedule.loaded(list, station: id, day: day, current: self.settings.station)
+            case .failure(let error): self.schedule.failed(ScheduleBook.problem(error), station: id, day: day, current: self.settings.station)
             }
         }
-    }
-
-    private func scheduleLoaded(_ list: [Programme], station: String, day: Int) {
-        guard station == settings.station, day == scheduleDay else { return }
-        programmes = list; scheduleFor = (station, day, Date()); scheduleLoading = false
-    }
-
-    private func scheduleFailed(_ message: String, station: String, day: Int) {
-        guard station == settings.station, day == scheduleDay else { return }
-        scheduleLoading = false; scheduleProblem = message
     }
 
     // MARK: Commands
@@ -494,7 +516,7 @@ actor Controller {
                 // Earlier shows the station's programmes, and whatever plays carries on until one is picked.
                 guard id != settings.station else { return }
                 settings.station = id; saveSettings()
-                replaying = nil; programmes = []
+                replaying = nil; schedule.clear()
                 loadSchedule()
             } else {
                 // Live plays the station, taking over from an earlier programme or another station browsed from.
@@ -514,7 +536,7 @@ actor Controller {
         case .notNews: await session?.notNews()
         case .newsGotThrough:
             await session?.newsGotThrough()
-            if let st = playingStation { profiles[st.serviceId] = StationProfile.load(st) }
+            if let st = playingStation { profiles.reload(st) }
         case .earlier(let on):
             let mode = on ? "earlier" : "live"
             guard mode != settings.mode else { return }
@@ -522,16 +544,25 @@ actor Controller {
             settings.mode = mode; saveSettings()
             if on { loadSchedule() }
         case .day(let day):
-            guard isEarlier, day != scheduleDay else { return }
-            scheduleDay = day; programmes = []
+            guard isEarlier, day != schedule.day else { return }
+            schedule.day = day; schedule.clear()
             loadSchedule()
         case .reloadSchedule: if isEarlier { loadSchedule(force: true) }
         case .programme(let id):
             guard isEarlier, let programme = programmes.first(where: { $0.id == id }), programme.canPlay else { return }
             replaying = programme
             await stop(); start()
+        case .seek(let fraction):
+            guard isReplay, let programme = source?.replay else { return }
+            await play(from: ReplayBookmarks.offset(at: fraction, in: programme))
+        case .startOver:
+            guard isReplay || (isEarlier && replaying != nil) else { return }
+            await play(from: 0)
+        case .startMuting:
+            guard let station = playingStation else { return }
+            await updateProfile(station.serviceId, RemoteSetting.startMuting)
         case .setting(let setting): await apply(setting)
-        case .favourite(let id): if catalogue.station(id) != nil { updateProfile(id) { $0.favourite.toggle() } }
+        case .favourite(let id): if catalogue.station(id) != nil { await updateProfile(id) { $0.favourite.toggle() } }
         case .wrong(let id): if let block = UUID(uuidString: id) { await session?.markWrong(id: block) }
         case .welcomed, .diagnostics, .quit: break      // the Mac's own
         case .resetLink:
@@ -544,14 +575,14 @@ actor Controller {
     private func apply(_ setting: RemoteSetting) async {
         let id = settings.station
         let active = isPlaying || isStarting
+        if let change = setting.profileChange {
+            await updateProfile(id, change)
+            guard source?.station.serviceId == id else { return }
+            if case .forgetJingle = setting { await (session ?? startingSession)?.forgetJingle() }
+            if case .delay = setting, active, !isReplay { await restart() }
+            return
+        }
         switch setting {
-        case .delay(let seconds):
-            updateProfile(id) { $0.delaySeconds = seconds }
-            if active && !isReplay && source?.station.serviceId == id { await restart() }
-        case .muteNews(let on): updateProfile(id) { $0.muteNews = on }; await applyLiveOptions()
-        case .jingleOnly(let on): updateProfile(id) { $0.detector.identOnly = on }
-        case .shadowMode(let on): updateProfile(id) { $0.shadowMode = on }; await applyLiveOptions()
-        case .forgetJingle: updateProfile(id) { $0.idents = []; $0.candidates = []; $0.candidateSources = [] }
         case .bitrate(let bitrate):
             guard bitrate != settings.bitrate else { return }
             settings.bitrate = bitrate; saveSettings()
@@ -559,8 +590,7 @@ actor Controller {
         case .ambience(let id):
             settings.ambience = id; saveSettings()
             await session?.setAmbience(ambienceURL)
-        case .maxMute(let minutes): updateProfile(id) { $0.detector.maxMuteSeconds = minutes * 60 }
-        case .slots(let minutes): updateProfile(id) { $0.detector.slotMinutes = minutes; $0.slotMinutesByHand = true }
+        case .delay, .muteNews, .jingleOnly, .shadowMode, .forgetJingle, .maxMute, .slots: break    // per station, above
         case .startAtLogin, .keepAwake, .port, .remote: break      // the Mac's own
         }
     }
@@ -572,13 +602,6 @@ actor Controller {
         return FileManager.default.fileExists(atPath: file.path) ? file : nil
     }
 
-    /// Passes the station's mute options to a running session, as the Mac does.
-    private func applyLiveOptions() async {
-        guard detects, let station = playingStation else { return }
-        let options = profile(station.serviceId)
-        await session?.setLiveOptions(muteNews: options.muteNews, shadowMode: options.shadowMode)
-    }
-
     // MARK: State
 
     /// Everything the web app shows.
@@ -588,11 +611,16 @@ actor Controller {
         let playing = isPlaying, startingNow = isStarting, replay = isReplay
         state.state = startingNow ? "starting" : playing ? (status.muted ? "muted" : (replay ? "earlier" : "live")) : (errorText != nil ? "error" : "off")
         state.stationName = playing || startingNow ? (station?.name ?? "") : (errorText != nil ? "Stopped" : "Not playing")
-        state.headline = headline(station)
-        state.subheadline = subheadline(station)
+        state.headline = Wording.headline(chosen: selectedStation, onAir: station, starting: source?.replay, isStarting: startingNow,
+                                          isPlaying: playing, status: status)
+        state.subheadline = Wording.subheadline(starting: source?.replay, offset: startOffset, isStarting: startingNow, isPlaying: playing,
+                                                earlier: isEarlier, status: status, output: nil, onAir: station)
         if isEarlier && !playing && !startingNow, let programme = replaying, programme.canPlay {
-            state.subheadline = "Play starts \(programme.title) from \(programme.start.formatted(date: .omitted, time: .shortened))"
+            let offset = bookmarks.offset(for: programme)
+            state.subheadline = Wording.playStarts(programme, at: offset)
+            if offset > 0 { state.resumeAt = Wording.clock(offset) }
         }
+        state.startProgress = startingNow ? startProgress : nil
         state.artwork = (playing ? status.nowPlaying?.imageURL : startingNow ? source?.replay?.imageURL : (isEarlier ? replaying?.imageURL : nil))?.absoluteString
         state.error = errorText
         state.playing = playing || startingNow
@@ -605,10 +633,7 @@ actor Controller {
         state.station = settings.station
         state.speaker = settings.speaker
         state.volume = settings.volume
-        let favourites = catalogue.stations.filter { profile($0.serviceId).favourite }
-        state.stations = (favourites + catalogue.stations.filter { !profile($0.serviceId).favourite }).map {
-            .init(id: $0.serviceId, name: $0.name, short: $0.short, colour: $0.colour, group: $0.group, favourite: profile($0.serviceId).favourite)
-        }
+        state.stations = profiles.items(catalogue.stations)
         state.speakers = speakerItems()
         if !searched { state.speakerNote = "Looking for speakers…" }
         else if speakers.isEmpty && sonosGroups.isEmpty {
@@ -616,8 +641,7 @@ actor Controller {
         }
         state.mode = settings.mode
         if isEarlier {
-            state.earlier = .describe(day: scheduleDay, programmes: programmes, loading: scheduleLoading, problem: scheduleProblem,
-                                      chosen: replaying, playing: source?.replay)
+            state.earlier = schedule.item(chosen: replaying, playing: source?.replay)
         }
         state.offerLive = offersLive
         if let id = source?.station.serviceId, id != settings.station { state.onAir = id }
@@ -627,10 +651,12 @@ actor Controller {
         state.settings = settingsItem(selectedStation)
         state.news = .describe(profile(settings.station), kind: selectedStation?.kind, hasNews: selectedStation?.news != false, earlier: replay || (isEarlier && !playing && !startingNow),
                                ambience: settings.ambience)
+        let onAirProfile = profile(station?.serviceId ?? settings.station)
         if playing && !status.recentBlocks.isEmpty {
-            state.recentTitle = replay ? "News in this programme" : "Recent mutes"
+            state.recentTitle = RemoteState.RecentItem.title(replay: replay, shadow: onAirProfile.shadowMode)
             state.recent = RemoteState.RecentItem.list(status.recentBlocks)
         }
+        if playing && !replay && detects { state.learning = .describe(station: station, profile: onAirProfile, blocks: status.recentBlocks) }
         if errorText != nil && !playing && !startingNow { state.recover = ["retry"] }
         state.pageVersion = pageVersion()
         return state
@@ -651,35 +677,11 @@ actor Controller {
         return items
     }
 
-    /// The large line on the player.
-    private func headline(_ station: Station?) -> String {
-        if isStarting, let programme = source?.replay { return programme.title }
-        guard isPlaying else { return station?.name ?? "InterLude" }
-        if status.muted { return "News muted" }
-        return status.nowPlaying?.title ?? status.nowPlaying?.artist ?? station?.name ?? "Playing"
-    }
-
-    /// The line under the headline.
-    private func subheadline(_ station: Station?) -> String {
-        if isStarting, let programme = source?.replay { return "Starting from \(programme.start.formatted(date: .omitted, time: .shortened))…" }
-        if isStarting { return "Starting about a minute behind live…" }
-        guard isPlaying else { return isEarlier ? "Pick a programme to play from its start" : "Ready to play" }
-        if status.muted { return "Sound returns when the music does" }
-        if let track = status.nowPlaying, track.title != nil { return track.artist }
-        return station?.name ?? ""
-    }
-
     /// The Settings sheet for the chosen station.
     private func settingsItem(_ station: Station?) -> RemoteState.SettingsItem {
-        let options = profile(settings.station), music = station?.mutesNews == true
-        return .init(stationName: station?.name ?? settings.station, delay: options.delaySeconds, muteNews: options.muteNews,
-                     jingleOnly: options.detector.identOnly, shadowMode: options.shadowMode, jingle: options.jingleStatus,
-                     canForgetJingle: !options.idents.isEmpty || !options.candidates.isEmpty, newsNote: detects ? nil : Self.newsNote,
-                     bitrate: settings.bitrate / 1000, ambience: settings.ambience,
-                     ambienceChoices: Ambience.choices.map { [$0.id, $0.name] },
-                     link: RemoteRoutes.pagePath(token: settings.token, prefix: RemoteRoutes.appPrefix),
-                     maxMute: music ? options.detector.maxMuteSeconds / 60 : nil,
-                     slots: music ? options.detector.slotMinutes.map(String.init).joined(separator: ", ") : nil)
+        .describe(station: station, id: settings.station, profile: profile(settings.station), newsNote: detects ? nil : Self.newsNote,
+                  bitrate: settings.bitrate, ambience: settings.ambience,
+                  link: RemoteRoutes.pagePath(token: settings.token, prefix: RemoteRoutes.appPrefix))
     }
 
     /// The state as server-sent events: sent when it changes, checked every second, with a comment every 15 s so

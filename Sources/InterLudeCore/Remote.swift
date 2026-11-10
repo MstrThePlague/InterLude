@@ -108,6 +108,19 @@ public struct RemoteState: Codable, Sendable, Equatable {
         public init(id: String, time: String, length: String, kind: String) { self.id = id; self.time = time; self.length = length; self.kind = kind }
     }
 
+    /// The note on the player while a station whose news detection hasn't been checked only notes bulletins.
+    public struct LearningItem: Codable, Sendable, Equatable {
+        public var title: String
+        public var detail: String
+        /// The start times of the bulletins found, newest first.
+        public var found: [String]
+        /// Whether to offer "Start muting".
+        public var canStartMuting: Bool
+        public init(title: String, detail: String, found: [String], canStartMuting: Bool) {
+            self.title = title; self.detail = detail; self.found = found; self.canStartMuting = canStartMuting
+        }
+    }
+
     /// "off", "starting", "live", "earlier", "muted" or "error", as the panel's status badge shows it.
     public var state = "off"
     public var stationName = ""
@@ -167,6 +180,13 @@ public struct RemoteState: Codable, Sendable, Equatable {
     public var recover: [String] = []
     /// A first-run note, until it is dismissed.
     public var welcome = false
+    /// While starting, how far the start has got, from 0 to 1.
+    public var startProgress: Double?
+    /// Set while a station still being learned plays: a note, and "Start muting" once a few bulletins are found.
+    public var learning: LearningItem?
+    /// In Earlier with nothing playing, where Play resumes the programme picked, such as "12:34", so the page can
+    /// offer to start it again instead.
+    public var resumeAt: String?
     public init() {}
 
     /// Settings only the Mac has, shown in its own panel and never on a phone.
@@ -244,7 +264,7 @@ public enum RemoteSetting: Equatable, Sendable {
         func flag() -> Bool? { switch value { case "1", "true": true; case "0", "false": false; default: nil } }
         switch key {
         case "delay":
-            guard let seconds = value.flatMap(Double.init), seconds.isFinite, (30...600).contains(seconds) else { return nil }
+            guard let seconds = value.flatMap(Double.init), seconds.isFinite, (SessionSettings.shortestDelay...600).contains(seconds) else { return nil }
             self = .delay((seconds / 5).rounded() * 5)
         case "muteNews": guard let on = flag() else { return nil }; self = .muteNews(on)
         case "jingleOnly": guard let on = flag() else { return nil }; self = .jingleOnly(on)
@@ -280,8 +300,11 @@ public enum RemoteCommand: Equatable, Sendable {
     /// or speaker; set the volume (0 to 1); and correct the detector.
     case toggle, play, station(String), speaker(String), volume(Double), notNews, newsGotThrough
     /// Earlier programmes: switch between Live and Earlier, step through the days, read the schedule again, and
-    /// play a programme from its start.
-    case earlier(Bool), day(Int), reloadSchedule, programme(String)
+    /// play a programme from its start (or where it was left), move to a point in the programme playing (0 to 1), and
+    /// start it again from the top.
+    case earlier(Bool), day(Int), reloadSchedule, programme(String), seek(Double), startOver
+    /// Leave shadow mode on a station still being learned.
+    case startMuting
     /// Settings, and a new link that stops the old one working.
     case setting(RemoteSetting), resetLink
     /// Add or remove a favourite station; mark a recent mute as wrong, by its ID; dismiss the first-run note.
@@ -361,6 +384,11 @@ public enum RemoteRoutes {
             guard let day = query["d"].flatMap(Int.init), (0..<OnDemand.days).contains(day) else { return nil }
             return .command(.day(day))
         case "schedule": return .command(.reloadSchedule)
+        case "seek":
+            guard let fraction = query["f"].flatMap(Double.init), fraction.isFinite else { return nil }
+            return .command(.seek(min(max(fraction, 0), 1)))
+        case "startover": return .command(.startOver)
+        case "startmuting": return .command(.startMuting)
         case "programme":
             guard let id = query["id"], isProgrammeID(id) else { return nil }
             return .command(.programme(id))
